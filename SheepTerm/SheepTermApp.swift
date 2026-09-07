@@ -278,6 +278,40 @@ struct SheepTermCommands: Commands {
             } label: {
                 Label("Appearance", systemImage: "circle.lefthalf.filled")
             }
+            Menu {
+                Button("Bigger") { model.stepTerminalFontSize(1) }
+                    .keyboardShortcut("=", modifiers: .command)
+                Button("Smaller") { model.stepTerminalFontSize(-1) }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Default Size (\(Int(Theme.defaultFontSize)) pt)") {
+                    model.terminalFontSize = Theme.defaultFontSize
+                }
+                Divider()
+                Toggle(Theme.fontFamilyLabel(Theme.systemFontFamily), isOn: Binding(
+                    get: { model.terminalFontFamily == Theme.systemFontFamily },
+                    set: { _ in model.terminalFontFamily = Theme.systemFontFamily }
+                ))
+                ForEach(Theme.availableMonospaceFamilies, id: \.self) { family in
+                    Toggle(family, isOn: Binding(
+                        get: { model.terminalFontFamily == family },
+                        set: { _ in model.terminalFontFamily = family }
+                    ))
+                }
+                Divider()
+                ForEach(Theme.TerminalFontWeight.allCases) { weight in
+                    Toggle(weight.label, isOn: Binding(
+                        get: { model.terminalFontWeight == weight },
+                        set: { _ in model.terminalFontWeight = weight }
+                    ))
+                }
+                Divider()
+                Toggle("Font Smoothing", isOn: Binding(
+                    get: { model.terminalFontSmoothing },
+                    set: { model.terminalFontSmoothing = $0 }
+                ))
+            } label: {
+                Label("Terminal Font", systemImage: "textformat.size")
+            }
         }
 
         CommandMenu("Tabs") {

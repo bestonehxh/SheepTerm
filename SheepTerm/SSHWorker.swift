@@ -24,6 +24,11 @@ nonisolated final class SSHWorker: Sendable {
     private struct State: Sendable {
         var pendingWrites: [UInt8] = []
         var pendingResize: (cols: Int, rows: Int)?
+        /// The size the channel last accepted, so a redundant request — the
+        /// terminal view re-measuring its font without the grid changing —
+        /// is dropped here instead of reaching the device as a window-size
+        /// change (which every network OS answers with a fresh prompt).
+        var appliedResize: (cols: Int, rows: Int)?
         /// True from start() until run() has completed all of its defers.
         /// Kept separate from `running`, which stop() clears immediately.
         var runActive = false
@@ -214,6 +219,10 @@ nonisolated final class SSHWorker: Sendable {
     func resize(cols: Int, rows: Int) {
         state.withLock { state in
             guard state.running else { return }
+            if let applied = state.appliedResize, applied.cols == cols, applied.rows == rows,
+               state.pendingResize == nil {
+                return
+            }
             state.pendingResize = (cols, rows)
             if state.wakeFD >= 0 {
                 var byte: UInt8 = 0
@@ -381,6 +390,7 @@ nonisolated final class SSHWorker: Sendable {
         _ = "xterm-256color".withCString {
             ssh_channel_request_pty_size(channel, $0, Int32(config.initialCols), Int32(config.initialRows))
         }
+        state.withLock { $0.appliedResize = (config.initialCols, config.initialRows) }
         if forwarder != nil, ssh_channel_request_auth_agent(channel) != SSH_OK {
             // Not fatal — the shell is still perfectly usable without it.
             onNotice?("agent forwarding refused by the server: \(errorString(session))")
@@ -571,9 +581,11 @@ nonisolated final class SSHWorker: Sendable {
                 // SSH_AGAIN is not an error — retry the same resize on the
                 // next pass instead of dropping it.
                 let rc = ssh_channel_change_pty_size(channel, Int32(resize.cols), Int32(resize.rows))
-                if rc == SSH_AGAIN {
+                if rc == SSH_OK {
+                    state.withLock { $0.appliedResize = resize }
+                } else if rc == SSH_AGAIN {
                     requeueResize(resize)
-                } else if rc != SSH_OK {
+                } else {
                     // Anything else means the pty keeps the old size and
                     // output wraps wrong until the next resize — silently.
                     onNotice?("could not resize the remote terminal: \(errorString(session))")

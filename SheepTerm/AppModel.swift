@@ -158,12 +158,54 @@ final class AppModel: ObservableObject {
     @Published var terminalTheme = "sheepterm" {
         didSet {
             UserDefaults.standard.set(terminalTheme, forKey: "terminalTheme")
-            for tab in tabs {
-                switch tab.content {
-                case .local(let controller): Theme.apply(to: controller.terminalView)
-                case .ssh(let controller): Theme.apply(to: controller.terminalView)
-                case .serial(let controller): Theme.apply(to: controller.terminalView)
-                }
+            reapplyTerminalTheme()
+        }
+    }
+
+    // Terminal font — see Theme.swift for why these exist. Each setter writes
+    // the default Theme.terminalFont reads and pushes the result to every tab.
+    @Published var terminalFontFamily: String = Theme.systemFontFamily {
+        didSet {
+            UserDefaults.standard.set(terminalFontFamily, forKey: Theme.fontFamilyKey)
+            reapplyTerminalTheme()
+        }
+    }
+    @Published var terminalFontSize: Double = Theme.defaultFontSize {
+        didSet {
+            let clamped = Theme.clampFontSize(terminalFontSize)
+            if clamped != terminalFontSize { terminalFontSize = clamped; return }
+            UserDefaults.standard.set(terminalFontSize, forKey: Theme.fontSizeKey)
+            reapplyTerminalTheme()
+        }
+    }
+    @Published var terminalFontWeight: Theme.TerminalFontWeight = Theme.defaultFontWeight {
+        didSet {
+            UserDefaults.standard.set(terminalFontWeight.rawValue, forKey: Theme.fontWeightKey)
+            reapplyTerminalTheme()
+        }
+    }
+    @Published var terminalFontSmoothing: Bool = Theme.defaultFontSmoothing {
+        didSet {
+            UserDefaults.standard.set(terminalFontSmoothing, forKey: Theme.fontSmoothingKey)
+            reapplyTerminalTheme()
+        }
+    }
+
+    /// View → Terminal Font → Bigger / Smaller (⌘+ / ⌘−), like Terminal.app.
+    func stepTerminalFontSize(_ delta: Double) {
+        terminalFontSize = Theme.clampFontSize(terminalFontSize + delta)
+    }
+
+    /// Pushes the current theme AND font (Settings → Terminal) onto every
+    /// open terminal. A font change makes SwiftTerm re-measure its cells and
+    /// resize the grid, which reaches the remote end through the existing
+    /// sizeChanged path — nothing else to do here.
+    func reapplyTerminalTheme() {
+        for tab in tabs {
+            switch tab.content {
+            case .local(let controller): Theme.apply(to: controller.terminalView)
+            case .ssh(let controller): Theme.apply(to: controller.terminalView)
+            case .serial(let controller): Theme.apply(to: controller.terminalView)
             }
         }
     }
@@ -349,6 +391,10 @@ final class AppModel: ObservableObject {
         NSApp.appearance = appearanceMode.appearance
         appIcon = Self.resolveStoredIcon(.standard)
         terminalTheme = UserDefaults.standard.string(forKey: "terminalTheme") ?? "sheepterm"
+        terminalFontFamily = Theme.terminalFontFamily
+        terminalFontSize = Double(Theme.terminalFontSize)
+        terminalFontWeight = Theme.terminalFontWeight
+        terminalFontSmoothing = Theme.terminalFontSmoothing
         applyDockIcon()
         showStatusBar = UserDefaults.standard.object(forKey: "showStatusBar") as? Bool ?? true
         // Session text (device IP + username), shortcut hints and This-Mac IP
@@ -382,6 +428,10 @@ final class AppModel: ObservableObject {
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         appIcon = Self.resolveStoredIcon(defaults)
         terminalTheme = defaults.string(forKey: "terminalTheme") ?? "sheepterm"
+        terminalFontFamily = Theme.terminalFontFamily
+        terminalFontSize = Double(Theme.terminalFontSize)
+        terminalFontWeight = Theme.terminalFontWeight
+        terminalFontSmoothing = Theme.terminalFontSmoothing
         showStatusBar = defaults.object(forKey: "showStatusBar") as? Bool ?? true
         statusShowSession = defaults.object(forKey: "statusShowSession") as? Bool ?? false
         statusShowHints = defaults.object(forKey: "statusShowHints") as? Bool ?? false

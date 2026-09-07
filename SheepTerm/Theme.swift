@@ -17,7 +17,14 @@ enum Theme {
     static let terminalThemes: [TerminalTheme] = [
         TerminalTheme(
             id: "sheepterm", name: "SheepTerm",
-            background: 0x15171C, foreground: 0xD6DAE2,
+            // Foreground brightened from D6DAE2 in 3.0 (8) to match the
+            // Claude app's text (luminance 238 vs 220) — same reason as the
+            // 15 pt default: contrast that survives the scaled display.
+            // Background lifted from 15171C in 3.0 (10): a near-black ground
+            // makes bright strokes bloom on an LCD, and this display already
+            // resamples everything. 1E2128 keeps 14:1 contrast with EDEFF3
+            // and measured 5% fewer grey fringe pixels after the resample.
+            background: 0x1E2128, foreground: 0xEDEFF3,
             ansi: [0x1C1F26, 0xED7A7A, 0x7DD98C, 0xE8D06B, 0x6CA9E0, 0xE08BC7, 0x6CD1E0, 0xD6DAE2,
                    0x565D6B, 0xF29B9B, 0x9BE8A8, 0xF2E29B, 0x93C4F0, 0xF0AEDC, 0x9BE4F0, 0xF2F4F8]
         ),
@@ -53,6 +60,126 @@ enum Theme {
         ),
     ]
 
+    // MARK: Terminal font — Settings → Terminal and View → Terminal Font
+    //
+    // Family, size, weight and smoothing are user settings; the default is
+    // SF Mono 13 Medium, smoothing off. They exist because of the display,
+    // not the renderer: this Mac's stock mode (1470 x 956 on a 2560 x 1664
+    // panel) resamples the whole screen by 0.87 before it reaches the eye, and
+    // a larger or heavier face survives that far better than a thin one —
+    // Termius draws ~14 pt with 2–3 px stems. The rendering itself was verified
+    // pixel-perfect at 2x against 2.3 (15); see ARCHITECTURE.md §6 and §11
+    // before "fixing" sharpness anywhere in code.
+
+    static let fontFamilyKey = "terminalFontFamily"
+    static let fontSizeKey = "terminalFontSize"
+    static let fontWeightKey = "terminalFontWeight"
+    static let fontSmoothingKey = "terminalFontSmoothing"
+    /// OFF since 3.0 (12). macOS "font smoothing" dilates every glyph by a
+    /// fraction of a pixel before antialiasing; on light text over a dark
+    /// ground that reads as a grey halo around each stroke. Measured on this
+    /// Mac at 2x: SF Mono 13 Medium with smoothing draws 3 px stems with a
+    /// 4 px fringe, without it 2 px stems and a clean edge — the same stem
+    /// width and edge profile as the Claude app's text (stems 2 px, grey/ink
+    /// 0.64 vs 0.63). Chromium apps get that look from
+    /// `-webkit-font-smoothing: antialiased`; this is the AppKit equivalent.
+    static let defaultFontSmoothing = false
+    /// Sentinel for the system monospaced font (SF Mono via
+    /// `monospacedSystemFont`, which is not listed as an installable family).
+    static let systemFontFamily = ""
+    /// 13 — tried 15 in 3.0 (8)–(10) to match the Claude app's text density
+    /// (30 px glyphs, 3 px stems), but that reads as too large in a terminal
+    /// that lives in a 1470-point-wide window; the weight (Medium) and the
+    /// lifted ground carry the legibility instead. 3.0 (11).
+    static let defaultFontSize: Double = 13
+    static let fontSizeRange: ClosedRange<Double> = 9...24
+    /// Medium since 3.0 (10): on the resampled display it leaves 18% fewer
+    /// grey fringe pixels than Regular at the same size (0.62 vs 0.76 in the
+    /// simulation) while still reading as a normal, not bold, face.
+    static let defaultFontWeight = TerminalFontWeight.medium
+
+    enum TerminalFontWeight: String, CaseIterable, Identifiable {
+        case regular, medium, semibold, bold
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .regular: return "Regular"
+            case .medium: return "Medium"
+            case .semibold: return "Semibold"
+            case .bold: return "Bold"
+            }
+        }
+        var nsWeight: NSFont.Weight {
+            switch self {
+            case .regular: return .regular
+            case .medium: return .medium
+            case .semibold: return .semibold
+            case .bold: return .bold
+            }
+        }
+    }
+
+    static func fontFamilyLabel(_ family: String) -> String {
+        family == systemFontFamily ? "SF Mono (System)" : family
+    }
+
+    /// Every installed family with a fixed-pitch member, once per launch.
+    /// The system font is not among them and is offered separately.
+    static let availableMonospaceFamilies: [String] = {
+        let manager = NSFontManager.shared
+        let fixed = NSFontTraitMask.fixedPitchFontMask.rawValue
+        return manager.availableFontFamilies.filter { family in
+            guard !family.hasPrefix(".") else { return false }
+            let members = manager.availableMembers(ofFontFamily: family) ?? []
+            return members.contains { member in
+                (member.count > 3 ? (member[3] as? UInt) ?? 0 : 0) & fixed != 0
+            }
+        }
+    }()
+
+    static var terminalFontFamily: String {
+        let saved = UserDefaults.standard.string(forKey: fontFamilyKey) ?? systemFontFamily
+        // A family that has since been uninstalled falls back to the system font.
+        return saved == systemFontFamily || availableMonospaceFamilies.contains(saved) ? saved : systemFontFamily
+    }
+
+    static func clampFontSize(_ size: Double) -> Double {
+        min(max(size.rounded(), fontSizeRange.lowerBound), fontSizeRange.upperBound)
+    }
+
+    static var terminalFontSize: CGFloat {
+        let saved = UserDefaults.standard.double(forKey: fontSizeKey)
+        return CGFloat(clampFontSize(saved > 0 ? saved : defaultFontSize))
+    }
+
+    static var terminalFontWeight: TerminalFontWeight {
+        UserDefaults.standard.string(forKey: fontWeightKey).flatMap(TerminalFontWeight.init) ?? defaultFontWeight
+    }
+
+    static var terminalFontSmoothing: Bool {
+        UserDefaults.standard.object(forKey: fontSmoothingKey) as? Bool ?? defaultFontSmoothing
+    }
+
+    static var terminalFont: NSFont {
+        let size = terminalFontSize, weight = terminalFontWeight
+        let family = terminalFontFamily
+        guard family != systemFontFamily else {
+            return NSFont.monospacedSystemFont(ofSize: size, weight: weight.nsWeight)
+        }
+        // Ask for the family at the requested weight; a family that lacks that
+        // weight gets its closest face, and a family that vanished entirely
+        // falls back to the system font rather than to Helvetica.
+        let descriptor = NSFontDescriptor(fontAttributes: [
+            .family: family,
+            .traits: [NSFontDescriptor.TraitKey.weight: weight.nsWeight.rawValue],
+        ])
+        if let font = NSFont(descriptor: descriptor, size: size), font.familyName == family {
+            return font
+        }
+        return NSFont(name: family, size: size)
+            ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight.nsWeight)
+    }
+
     static var currentTerminalTheme: TerminalTheme {
         let id = UserDefaults.standard.string(forKey: "terminalTheme") ?? "sheepterm"
         return terminalThemes.first { $0.id == id } ?? terminalThemes[0]
@@ -85,15 +212,33 @@ enum Theme {
 
     static func apply(to terminalView: TerminalView) {
         let theme = currentTerminalTheme
-        terminalView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        // Only touch the font when it actually changed: SwiftTerm's setter
+        // always re-measures and calls resize(), which reaches the pty / SSH
+        // channel as a window-size change even when the grid is the same —
+        // and every shell answers that by printing a fresh prompt. Switching
+        // the theme used to leave one stray prompt line in every tab.
+        let font = terminalFont
+        if terminalView.font.fontName != font.fontName || terminalView.font.pointSize != font.pointSize {
+            terminalView.font = font
+        }
+        // SwiftTerm's setter only stores the flag; the next full paint picks
+        // it up, so ask for one when it actually changed.
+        let smoothing = terminalFontSmoothing
+        if terminalView.fontSmoothing != smoothing {
+            terminalView.fontSmoothing = smoothing
+            terminalView.needsDisplay = true
+        }
         terminalView.nativeBackgroundColor = nsColor(theme.background)
         terminalView.nativeForegroundColor = nsColor(theme.foreground)
         terminalView.installColors(theme.ansi.map(termColor))
-        // Selection: neutral mid-tone blended from the theme's own colors
-        // (SwiftTerm's default is a hard dark teal that fights every theme).
+        // Selection: the app accent at 30% over the theme background, text
+        // colour untouched — a tinted band, not the opaque grey slab the
+        // old fg/bg blend gave (SwiftTerm's own default is a hard dark teal
+        // that fights every theme). Chosen from a six-way preview, 3.0 (7).
         terminalView.selectedTextBackgroundColor =
-            nsColor(theme.background).blended(withFraction: 0.35, of: nsColor(theme.foreground))
+            nsColor(theme.background).blended(withFraction: 0.30, of: nsColor(0x5AA5D6))
             ?? NSColor.selectedTextBackgroundColor
+        terminalView.selectedTextForegroundColor = nsColor(theme.foreground)
 
         // Right-click menu: SwiftTerm implements copy:/paste:/selectAll: as
         // responder actions; target nil routes them to the clicked view.

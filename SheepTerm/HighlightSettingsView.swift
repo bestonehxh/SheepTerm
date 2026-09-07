@@ -203,6 +203,32 @@ struct GeneralSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Terminal") {
+                Picker("Font", selection: $model.terminalFontFamily) {
+                    Text(Theme.fontFamilyLabel(Theme.systemFontFamily)).tag(Theme.systemFontFamily)
+                    Divider()
+                    ForEach(Theme.availableMonospaceFamilies, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
+                }
+                Stepper(value: $model.terminalFontSize, in: Theme.fontSizeRange, step: 1) {
+                    LabeledContent("Size") {
+                        Text("\(Int(model.terminalFontSize)) pt")
+                            .font(.system(size: 12, design: .monospaced))
+                    }
+                }
+                Picker("Weight", selection: $model.terminalFontWeight) {
+                    ForEach(Theme.TerminalFontWeight.allCases) { weight in
+                        Text(weight.label).tag(weight)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Toggle("Font smoothing", isOn: $model.terminalFontSmoothing)
+                Text("Applied to every open tab immediately; the grid re-measures, so columns and rows change with it. Also in View → Terminal Font, with ⌘+ / ⌘− for the size. On a display running a scaled resolution (the 13″ Air's stock 1470 × 956 is one) the whole screen is resampled before it reaches the eye, and a larger or heavier face survives that better than a thin one; Termius draws roughly 14 pt Semibold. Font smoothing is macOS's stroke thickening: on it makes light-on-dark text bolder with a soft grey edge, off (the default) draws thinner, cleaner stems — the same edge the Claude app's text has.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Sidebar") {
                 Toggle("Show Recent", isOn: $showRecents)
                 Stepper(value: $recentsShown, in: 1...HostStore.maxRecents) {
