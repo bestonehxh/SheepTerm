@@ -1,13 +1,18 @@
 import AppKit
 import Foundation
-import Synchronization
-import SwiftTerm
+import SheepVTRender
 
-/// Owns one local shell session: the SwiftTerm view plus the pty-backed process.
+/// Owns one local shell session: the SheepVT view plus the pty-backed process.
 /// The view is created once and kept alive for the lifetime of its tab so the
 /// scrollback and running programs survive tab switches.
 final class LocalTerminalController: NSObject {
-    let terminalView: LocalProcessTerminalView
+    /// The view and its fading scroller. SafePaste is off for a local shell:
+    /// it exists for device CLIs, where a multi-line paste is a configuration
+    /// change; a shell pastes the way every other macOS terminal does.
+    let terminalHost = SessionTerminalHost(safePaste: false)
+    var terminalView: TerminalView { terminalHost.terminalView }
+    /// Set in `init` — `LocalProcess` needs its delegate, which is `self`.
+    private var process: LocalProcess!
 
     var onTitleChange: ((String) -> Void)?
     var onExit: ((Int32?) -> Void)?
@@ -23,10 +28,10 @@ final class LocalTerminalController: NSObject {
     }
 
     override init() {
-        terminalView = SheepLocalTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
         super.init()
+        process = LocalProcess(delegate: self)
         Theme.apply(to: terminalView)
-        terminalView.processDelegate = self
+        terminalView.delegate = self
     }
 
     func start() {
@@ -49,57 +54,33 @@ final class LocalTerminalController: NSObject {
         if !seen.contains("LANG") { environment.append("LANG=en_US.UTF-8") }
 
         // Leading dash marks the shell as a login shell, same as Terminal.app.
-        terminalView.startProcess(
+        let started = process.start(
             executable: shell,
             args: [],
             environment: environment,
-            execName: "-\(shellName)"
+            execName: "-\(shellName)",
+            cols: terminalView.cols,
+            rows: terminalView.rows
         )
+        if !started {
+            // pty/fd exhaustion or a missing shell: never a silent blank tab.
+            terminalView.feed("\r\n\u{1b}[91mcould not start \(shell)\u{1b}[0m\r\n")
+            onExit?(nil)
+        }
     }
 
     func detach() {
-        // Read the pid BEFORE terminate(): SwiftTerm's terminate() cancels
-        // its own exit monitor (childStopped), so nothing would ever reap
-        // the SIGTERMed shell — it stayed a zombie until app quit.
-        let pid = terminalView.process?.shellPid ?? 0
         // Kill the shell first — closing a tab must not leave an orphaned
         // process holding a pty and eating CPU in the background.
         //
-        // Only register a reaper when we ACTUALLY terminated something. On
-        // the ordinary path the shell has already exited and SwiftTerm's
-        // monitor has already waitpid'ed it, but `shellPid` is still set — so
-        // registering anyway attached a DispatchSourceProcess to a pid that
-        // no longer exists. Its exit event never fires, so the source and its
-        // dictionary entry lived in `reapers` for the life of the app, once
-        // per closed local tab.
-        let terminated = terminalView.process.running
-        if terminated {
-            terminalView.terminate()
-        }
-        if terminated, pid > 0 {
-            Self.reapAfterTerminate(pid)
-        }
-        terminalView.processDelegate = nil
+        // `terminate()` reaps the child itself: it leaves the exit source
+        // armed, SIGHUPs the whole process group, escalates to SIGKILL after a
+        // second and waitpid's from the same path a child that quit on its own
+        // takes. 2.x needed a separate zombie reaper here because SwiftTerm's
+        // terminate() cancelled its own exit monitor first.
+        process.terminate()
         onTitleChange = nil
         onExit = nil
-    }
-
-    /// Reapers for shells killed at tab close, kept until the exit event
-    /// fires — the source must stay referenced or GCD cancels it.
-    private static let reapers = Mutex<[pid_t: DispatchSourceProcess]>([:])
-
-    /// Reaps a terminated shell off the main thread. When the shell exited
-    /// normally SwiftTerm's own monitor already waitpid'ed it — our
-    /// waitpid then just gets ECHILD, which is fine.
-    private static func reapAfterTerminate(_ pid: pid_t) {
-        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .global())
-        source.setEventHandler {
-            var status: Int32 = 0
-            while waitpid(pid, &status, 0) < 0, errno == EINTR {}
-            reapers.withLock { $0[pid] = nil }
-        }
-        reapers.withLock { $0[pid] = source }
-        source.activate()
     }
 
     static func userShell() -> String {
@@ -111,28 +92,60 @@ final class LocalTerminalController: NSObject {
     }
 }
 
-extension LocalTerminalController: LocalProcessTerminalViewDelegate {
-    nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-
-    // All UI hops use DispatchQueue.main.async — the same queue feed()
-    // uses — so callbacks deliver in FIFO order (Task scheduling does not
-    // guarantee it). MainActor isolation comes from the default-actor
-    // build setting, so main-actor state can be touched directly.
-    nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        DispatchQueue.main.async {
-            self.onTitleChange?(title)
-        }
+// The pty's reads and the child's exit both arrive on the main queue, in
+// order, so there is nothing left to hop.
+extension LocalTerminalController: LocalProcessDelegate {
+    func dataReceived(_ process: LocalProcess, bytes: [UInt8]) {
+        terminalView.feed(bytes)
     }
 
-    nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
-        DispatchQueue.main.async {
-            self.currentDirectory = directory
-        }
+    func processTerminated(_ process: LocalProcess, exitCode: Int32?) {
+        onExit?(exitCode)
+    }
+}
+
+extension LocalTerminalController: TerminalViewDelegate {
+    func send(_ view: TerminalView, bytes: [UInt8]) {
+        process.send(bytes)
     }
 
-    nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
-        DispatchQueue.main.async {
-            self.onExit?(exitCode)
-        }
+    func sizeChanged(_ view: TerminalView, cols: Int, rows: Int) {
+        process.resize(cols: cols, rows: rows)
+    }
+
+    func titleChanged(_ view: TerminalView, title: String) {
+        onTitleChange?(title)
+    }
+
+    func workingDirectoryChanged(_ view: TerminalView, url: String?) {
+        currentDirectory = url
+    }
+
+    func bell(_ view: TerminalView) {
+        NSSound.beep()
+    }
+
+    /// The device replaced the Mac's clipboard (OSC 52). Said out loud because
+    /// nothing else on screen changes when it happens, and what is now on the
+    /// clipboard will be pasted somewhere else entirely — a payload ending in a
+    /// newline runs itself in the next terminal it lands in.
+    func clipboardWritten(_ view: TerminalView, bytes: Int) {
+        // No printNotice here — a local shell has no notice channel; the same
+        // grey line goes straight into the terminal it came from.
+        let text = bytes < 0
+            ? "the program tried to replace the clipboard with \(-bytes) bytes — refused, that is far more than a copy"
+            : "the program replaced the clipboard (\(bytes) bytes)"
+        terminalView.feed("\r\n\u{1b}[90m\(text)\u{1b}[0m\r\n")
+    }
+
+    func openLink(_ view: TerminalView, url: String) {
+        // ⌘-click on an OSC 8 hyperlink; web links only.
+        guard let link = URL(string: url), let scheme = link.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return }
+        NSWorkspace.shared.open(link)
+    }
+
+    func shouldPaste(_ view: TerminalView, text: String) -> Bool {
+        terminalHost.shouldPaste(text)
     }
 }

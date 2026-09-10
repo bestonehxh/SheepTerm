@@ -90,6 +90,10 @@ struct SidebarOutline: NSViewRepresentable {
         outline.doubleAction = #selector(SidebarOutlineCoordinator.doubleClick(_:))
         outline.registerForDraggedTypes([.string])
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
+        // Rows carry "host:<uuid>" on the pasteboard, which means nothing
+        // outside this app — without this a row dragged into TextEdit or Mail
+        // dropped a raw internal id there.
+        outline.setDraggingSourceOperationMask([], forLocal: false)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.resizingMask = .autoresizingMask
@@ -122,6 +126,15 @@ struct SidebarOutline: NSViewRepresentable {
 /// context menu, and Return-to-connect.
 final class SidebarOutlineView: NSOutlineView {
     weak var coordinator: SidebarOutlineCoordinator?
+
+    /// The pointer left the outline mid-drag. `validateDrop` stops firing at
+    /// that moment, so the autoscroll speed it last set would stand and the
+    /// 60 Hz timer would keep winding the list along — all the while the user
+    /// is aiming at something else entirely.
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        coordinator?.stopAutoscroll()
+        super.draggingExited(sender)
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
@@ -296,6 +309,43 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// Set while we drive the outline ourselves, so expansion callbacks
     /// don't write the state they are replaying back into UserDefaults.
     private var applyingExpansion = false
+    /// Set while `restoreSelection` moves the highlight, so the selection
+    /// callback doesn't mistake our own bookkeeping for a user choice.
+    private var restoringSelection = false
+    /// True between the drag starting and the drag ending in THIS outline,
+    /// with a rebuild owed once it is over.
+    /// How far the sidebar's cells draw outside their own bounds: the host
+    /// badge sits at x = -14 and a group title at x = -12 (the two `leading`
+    /// constants), so a snapshot has to reach past the left edge to catch them.
+    static let cellOverhang: CGFloat = 16
+
+    /// Repeating while the pointer sits in the hot zone at either end of the
+    /// list. `validateDrop` only fires when the pointer MOVES, and a drag held
+    /// still against the bottom edge is exactly when the list has to keep
+    /// coming — hence a timer rather than a scroll per callback.
+    private var autoscrollTimer: Timer?
+    /// Points per tick, signed: negative scrolls toward the top.
+    private var autoscrollStep: CGFloat = 0
+    /// How deep the hot zone at each end is, and how fast it can get.
+    private static let autoscrollZone: CGFloat = 28
+    private static let autoscrollMaxStep: CGFloat = 14
+
+    /// Temporary tracer for the "a double click sometimes does nothing"
+    /// report: set `SHEEPTERM_CLICKLOG=1` and the sidebar prints every step of
+    /// a group toggle to stderr. Off by default and free when off.
+    static let clickLog = ProcessInfo.processInfo.environment["SHEEPTERM_CLICKLOG"] == "1"
+
+    func trace(_ what: @autoclosure () -> String) {
+        guard SidebarOutlineCoordinator.clickLog else { return }
+        FileHandle.standardError.write("[sidebar \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime))] \(what())\n".data(using: .utf8)!)
+    }
+
+    /// The last group header click that reached `singleClick`: which header,
+    /// when, and the click chain it belonged to.
+    private var lastGroupToggle: (id: String, at: TimeInterval, clicks: Int)?
+
+    private var isDragging = false
+    private var pendingRebuild = false
 
     init(_ parent: SidebarOutline) {
         self.parent = parent
@@ -413,6 +463,17 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     func rebuild(force: Bool) {
         guard let outline else { return }
+        // Nothing may move while AppKit is tracking a drag. It holds row
+        // indexes into the layout it last asked us about, and buildRoots()
+        // rewrites the very `children` arrays validateDrop is indexing — a
+        // session finishing mid-drag (which appends to Recent, so the stamp
+        // really does change) was enough to reload the outline out from under
+        // the drop. Owe the rebuild instead and pay it in draggingSession
+        // ended, which AppKit always calls, cancelled drags included.
+        if isDragging {
+            pendingRebuild = true
+            return
+        }
         // Cheap gate first. buildRoots() allocates a SidebarItem per node and
         // currentSignature() joins a String from every row — at 2,000 hosts
         // that is ~2.3 ms and ~75 KB of garbage, and updateNSView runs on
@@ -428,14 +489,21 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         let fresh = buildRoots()
         let newSignature = currentSignature(fresh)
         guard force || newSignature != signature else {
+            trace("rebuild: signature unchanged, keeping the outline as it is")
             roots = fresh
             return
         }
+        trace("rebuild: RELOAD + applyExpansion (force=\(force))")
         signature = newSignature
         roots = fresh
+        // Read the wanted row BEFORE the reload: reloadData trims a selection
+        // whose row index no longer exists and posts the change straight back
+        // into outlineViewSelectionDidChange, so by the time we get here
+        // `selectedID` is already whatever landed under the old row number.
+        let wanted = selectedID
         outline.reloadData()
         applyExpansion()
-        restoreSelection()
+        restoreSelection(wanted)
     }
 
     private func applyExpansion() {
@@ -449,6 +517,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 let collapsed = !parent.searchText.isEmpty
                     ? false
                     : parent.collapsedGroups.contains(root.group?.id ?? UUID())
+                if collapsed != !outline.isItemExpanded(root) {
+                    trace("applyExpansion: forcing \(root.title) to \(collapsed ? "collapsed" : "expanded")")
+                }
                 if collapsed {
                     outline.collapseItem(root)
                 } else {
@@ -461,14 +532,21 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         applyingExpansion = false
     }
 
-    private func restoreSelection() {
-        guard let outline, let selectedID else { return }
-        let row = outline.row(forItem: cache[selectedID])
+    /// Puts the highlight back on `wanted`, and keeps remembering it even
+    /// when the row is off screen — a search that hides it or a group folded
+    /// over it must not count as the user deselecting, or clearing the filter
+    /// (reopening the group) would come back blank.
+    private func restoreSelection(_ wanted: String?) {
+        guard let outline, let wanted else { return }
+        let row = cache[wanted].map { outline.row(forItem: $0) } ?? -1
+        restoringSelection = true
         if row >= 0 {
             outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         } else {
             outline.deselectAll(nil)
         }
+        restoringSelection = false
+        selectedID = wanted
     }
 
     // MARK: Data source
@@ -574,16 +652,31 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
-        guard let outline else { return }
-        selectedID = (outline.item(atRow: outline.selectedRow) as? SidebarItem)?.id
+        guard !restoringSelection, let outline else { return }
+        if let node = outline.item(atRow: outline.selectedRow) as? SidebarItem {
+            selectedID = node.id
+            return
+        }
+        // No selection any more. AppKit also drops the highlight when the
+        // selected row is folded away inside a collapsed group — that is the
+        // row disappearing, not the user picking something else, so the id
+        // stays and the highlight returns when the group reopens.
+        if let selectedID, let node = cache[selectedID], outline.row(forItem: node) < 0 { return }
+        selectedID = nil
     }
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
+        trace("didCollapse \((notification.userInfo?["NSObject"] as? SidebarItem)?.title ?? "?")")
         syncCollapsedFromOutline()
     }
 
     func outlineViewItemDidExpand(_ notification: Notification) {
+        trace("didExpand \((notification.userInfo?["NSObject"] as? SidebarItem)?.title ?? "?") applying=\(applyingExpansion)")
         syncCollapsedFromOutline()
+        // Expanding by hand doesn't go through rebuild() (the signature is
+        // unchanged), so this is the only place that can bring back the
+        // highlight of a row that was hidden inside the group.
+        if !applyingExpansion { restoreSelection(selectedID) }
     }
 
     /// Writes what the outline actually shows back into the app's collapsed
@@ -598,7 +691,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         for root in roots where root.kind == .group {
             if let id = root.group?.id, !outline.isItemExpanded(root) { collapsed.insert(id) }
         }
-        guard collapsed != parent.collapsedGroups else { return }
+        guard collapsed != parent.collapsedGroups else {
+            trace("sync: outline already matches (\(collapsed.count) collapsed)")
+            return
+        }
+        trace("sync: writing \(collapsed.count) collapsed (was \(parent.collapsedGroups.count))")
         parent.collapsedGroups = collapsed
         signature = currentSignature(roots)
     }
@@ -610,7 +707,43 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
               let node = outline.item(atRow: outline.clickedRow) as? SidebarItem else { return }
         switch node.kind {
         case .group:
-            // Whole header toggles, same as before the rewrite.
+            // Whole header toggles, same as before the rewrite — which makes a
+            // DOUBLE click two toggles whenever AppKit does not classify the
+            // pair as one. It classifies by the system's double-click interval,
+            // so a pair landing a little slower than that arrives here twice,
+            // the header folds straight back, and the gesture looks like it did
+            // nothing at all. (`doubleAction` skipping groups only covers the
+            // pairs AppKit *does* classify.) One header, one gesture, one
+            // toggle: a repeat on the same header inside that interval is the
+            // same gesture, not a second one.
+            // What the log of a real session showed. macOS keeps ONE click
+            // chain going while you keep clicking: `action` arrives with
+            // clickCount 1, 3, 5, 7… and `doubleAction` with 2, 4, 6…, so
+            // double-clicking a header several times in a row is one chain,
+            // and every odd count in it is a NEW double click that has to
+            // toggle. A blanket "ignore a repeat inside the double-click
+            // interval" swallowed all of them — the first double click worked
+            // and the rest did nothing, which is the "sometimes" in the
+            // report.
+            //
+            // The pair that genuinely has to be swallowed looks different: two
+            // clicks that macOS did NOT chain (both clickCount 1) landing
+            // inside the interval, which is what a double click becomes when
+            // the pointer drifts a couple of points between the two. Without
+            // this the header toggles twice and lands back where it started.
+            let now = ProcessInfo.processInfo.systemUptime
+            let clicks = NSApp.currentEvent?.clickCount ?? 1
+            let brokenPair = clicks <= 1
+                && lastGroupToggle?.id == node.id
+                && lastGroupToggle?.clicks ?? 0 <= 1
+                && now - (lastGroupToggle?.at ?? 0) < NSEvent.doubleClickInterval
+            trace("singleClick group=\(node.title) clicks=\(clicks) expanded=\(outline.isItemExpanded(node)) swallow=\(brokenPair)")
+            guard !brokenPair else { return }   // and do NOT move the mark:
+            // a swallowed click that became the new reference slid the window
+            // forward, so a third click still inside it was swallowed too, and
+            // a run of separate clicks collapsed into one toggle. The mark
+            // belongs to the click that actually toggled.
+            lastGroupToggle = (node.id, now, clicks)
             if outline.isItemExpanded(node) {
                 outline.animator().collapseItem(node)
             } else {
@@ -629,6 +762,15 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     @objc func doubleClick(_ sender: Any?) {
         guard let outline, outline.clickedRow >= 0,
               let node = outline.item(atRow: outline.clickedRow) as? SidebarItem else { return }
+        // AppKit sends `action` for the first click of a pair and
+        // `doubleAction` for the second, so a group header has ALREADY been
+        // toggled by singleClick — activating it here folded it straight back
+        // and a double click on a group looked like it did nothing.
+        // Return still reaches activate() for groups, where toggling is right.
+        guard node.kind != .group else {
+            trace("doubleClick group=\(node.title) — skipped, singleClick owns the toggle")
+            return
+        }
         activate(node)
     }
 
@@ -655,16 +797,26 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     private func flash(_ node: SidebarItem) {
         guard let outline else { return }
+        // Put out a flash still running on another row first: its timer bails
+        // out as soon as activatedID has moved on, so opening a second row
+        // within the 0.15 s left the first one stuck dark until a reload
+        // happened to recycle it.
+        clearFlash()
         activatedID = node.id
         let row = outline.row(forItem: node)
         if row >= 0 { (outline.rowView(atRow: row, makeIfNecessary: false) as? SidebarRowView)?.activated = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, self.activatedID == node.id else { return }
-            self.activatedID = nil
-            guard let outline = self.outline else { return }
-            let row = outline.row(forItem: node)
-            if row >= 0 { (outline.rowView(atRow: row, makeIfNecessary: false) as? SidebarRowView)?.activated = false }
+            self.clearFlash()
         }
+    }
+
+    private func clearFlash() {
+        guard let id = activatedID else { return }
+        activatedID = nil
+        guard let outline, let node = cache[id] else { return }
+        let row = outline.row(forItem: node)
+        if row >= 0 { (outline.rowView(atRow: row, makeIfNecessary: false) as? SidebarRowView)?.activated = false }
     }
 
     // MARK: Context menu
@@ -689,16 +841,25 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 self?.parent.model.collapseSidebar()
             }
             add(menu, "Edit Host…") { [weak self] in self?.parent.onEditHost(host) }
-            menu.addItem(.separator())
-            let moveItem = NSMenuItem(title: "Move to Group", action: nil, keyEquivalent: "")
-            let submenu = NSMenu()
-            for other in parent.store.groups where other.id != group.id {
-                add(submenu, other.name) { [weak self] in
-                    self?.parent.store.move(host: host, toGroupNamed: other.name)
+            // With only one group there is nowhere to move to; the item and
+            // its separator would just be a dead arrow onto an empty submenu.
+            let others = parent.store.groups.filter { $0.id != group.id }
+            if !others.isEmpty {
+                menu.addItem(.separator())
+                let moveItem = NSMenuItem(title: "Move to Group", action: nil, keyEquivalent: "")
+                let submenu = NSMenu()
+                for other in others {
+                    // By id, not by name: `move(host:toGroupNamed:)` CREATES a
+                    // group when the name is gone, so a rename between opening
+                    // this menu and picking from it forked a second group.
+                    // Int.max is clamped to the group's host count = append.
+                    add(submenu, other.name) { [weak self] in
+                        self?.parent.store.moveHost(withID: host.id, toGroupID: other.id, atIndex: .max)
+                    }
                 }
+                moveItem.submenu = submenu
+                menu.addItem(moveItem)
             }
-            moveItem.submenu = submenu
-            menu.addItem(moveItem)
             menu.addItem(.separator())
             add(menu, "Remove Host") { [weak self] in
                 guard let self else { return }
@@ -760,31 +921,79 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo,
                      proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
-        guard let payload = payload(info) else { return [] }
+        // Dragging toward an edge has to bring the list with it, or a row can
+        // only ever be dropped somewhere already on screen. AppKit's own
+        // `autoscroll(with:)` is fed by the mouse-dragged events of a plain
+        // click-drag; a dragging SESSION delivers `draggingUpdated` instead and
+        // no such event ever arrives, so the scroll has to be driven here.
+        updateAutoscroll(outlineView, info)
+        // A filtered list shows a subset of each group's hosts, so a child
+        // index taken off it means nothing in the real order. Our own rows
+        // refuse to start a drag while the field has text, but a drag from
+        // another window (or any app, `.string` is registered) still arrives.
+        guard parent.searchText.isEmpty, let payload = payload(info) else { return [] }
         switch payload {
-        case .group:
+        case .group(let id):
+            // The dragged row can be deleted in another window while the drag
+            // is in flight; lighting up an insertion line for a move that
+            // cannot happen is worse than refusing the drop.
+            guard parent.store.location(ofGroup: id) != nil else { return [] }
             // Groups only ever land between other groups, at the root.
-            let lower = fixedSectionCount
-            let upper = roots.count
             let target: Int
-            if item == nil {
-                target = index == NSOutlineViewDropOnItemIndex ? upper : min(max(index, lower), upper)
-            } else if let node = item as? SidebarItem, node.kind == .group,
-                      let position = roots.firstIndex(of: node) {
-                target = index == NSOutlineViewDropOnItemIndex ? position : position + 1
+            if let node = item as? SidebarItem {
+                // Whatever is under the pointer — the header itself or one of
+                // its hosts — the insertion point is that group's root row.
+                // Retargeting the host rows too is what removes the dead band
+                // that used to sit over every expanded group's contents.
+                guard let owner = groupNode(containing: node),
+                      let position = roots.firstIndex(of: owner) else { return [] }
+                target = (node.kind == .group && index == NSOutlineViewDropOnItemIndex)
+                    ? position
+                    : position + 1
             } else {
-                return []
+                target = index == NSOutlineViewDropOnItemIndex
+                    ? roots.count
+                    : min(max(index, fixedSectionCount), roots.count)
             }
             outlineView.setDropItem(nil, dropChildIndex: target)
             return .move
-        case .host:
-            guard let groupNode = groupNode(containing: item) else { return [] }
-            var target = index
-            if let node = item as? SidebarItem, node.kind == .host {
-                // Dropped ON a host row: land in that host's slot.
-                target = groupNode.children.firstIndex(of: node) ?? groupNode.children.count
-            } else if index == NSOutlineViewDropOnItemIndex {
-                target = groupNode.children.count
+        case .host(let id):
+            guard parent.store.location(ofHost: id) != nil else { return [] }
+            let groupNode: SidebarItem
+            let target: Int
+            if let owner = self.groupNode(containing: item) {
+                groupNode = owner
+                if let node = item as? SidebarItem, node.kind == .host {
+                    // Dropped ON a host row: land in that host's slot.
+                    target = owner.children.firstIndex(of: node) ?? owner.children.count
+                } else if index == NSOutlineViewDropOnItemIndex {
+                    // Dropped ON the header — including a collapsed one,
+                    // whose children are built either way — means "the end".
+                    target = owner.children.count
+                } else {
+                    target = index
+                }
+            } else if item == nil {
+                // A root-level insertion point: between two groups, above the
+                // first, or below the very last row. A host has to land INSIDE
+                // a group, and returning [] here made the bottom of the list
+                // (and every group boundary) refuse the drop. Use the group
+                // the line is drawn against — the one above it, or the first
+                // group when the line sits above them all.
+                let stop = min(max(index == NSOutlineViewDropOnItemIndex ? roots.count : index, 0), roots.count)
+                if let above = roots[..<stop].last(where: { $0.kind == .group }) {
+                    groupNode = above
+                    target = above.children.count
+                } else if let first = roots.first(where: { $0.kind == .group }) {
+                    groupNode = first
+                    target = 0
+                } else {
+                    return []
+                }
+            } else {
+                // A section header or one of its static rows — Recent and
+                // This Mac are not places a host can live.
+                return []
             }
             outlineView.setDropItem(groupNode, dropChildIndex: min(max(target, 0), groupNode.children.count))
             return .move
@@ -802,16 +1011,136 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo,
                      item: Any?, childIndex index: Int) -> Bool {
-        guard let payload = payload(info) else { return false }
+        // Same gates as validateDrop, re-checked: `true` here tells AppKit the
+        // drop landed, and saying so when nothing moved is how a drag ends
+        // with the row apparently back where it started and no explanation.
+        guard parent.searchText.isEmpty, let payload = payload(info), index >= 0 else { return false }
         switch payload {
         case .group(let id):
-            parent.store.moveGroup(withID: id, toIndex: max(0, index - fixedSectionCount))
+            guard parent.store.location(ofGroup: id) != nil else { return false }
+            // Count the groups above the insertion point rather than
+            // subtracting fixedSectionCount: the fixed rows are not fixed
+            // across time (finishing a session adds the Recent section), so
+            // the arithmetic version was one row off whenever they changed
+            // between validateDrop and here.
+            let stop = min(index, roots.count)
+            let groupIndex = roots[..<stop].filter { $0.kind == .group }.count
+            parent.store.moveGroup(withID: id, toIndex: groupIndex)
         case .host(let id):
-            guard let groupID = (item as? SidebarItem)?.group?.id else { return false }
-            parent.store.moveHost(withID: id, toGroupID: groupID, atIndex: max(0, index))
+            guard let groupID = (item as? SidebarItem)?.group?.id,
+                  parent.store.location(ofHost: id) != nil,
+                  parent.store.location(ofGroup: groupID) != nil else { return false }
+            parent.store.moveHost(withID: id, toGroupID: groupID, atIndex: index)
         }
+        // The drag is still open here — AppKit ends the session only after the
+        // destination is done — so this normally just books the rebuild and
+        // draggingSession/endedAt pays it a moment later. Asking for it here
+        // anyway keeps the call correct whichever way that order goes.
         rebuild(force: true)
         return true
+    }
+
+    /// Sets the scroll speed from how close the pointer is to an edge, and
+    /// starts or stops the timer that applies it. Speed ramps with depth into
+    /// the zone so a drag can creep or race, the way a Finder list does.
+    private func updateAutoscroll(_ outlineView: NSOutlineView, _ info: NSDraggingInfo) {
+        guard let clip = outlineView.enclosingScrollView?.contentView else { return stopAutoscroll() }
+        let point = clip.convert(info.draggingLocation, from: nil)
+        let visible = clip.bounds
+        let fromTop = point.y - visible.minY
+        let fromBottom = visible.maxY - point.y
+        let zone = SidebarOutlineCoordinator.autoscrollZone
+        let maxStep = SidebarOutlineCoordinator.autoscrollMaxStep
+
+        if fromTop < zone, fromTop > -zone {
+            autoscrollStep = -maxStep * min(1, max(0.15, (zone - fromTop) / zone))
+        } else if fromBottom < zone, fromBottom > -zone {
+            autoscrollStep = maxStep * min(1, max(0.15, (zone - fromBottom) / zone))
+        } else {
+            return stopAutoscroll()
+        }
+        guard autoscrollTimer == nil else { return }
+        autoscrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self, weak outlineView] _ in
+            MainActor.assumeIsolated {
+                guard let self, let outlineView else { return }
+                self.stepAutoscroll(outlineView)
+            }
+        }
+        // The drag runs the event loop in its own mode; without this the timer
+        // never fires while the mouse is down.
+        if let autoscrollTimer { RunLoop.main.add(autoscrollTimer, forMode: .eventTracking) }
+    }
+
+    private func stepAutoscroll(_ outlineView: NSOutlineView) {
+        guard let scroll = outlineView.enclosingScrollView else { return stopAutoscroll() }
+        let clip = scroll.contentView
+        let maxY = max(0, (clip.documentView?.bounds.height ?? 0) - clip.bounds.height)
+        let target = min(max(0, clip.bounds.origin.y + autoscrollStep), maxY)
+        guard target != clip.bounds.origin.y else { return }   // already at the end
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: target))
+        scroll.reflectScrolledClipView(clip)
+    }
+
+    func stopAutoscroll() {
+        autoscrollTimer?.invalidate()
+        autoscrollTimer = nil
+        autoscrollStep = 0
+    }
+
+    /// AppKit is about to track a drag started from these rows; `rebuild`
+    /// stays out of the way until it is over (see the guard there).
+    ///
+    /// It also fixes the picture under the pointer. AppKit builds that from a
+    /// snapshot of the CELL view, and both cells here deliberately draw to the
+    /// LEFT of their own origin — the host badge at x = -14 and the group title
+    /// at x = -12, so each lines up under the header above it instead of
+    /// floating an indentation step to the right. Everything outside the cell's
+    /// bounds is clipped out of a snapshot, so the badge (and the first
+    /// character or two of a group name) was simply missing from the row you
+    /// were dragging. The row view is the ancestor that does contain it.
+    func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession,
+                     willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
+        isDragging = true
+        session.enumerateDraggingItems(options: [], for: outlineView,
+                                       classes: [NSPasteboardItem.self],
+                                       searchOptions: [:]) { item, index, _ in
+            guard index < draggedItems.count else { return }
+            let row = outlineView.row(forItem: draggedItems[index])
+            guard row >= 0,
+                  let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) else { return }
+            // Only the PICTURE is replaced. `draggingFrame` is AppKit's and
+            // stays that way: setting it here threw the image to the middle of
+            // the screen, and it was never what was wrong — the frame was
+            // right, the snapshot inside it was short.
+            // Only the LEFT edge overhangs; `insetBy` would widen both sides and
+            // hang 16 transparent points off the right of the picture.
+            var rect = cell.bounds
+            rect.origin.x -= SidebarOutlineCoordinator.cellOverhang
+            rect.size.width += SidebarOutlineCoordinator.cellOverhang
+            guard rect.width > 0, rect.height > 0,
+                  let rep = cell.bitmapImageRepForCachingDisplay(in: rect) else { return }
+            cell.cacheDisplay(in: rect, to: rep)
+            let picture = NSImage(size: rect.size)
+            picture.addRepresentation(rep)
+            let component = NSDraggingImageComponent(key: .icon)
+            component.contents = picture
+            // Negative x so the extra strip sits to the LEFT of the frame,
+            // which is where the badge and the group title actually draw.
+            component.frame = NSRect(x: -SidebarOutlineCoordinator.cellOverhang, y: 0,
+                                     width: rect.width, height: rect.height)
+            item.imageComponentsProvider = { [component] }
+        }
+    }
+
+    /// Always called, drop or cancel — including the Escape key and a drop
+    /// outside the window — so the deferred rebuild can never be stranded.
+    func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession,
+                     endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        isDragging = false
+        stopAutoscroll()
+        guard pendingRebuild else { return }
+        pendingRebuild = false
+        rebuild(force: true)
     }
 }
 

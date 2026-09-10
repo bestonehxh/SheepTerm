@@ -4,64 +4,66 @@ import Synchronization
 /// One built-in highlight rule and its fixed presentation. Colours are
 /// compile-time constants (see `makeConfigs`); there is no longer any
 /// user-facing customization or on-disk persistence for them.
-struct HighlightRuleConfig: Codable, Identifiable, Equatable {
-    var id = UUID()
+struct HighlightRuleConfig {
     var name: String
     var pattern: String
     var colorHex: String        // "RRGGBB"
     var bold = false
     var caseInsensitive = false
-    var enabled = true
 }
 
-/// A compiled rule ready for matching.
+/// A rule the byte scanner can serve.
+///
+/// There is no second matcher any more. The app used to compile every
+/// `config.pattern` with `NSRegularExpression` and keep a regex branch in
+/// `claimedSpans` for rules the scanner could not serve; nothing in the
+/// shipping app ever reached it (every pack rule is a built-in, and the only
+/// entry point refuses non-ASCII outright), so the ICU objects were 111
+/// pattern compilations at launch that only the tests ever read. The pattern
+/// strings stay — they are generated from the same sorted keyword arrays the
+/// scanner buckets, they document the pack, and they are what the test
+/// oracle compiles — but the app no longer compiles them.
 struct HighlightRule {
-    let regex: NSRegularExpression
-    let sgrStart: String
-    /// Non-nil when this rule is a built-in default (same name, pattern, and
-    /// case-sensitivity) — only then may the byte scanner take over matching,
-    /// because the scanner hard-codes the default patterns.
-    let builtIn: HighlightScanner.BuiltIn?
+    /// Which built-in this rule is. NOT optional: the scanner is the only
+    /// matcher left, so a rule it cannot serve has no way to match anything.
+    let builtIn: HighlightScanner.BuiltIn
 
     init?(config: HighlightRuleConfig, vendor: Vendor = .auto) {
-        guard config.enabled else { return nil }
-        var options: NSRegularExpression.Options = []
-        if config.caseInsensitive { options.insert(.caseInsensitive) }
-        guard let regex = try? NSRegularExpression(pattern: config.pattern, options: options) else {
+        // Compiling the pattern used to be what proved a rule was usable. The
+        // equivalent proof now is the scanner's own admission test: the rule
+        // must still be this VENDOR's default (same name, pattern and
+        // case-sensitivity — the scanner walks that vendor's profile, so a
+        // pattern from another pack would be matched with the wrong keyword
+        // table) and its name must resolve to a `BuiltIn` the scanner
+        // implements. Failing either returns nil, so the rule does not exist
+        // at all rather than sitting in the set matching nothing —
+        // `HighlightProvider` applies the same filter when it builds the
+        // palette, which is what keeps rule indices lined up.
+        guard let def = Highlighter.defaultConfigs(for: vendor).first(where: { $0.name == config.name }),
+              def.pattern == config.pattern,
+              def.caseInsensitive == config.caseInsensitive,
+              let builtIn = HighlightScanner.BuiltIn(rawValue: config.name) else {
             return nil
         }
-        self.regex = regex
-        let hex = UInt32(config.colorHex, radix: 16) ?? 0xFFFFFF
-        let r = (hex >> 16) & 0xFF
-        let g = (hex >> 8) & 0xFF
-        let b = hex & 0xFF
-        sgrStart = "\u{1B}[38;2;\(r);\(g);\(b)\(config.bold ? ";1" : "")m"
-        // Only a pattern that is still this VENDOR's default may be served
-        // by the byte scanner — the scanner walks that vendor's profile, so a
-        // pattern from another pack would silently be matched with the wrong
-        // keyword table.
-        if let def = Highlighter.defaultConfigs(for: vendor).first(where: { $0.name == config.name }),
-           def.pattern == config.pattern, def.caseInsensitive == config.caseInsensitive {
-            builtIn = HighlightScanner.BuiltIn(rawValue: config.name)
-        } else {
-            builtIn = nil
-        }
+        self.builtIn = builtIn
     }
 }
 
 /// Finds the network-relevant tokens in a run of text. It produces SPANS,
-/// not a coloured copy: `GridHighlighter` writes the attributes into the
-/// terminal grid after SwiftTerm has parsed the stream, so the bytes the
-/// device sent are never touched and logs and copy/paste stay clean.
+/// not a coloured copy: `VendorHighlightProvider` hands them to SheepVT's
+/// `HighlightOverlay`, which colours the rows the renderer is about to draw,
+/// so the bytes the device sent are never touched and logs and copy/paste
+/// stay clean.
 nonisolated enum Highlighter {
     /// Compiled rules currently in effect plus the scanner mask derived from
-    /// them. The mask is cached with the rules because it only changes when
-    /// HighlightStore recompiles: deriving it per call cost ~1.4 µs, and
-    /// escape-heavy output calls the matcher once per text run BETWEEN escape
-    /// sequences — thousands of times per chunk, not once.
+    /// them. The mask is cached with the rules because it only changes on a
+    /// recompile (`installDefaults`, once at startup): deriving it per call
+    /// cost ~1.4 µs, and escape-heavy output calls the matcher once per text
+    /// run BETWEEN escape sequences — thousands of times per chunk, not once.
     struct ActiveRules {
         var rules: [HighlightRule] = []
-        /// Bit per built-in rule the scanner may match; 0 = regex path only.
+        /// Bit per built-in rule the scanner may match; 0 only when there are
+        /// no rules at all, since every rule that compiles is a built-in.
         var scannerMask: UInt16 = 0
         /// The keyword tables the scanner walks for this vendor. Stored with
         /// the rules so the hot path takes ONE lock for all three.
@@ -71,24 +73,23 @@ nonisolated enum Highlighter {
     /// One compiled set per vendor, indexed by `Vendor.slot`.
     ///
     /// A session does not own its rules — it owns a `Vendor` and reads the
-    /// set out of here. That is what keeps a colour change in Settings
-    /// flowing to every open tab with a single recompile, exactly as it did
-    /// when there was one global set, while still letting two tabs on two
-    /// different families colour differently at the same time.
+    /// set out of here. That is what lets a single recompile reach every open
+    /// tab, exactly as it did when there was one global set, while still
+    /// letting two tabs on two different families colour differently at the
+    /// same time.
     ///
     /// `Mutex` makes the cross-actor ownership explicit: matching runs on
-    /// background highlight queues while HighlightStore recompiles on the
-    /// main actor. NSRegularExpression is thread-safe for matching.
+    /// background highlight queues while the sets are installed on the main
+    /// actor. Everything inside an `ActiveRules` is immutable and Sendable.
     private static let activeStorage = Mutex(
         [ActiveRules](repeating: ActiveRules(), count: Vendor.allCases.count)
     )
 
-    /// Bumped by every `setActive`. A `GridHighlighter` mints one terminal
-    /// attribute per rule INDEX, and a recompile can change what sits at an
-    /// index — switching a rule off in Settings moves every later rule up
-    /// one. The painter compares this before each paint and re-mints when it
-    /// has moved, so a stale palette can never colour a rule with its
-    /// neighbour's attribute.
+    /// Bumped by every `setActive`. `VendorHighlightProvider` keys one colour
+    /// per rule INDEX, and a recompile can change what sits at an index — a
+    /// rule that is dropped moves every later rule up one. The provider
+    /// compares this before it answers, so a stale palette can never colour a
+    /// rule with its neighbour's colour.
     private static let revisionBox = Mutex<UInt64>(0)
     nonisolated static var revision: UInt64 { revisionBox.withLock { $0 } }
 
@@ -99,7 +100,7 @@ nonisolated enum Highlighter {
             let rules = sets[vendor] ?? []
             built[vendor.slot] = ActiveRules(
                 rules: rules,
-                scannerMask: HighlightScanner.mask(of: rules.compactMap(\.builtIn)),
+                scannerMask: HighlightScanner.mask(of: rules.map(\.builtIn)),
                 profile: HighlightScanner.profile(vendor.rawValue)
             )
         }
@@ -110,7 +111,7 @@ nonisolated enum Highlighter {
     nonisolated static func setActive(_ rules: [HighlightRule], for vendor: Vendor) {
         let entry = ActiveRules(
             rules: rules,
-            scannerMask: HighlightScanner.mask(of: rules.compactMap(\.builtIn)),
+            scannerMask: HighlightScanner.mask(of: rules.map(\.builtIn)),
             profile: HighlightScanner.profile(vendor.rawValue)
         )
         activeStorage.withLock { $0[vendor.slot] = entry }
@@ -124,8 +125,8 @@ nonisolated enum Highlighter {
         set { setActive(newValue, for: .auto) }
     }
 
-    /// The compiled rules for a vendor. The grid painter needs them to mint
-    /// one terminal attribute per rule; the stream path never had to.
+    /// The compiled rules for a vendor. Matching goes through these; the
+    /// colours that go with them live in `defaultConfigs(for:)`.
     nonisolated static func active(for vendor: Vendor) -> [HighlightRule] {
         activeStorage.withLock { $0[vendor.slot].rules }
     }
@@ -133,9 +134,9 @@ nonisolated enum Highlighter {
     /// Compiles the fixed built-in rules for every vendor pack once, at
     /// startup. Colours are constants baked into `makeConfigs`, so this runs
     /// exactly once (AppModel init) and never again — there is no Settings UI
-    /// left to recompile a changed colour or order. The grid harness runs
-    /// this same loop before it paints. `@MainActor` because `HighlightRule`
-    /// (a default-isolated type) compiles its regexes there.
+    /// left to recompile a changed colour or order. `@MainActor` because
+    /// `HighlightRule` is a default-isolated type, so its initialiser is
+    /// main-actor bound.
     @MainActor static func installDefaults() {
         for vendor in Vendor.allCases {
             setActive(
@@ -145,9 +146,9 @@ nonisolated enum Highlighter {
         }
     }
 
-    /// The spans a row's bytes claim, without producing any output — the
-    /// grid painter writes attributes into cells instead of assembling a new
-    /// byte stream, so it wants the ranges, not the coloured copy.
+    /// The spans a paragraph's bytes claim, without producing any output —
+    /// the overlay colours cells as it builds a frame instead of assembling a
+    /// new byte stream, so it wants the ranges, not the coloured copy.
     nonisolated static func spans(
         in bytes: [UInt8], vendor: Vendor
     ) -> [(range: NSRange, rule: Int)] {
@@ -157,8 +158,7 @@ nonisolated enum Highlighter {
             rules: snapshot.rules,
             scannerMask: snapshot.scannerMask,
             profile: snapshot.profile,
-            asciiBytes: bytes,
-            text: nil
+            bytes: bytes
         )
     }
 
@@ -171,13 +171,12 @@ nonisolated enum Highlighter {
 
     // MARK: - Rule packs
 
-    /// The eleven rules as the settings UI and highlight-rules.json see them.
+    /// All eleven rule names with the union vocabulary behind them.
     ///
-    /// This is a CATALOGUE, not a pack: it exists so the user can style and
-    /// order every rule name — including ones `.auto` never matches — and so
-    /// the persisted file keeps a stable shape when a host switches vendor.
-    /// Nothing is ever matched with it; matching always goes through the
-    /// vendor's own pack.
+    /// This is a CATALOGUE, not a pack: no session ever matches with it —
+    /// matching always goes through the vendor's own pack. It exists so the
+    /// full set of rule names stays nameable in one place (the tests assert
+    /// against it) even though no single pack carries all eleven.
     static var canonicalConfigs: [HighlightRuleConfig] {
         packs[HighlightScanner.catalogueKey]!
     }
@@ -373,7 +372,7 @@ nonisolated enum Highlighter {
 
     /// One byte pass instead of `text.allSatisfy { $0.isASCII }` on top of
     /// the utf8 copy the scanner needs anyway — the Character-level probe
-    /// was ~10 % of colorize by itself.
+    /// was ~10 % of the matching pass by itself.
     @inline(__always)
     nonisolated private static func isASCII(_ bytes: [UInt8]) -> Bool {
         for byte in bytes where byte >= 0x80 { return false }
@@ -382,11 +381,10 @@ nonisolated enum Highlighter {
 
     /// The non-overlapping spans each rule claims, in priority order.
     ///
-    /// `asciiBytes` is non-nil only when the input is pure ASCII, which is
-    /// what lets the byte scanner stand in for a rule's regex; `text` is the
-    /// String form when the caller already has one. Rules the scanner can't
-    /// serve (user-edited patterns) need a String for ICU, so one is built
-    /// on demand and reused for every remaining regex rule.
+    /// `bytes` is always pure ASCII — the caller refuses anything else, which
+    /// is what lets a byte offset double as the terminal COLUMN the overlay
+    /// paints. One scanner pass produces every rule's matches; there is no
+    /// second matcher to fall back to.
     ///
     /// Claimed spans stay sorted by location and never overlap, and each
     /// rule's matches arrive sorted too — so each rule is merged into
@@ -401,74 +399,34 @@ nonisolated enum Highlighter {
         rules: [HighlightRule],
         scannerMask: UInt16,
         profile: HighlightScanner.Profile,
-        asciiBytes: [UInt8]?,
-        text: String?
+        bytes: [UInt8]
     ) -> [(range: NSRange, rule: Int)] {
-        let scannable = asciiBytes != nil && scannerMask != 0
         // Ordinal-indexed, so a rule's matches are an array subscript rather
         // than a Dictionary lookup — and building the result costs no hashing.
-        var scanned: [[Range<Int>]] = []
-        if scannable, let asciiBytes {
-            scanned = HighlightScanner.scan(asciiBytes, enabledMask: scannerMask, profile: profile)
-        }
-
-        var regexText: String?
-        var regexRange = NSRange(location: 0, length: 0)
+        let scanned = HighlightScanner.scan(bytes, enabledMask: scannerMask, profile: profile)
         var claimed: [(range: NSRange, rule: Int)] = []
 
         for (ruleIndex, rule) in rules.enumerated() {
-            if let builtIn = rule.builtIn, scannable {
-                // Merging is a full rebuild of `claimed`, so a rule that
-                // matched nothing must not pay for one. On escape-heavy
-                // output the text runs between sequences are a few bytes
-                // long and almost every rule lands here.
-                let matches = scanned[HighlightScanner.ordinal(of: builtIn)]
-                if matches.isEmpty { continue }
-                var merged: [(range: NSRange, rule: Int)] = []
-                merged.reserveCapacity(claimed.count + matches.count)
-                var ci = 0
-                for match in matches where !match.isEmpty {
-                    while ci < claimed.count,
-                          claimed[ci].range.location + claimed[ci].range.length <= match.lowerBound {
-                        merged.append(claimed[ci])
-                        ci += 1
-                    }
-                    // Overlaps a claimed span — drop this match, keep `ci`.
-                    if ci < claimed.count, claimed[ci].range.location < match.upperBound { continue }
-                    merged.append((NSRange(location: match.lowerBound, length: match.count), ruleIndex))
-                }
-                while ci < claimed.count { // remaining spans start past the last match
-                    merged.append(claimed[ci])
-                    ci += 1
-                }
-                claimed = merged
-                continue
-            }
-
+            // Merging is a full rebuild of `claimed`, so a rule that
+            // matched nothing must not pay for one. On escape-heavy
+            // output the text runs between sequences are a few bytes
+            // long and almost every rule lands here.
+            let matches = scanned[HighlightScanner.ordinal(of: rule.builtIn)]
+            if matches.isEmpty { continue }
             var merged: [(range: NSRange, rule: Int)] = []
-            merged.reserveCapacity(claimed.count + 16)
+            merged.reserveCapacity(claimed.count + matches.count)
             var ci = 0
-            let offer = { (range: NSRange) in
-                guard range.length > 0 else { return }
-                let end = range.location + range.length
-                while ci < claimed.count, claimed[ci].range.location + claimed[ci].range.length <= range.location {
+            for match in matches where !match.isEmpty {
+                while ci < claimed.count,
+                      claimed[ci].range.location + claimed[ci].range.length <= match.lowerBound {
                     merged.append(claimed[ci])
                     ci += 1
                 }
-                if ci < claimed.count, claimed[ci].range.location < end { return } // overlaps a claimed span
-                merged.append((range, ruleIndex))
+                // Overlaps a claimed span — drop this match, keep `ci`.
+                if ci < claimed.count, claimed[ci].range.location < match.upperBound { continue }
+                merged.append((NSRange(location: match.lowerBound, length: match.count), ruleIndex))
             }
-            if regexText == nil {
-                let built = text ?? String(decoding: asciiBytes ?? [], as: UTF8.self)
-                regexText = built
-                regexRange = NSRange(location: 0, length: (built as NSString).length)
-            }
-            if let regexText {
-                rule.regex.enumerateMatches(in: regexText, range: regexRange) { match, _, _ in
-                    if let range = match?.range { offer(range) }
-                }
-            }
-            while ci < claimed.count {
+            while ci < claimed.count { // remaining spans start past the last match
                 merged.append(claimed[ci])
                 ci += 1
             }

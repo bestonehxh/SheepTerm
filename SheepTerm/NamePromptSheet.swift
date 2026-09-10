@@ -6,7 +6,7 @@ struct NamePromptSheet: View {
     let confirmLabel: String
     let onCommit: (String) -> Void
 
-    @State var name: String
+    @State private var name: String
     @Environment(\.dismiss) private var dismiss
 
     init(title: String, confirmLabel: String = "Save", initialName: String = "", onCommit: @escaping (String) -> Void) {
@@ -28,15 +28,22 @@ struct NamePromptSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(confirmLabel, action: commit)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(trimmedName.isEmpty)
             }
         }
         .padding(20)
         .frame(width: 300)
     }
 
+    /// whitespacesAndNewlines, not whitespaces: a name pasted out of a
+    /// spreadsheet cell carries the newline, which .whitespaces leaves in —
+    /// and the group then draws as a two-line sidebar row.
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func commit() {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let trimmed = trimmedName
         guard !trimmed.isEmpty else { return }
         onCommit(trimmed)
         dismiss()

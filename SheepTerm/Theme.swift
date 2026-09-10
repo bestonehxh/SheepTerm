@@ -1,6 +1,6 @@
 import AppKit
+import SheepVTRender
 import SwiftUI
-import SwiftTerm
 
 /// A complete terminal color scheme: background, default text, ANSI 16.
 struct TerminalTheme: Identifiable {
@@ -186,7 +186,6 @@ enum Theme {
     }
 
     static var termBackgroundNS: NSColor { nsColor(currentTerminalTheme.background) }
-    static var termForegroundNS: NSColor { nsColor(currentTerminalTheme.foreground) }
     static var termBackground: SwiftUI.Color { SwiftUI.Color(nsColor: termBackgroundNS) }
 
     // MARK: Chrome — the terminal follows its theme; the chrome (top bar,
@@ -212,46 +211,53 @@ enum Theme {
 
     static func apply(to terminalView: TerminalView) {
         let theme = currentTerminalTheme
-        // Only touch the font when it actually changed: SwiftTerm's setter
-        // always re-measures and calls resize(), which reaches the pty / SSH
-        // channel as a window-size change even when the grid is the same —
-        // and every shell answers that by printing a fresh prompt. Switching
-        // the theme used to leave one stray prompt line in every tab.
+        // Only touch the font when it actually changed: the setter re-measures
+        // the cell, and a re-measure that lands on a different grid reaches the
+        // pty / SSH channel as a window-size change — and every shell answers
+        // that by printing a fresh prompt. Switching the theme used to leave
+        // one stray prompt line in every tab.
         let font = terminalFont
         if terminalView.font.fontName != font.fontName || terminalView.font.pointSize != font.pointSize {
             terminalView.font = font
         }
-        // SwiftTerm's setter only stores the flag; the next full paint picks
-        // it up, so ask for one when it actually changed.
-        let smoothing = terminalFontSmoothing
-        if terminalView.fontSmoothing != smoothing {
-            terminalView.fontSmoothing = smoothing
-            terminalView.needsDisplay = true
-        }
-        terminalView.nativeBackgroundColor = nsColor(theme.background)
-        terminalView.nativeForegroundColor = nsColor(theme.foreground)
-        terminalView.installColors(theme.ansi.map(termColor))
-        // Selection: the app accent at 30% over the theme background, text
-        // colour untouched — a tinted band, not the opaque grey slab the
-        // old fg/bg blend gave (SwiftTerm's own default is a hard dark teal
-        // that fights every theme). Chosen from a six-way preview, 3.0 (7).
-        terminalView.selectedTextBackgroundColor =
-            nsColor(theme.background).blended(withFraction: 0.30, of: nsColor(0x5AA5D6))
-            ?? NSColor.selectedTextBackgroundColor
-        terminalView.selectedTextForegroundColor = nsColor(theme.foreground)
+        // Both setters below no-op when the value is unchanged and ask for a
+        // repaint when it is not, so there is nothing to guard here.
+        terminalView.fontSmoothing = terminalFontSmoothing
 
-        // Right-click menu: SwiftTerm implements copy:/paste:/selectAll: as
-        // responder actions; target nil routes them to the clicked view.
+        // Keep the package's search-hit tints and alphas; override only what
+        // a SheepTerm theme actually states.
+        var colors = TerminalColors.sheepTerm
+        colors.background = theme.background
+        colors.foreground = theme.foreground
+        colors.ansi = theme.ansi
+        // Selection: the app accent at 30% over the theme background, text
+        // colour untouched — a tinted band, not the opaque grey slab the old
+        // fg/bg blend gave. Chosen from a six-way preview, 3.0 (7); the
+        // renderer does the blend now, so the colour and the alpha are stated
+        // separately instead of pre-blended.
+        colors.selectionBackground = 0x5AA5D6
+        colors.selectionAlpha = 0.30
+        colors.cursor = theme.foreground
+        colors.cursorText = theme.background
+        // Setting `colors` also hands the theme's foreground, background and
+        // cursor to the terminal as the HOST BASELINE: what an OSC 10/11/12
+        // query answers when no program has overridden it, and what OSC
+        // 110/111/112 and RIS put back. Assigning those three by hand here
+        // used to be necessary and is now the same write, one line later.
+        terminalView.colors = colors
+
+        // Right-click menu: the terminal view implements copy:/paste:/selectAll:
+        // as responder actions; target nil routes them to the clicked view.
+        // Built once per view — it has nothing to do with the theme, and
+        // replacing it on every apply() (every theme or font change, for
+        // every open tab) can swap the menu out from under an open one.
+        guard terminalView.menu == nil else { return }
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Copy", action: NSSelectorFromString("copy:"), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Paste", action: NSSelectorFromString("paste:"), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Select All", action: NSSelectorFromString("selectAll:"), keyEquivalent: ""))
         terminalView.menu = menu
-
-        // Cap SwiftTerm's kitty image cache (default 320 MB per tab): a hostile
-        // or buggy host could otherwise inflate RAM for every open tab.
-        terminalView.getTerminal().options.kittyImageCacheLimitBytes = 32 * 1024 * 1024
     }
 
     private static func nsColor(_ hex: UInt32) -> NSColor {
@@ -263,13 +269,4 @@ enum Theme {
         )
     }
 
-    /// Pure conversion — safe to call from anywhere, so say so (installColors
-    /// maps over it from a nonisolated context).
-    nonisolated private static func termColor(_ hex: UInt32) -> SwiftTerm.Color {
-        SwiftTerm.Color(
-            red: UInt16((hex >> 16) & 0xFF) * 257,
-            green: UInt16((hex >> 8) & 0xFF) * 257,
-            blue: UInt16(hex & 0xFF) * 257
-        )
-    }
 }

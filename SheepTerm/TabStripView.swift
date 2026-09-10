@@ -123,6 +123,10 @@ struct TabItemView: View {
         .accessibilityValue(tab.statusInfo ?? "")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityHint("Switches to this session")
+        // children: .ignore above also swallows the × button, so VoiceOver had
+        // no way to close a tab from the strip at all — the whole chip read as
+        // one element whose only action was "switch to it".
+        .accessibilityAction(named: "Close Tab") { onClose() }
         .onHover { hovering = $0 }
         .contextMenu {
             switch tab.content {

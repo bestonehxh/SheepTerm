@@ -32,13 +32,26 @@ struct RevealableSecureField: View {
                             .focused($focusedField, equals: .secure)
                     }
                 }
+                // A password is not a word: autocorrect, completion and text
+                // replacement must not rewrite one. The revealed form is an
+                // ordinary TextField, so without this they would (smart
+                // quotes alone would silently change what gets sent).
+                .autocorrectionDisabled(true)
                 .onChange(of: focusedField) {
                     if focusedField != nil {
                         AuthPrompt.forceASCIIKeyboard()
                     }
                 }
                 Button {
+                    // Only follow the focus if the field HAD it. Clicking the
+                    // eye to check what you typed while the caret sits in
+                    // another field used to yank focus over here — and, when
+                    // it re-hid the value, engage secure input (which locks
+                    // input-source switching app-wide) for a field nobody
+                    // was typing into.
+                    let wasFocused = focusedField != nil
                     revealed.toggle()
+                    guard wasFocused else { return }
                     let target: Field = revealed ? .plain : .secure
                     DispatchQueue.main.async {
                         focusedField = target
@@ -55,7 +68,12 @@ struct RevealableSecureField: View {
             if hasNonASCII {
                 // The value is kept as pasted — only warned about, never
                 // silently mangled.
-                Text("Contains non-ASCII characters (passwords are ASCII only)")
+                // Not "passwords are ASCII only" — that was never this app's
+                // rule to make. The field keeps what was pasted and sends it
+                // byte for byte; whether the far end accepts it is the far
+                // end's business. AuthPrompt says the same thing in the same
+                // words, and used to cite this line as its authority.
+                Text("Contains non-ASCII characters — sent exactly as typed")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange)
             }

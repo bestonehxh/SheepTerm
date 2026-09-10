@@ -1,7 +1,6 @@
 import AppKit
 import Combine
-import ImageIO
-import SwiftTerm
+import SheepVTRender
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -92,6 +91,18 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 }
 
 
+/// Read once. `ProcessInfo.environment` builds a fresh dictionary on every
+/// access, and a tracer that is off should cost a boolean.
+private let uiTraceEnabled = ProcessInfo.processInfo.environment["SHEEPTERM_CLICKLOG"] == "1"
+
+/// Shared UI tracer, off unless `SHEEPTERM_CLICKLOG=1`. Added after two wrong
+/// guesses about a click-timing bug: measuring beats reasoning about AppKit.
+@MainActor
+func uiTrace(_ what: @autoclosure () -> String) {
+    guard uiTraceEnabled else { return }
+    FileHandle.standardError.write("[ui \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime))] \(what())\n".data(using: .utf8)!)
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
@@ -125,9 +136,9 @@ final class AppModel: ObservableObject {
             for tab in tabs {
                 switch tab.content {
                 case .ssh(let controller):
-                    (controller.terminalView as? SheepSSHTerminalView)?.cancelSafePaste(reason: .stopped)
+                    controller.terminalHost.cancelSafePaste(reason: .stopped)
                 case .serial(let controller):
-                    (controller.terminalView as? SheepSSHTerminalView)?.cancelSafePaste(reason: .stopped)
+                    controller.terminalHost.cancelSafePaste(reason: .stopped)
                 case .local:
                     break
                 }
@@ -197,7 +208,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Pushes the current theme AND font (Settings → Terminal) onto every
-    /// open terminal. A font change makes SwiftTerm re-measure its cells and
+    /// open terminal. A font change makes the view re-measure its cells and
     /// resize the grid, which reaches the remote end through the existing
     /// sizeChanged path — nothing else to do here.
     func reapplyTerminalTheme() {
@@ -209,178 +220,20 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    /// Default icon choice. "V2" is the 2026 wool-family artwork that also
-    /// ships as the bundle's AppIcon; A/B/C are the original set and stay
-    /// selectable in Settings.
-    static let defaultAppIcon = "V2"
-
-    @Published var appIcon: String = AppModel.defaultAppIcon {
-        didSet {
-            UserDefaults.standard.set(appIcon, forKey: "appIcon")
-            applyDockIcon()
-        }
-    }
-
-    /// Resolves the stored choice, running the one-time move off the retired
-    /// defaults. "D" belonged to the removed SheepTermD variant and its image
-    /// no longer ships. "B" was the old default: bumping the default alone
-    /// would leave everyone who never opened Settings on the old artwork, so
-    /// it is rewritten once — after that a deliberate pick of B sticks,
-    /// because the flag is already set.
-    private static func resolveStoredIcon(_ defaults: UserDefaults) -> String {
-        let stored = defaults.string(forKey: "appIcon")
-        if stored == "D" { return defaultAppIcon }
-        guard let stored else { return defaultAppIcon }
-        if stored == "B", !defaults.bool(forKey: "didMigrateIconToV2") {
-            defaults.set(true, forKey: "didMigrateIconToV2")
-            return defaultAppIcon
-        }
-        defaults.set(true, forKey: "didMigrateIconToV2")
-        return stored
-    }
-
-    /// User-picked icon image (Settings → General → Browse…), 256px PNG.
-    static let customIconURL: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("SheepTerm", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("custom-icon.png")
-    }()
-
-    /// Replaces the Dock icon with the chosen artwork — and, on the default
-    /// choice, deliberately does NOT.
-    ///
-    /// `applicationIconImage` is drawn by the Dock exactly as handed over: no
-    /// mask, no shadow, and no icon-grid inset either. The bundle icon a
-    /// normal app shows goes through Icon Services, whose rendering already
-    /// contains that inset — measured on macOS 26, the opaque tile is
-    /// 410/512 = 80% of the canvas for SheepTerm, Mail and Notes alike. So
-    /// assigning that same rendering to `applicationIconImage` insets it a
-    /// SECOND time: the Dock fits the whole 512-wide image (transparent
-    /// margin included) into the slot, and the sheep ends up ~80% the size of
-    /// every neighbour. That is the "icon looks smaller than the other apps"
-    /// report, and no amount of re-baking the PNG fixes it cleanly.
-    ///
-    /// The default icon therefore hands the Dock back to the system (nil
-    /// restores the bundle icon), which is the only way to be pixel-for-pixel
-    /// identical to Mail and Notes — and it keeps Dock and Finder in sync by
-    /// construction rather than by regenerating a PNG after every build.
-    /// A/B/C and a user's own picture still have to be pushed, so their fully
-    /// transparent border is trimmed first: what remains (artwork plus its
-    /// baked shadow) then fills the slot the same way.
-    func applyDockIcon() {
-        guard appIcon != Self.defaultAppIcon else {
-            NSApp.applicationIconImage = nil
-            return
-        }
-        let image: NSImage?
-        if appIcon == "Custom" {
-            image = NSImage(contentsOf: Self.customIconURL)
-        } else {
-            image = NSImage(named: "SheepIcon\(appIcon)")
-        }
-        guard let image else { return }
-        NSApp.applicationIconImage = Self.trimmingTransparentBorder(image) ?? image
-    }
-
-    /// Crops rows/columns that are entirely alpha 0. Only fully transparent
-    /// pixels go — a soft cast shadow is part of the artwork and stays.
-    /// Returns nil when there is nothing to trim (or nothing opaque at all),
-    /// so the caller can just use the original.
-    private static func trimmingTransparentBorder(_ image: NSImage) -> NSImage? {
-        guard let source = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first
-                ?? NSBitmapImageRep(data: image.tiffRepresentation ?? Data()),
-              let data = source.bitmapData, source.samplesPerPixel == 4 else { return nil }
-        let width = source.pixelsWide, height = source.pixelsHigh
-        let rowBytes = source.bytesPerRow, pixelBytes = source.bitsPerPixel / 8
-        var minX = width, maxX = -1, minY = height, maxY = -1
-        for y in 0..<height {
-            for x in 0..<width where data[y * rowBytes + x * pixelBytes + 3] != 0 {
-                if x < minX { minX = x }
-                if x > maxX { maxX = x }
-                if y < minY { minY = y }
-                if y > maxY { maxY = y }
-            }
-        }
-        guard maxX >= minX, maxY >= minY else { return nil }
-        let box = NSRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
-        guard box.width < CGFloat(width) || box.height < CGFloat(height),
-              let cropped = source.cgImage?.cropping(to: box) else { return nil }
-        return NSImage(cgImage: cropped, size: NSSize(width: box.width, height: box.height))
-    }
-
-    /// Imports an image file as the custom icon (scaled to 256px, aspect-fit)
-    /// and selects it. Decode + scale run on a background queue — a
-    /// multi-megabyte photo must not beach-ball the UI — and the result is
-    /// delivered back on the main actor.
-    func setCustomIcon(from url: URL, completion: @escaping @Sendable (Bool) -> Void) {
-        let destination = Self.customIconURL
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ok = Self.renderCustomIcon(from: url, to: destination)
-            DispatchQueue.main.async {
-                if ok { self.appIcon = "Custom" }
-                completion(ok)
-            }
-        }
-    }
-
-    /// Compatibility shim for the old synchronous call site: kicks off the
-    /// async import and reports only whether the file is readable at all.
-    /// New callers should use setCustomIcon(from:completion:).
-    @discardableResult
-    func setCustomIcon(from url: URL) -> Bool {
-        guard FileManager.default.isReadableFile(atPath: url.path) else { return false }
-        setCustomIcon(from: url) { _ in }
-        return true
-    }
-
-    /// ImageIO thumbnail render: decodes at ≤256px instead of full size, so
-    /// a huge source image never materializes in memory. Pure CoreGraphics —
-    /// safe to run on a background queue (hence nonisolated).
-    nonisolated private static func renderCustomIcon(from url: URL, to destination: URL) -> Bool {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
-        let thumbOptions: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: 256,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ]
-        guard let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else {
-            return false
-        }
-        // Aspect-fit onto a square canvas, same as the old NSImage path.
-        let side = 256
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: nil, width: side, height: side, bitsPerComponent: 8,
-            bytesPerRow: 0, space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return false }
-        let scale = min(CGFloat(side) / CGFloat(max(thumb.width, 1)), CGFloat(side) / CGFloat(max(thumb.height, 1)))
-        let drawSize = CGSize(width: CGFloat(thumb.width) * scale, height: CGFloat(thumb.height) * scale)
-        let origin = CGPoint(x: (CGFloat(side) - drawSize.width) / 2, y: (CGFloat(side) - drawSize.height) / 2)
-        context.draw(thumb, in: CGRect(origin: origin, size: drawSize))
-        guard let output = context.makeImage(),
-              let dest = CGImageDestinationCreateWithURL(destination as CFURL, UTType.png.identifier as CFString, 1, nil) else {
-            return false
-        }
-        CGImageDestinationAddImage(dest, output, nil)
-        return CGImageDestinationFinalize(dest)
-    }
 
     let store = HostStore()
     let credentialStore = CredentialStore()
     /// Session-lifetime memory of passwords that worked (keyed
     /// user@host:port) so reconnects don't ask again. Never written to disk.
     private var passwordCache: [String: String] = [:]
-    private var keyMonitor: Any?
 
     private init() {
         // Our tab strip replaces native window tabbing entirely.
         NSWindow.allowsAutomaticWindowTabbing = false
-        // Suppress the macOS input-source switch panel for this app: SwiftTerm
-        // can't anchor the small caret badge, so the system would show the big
-        // centered language panel on every switch. The menu-bar input icon
-        // still shows the current language.
+        // Suppress the macOS input-source switch panel for this app: the
+        // terminal view can't anchor the small caret badge, so the system
+        // would show the big centered language panel on every switch. The
+        // menu-bar input icon still shows the current language.
         UserDefaults.standard.set(false, forKey: "TSMLanguageIndicatorEnabled")
         sessionLogging = UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = UserDefaults.standard.object(forKey: "autoReconnect") as? Bool ?? true
@@ -389,13 +242,11 @@ final class AppModel: ObservableObject {
             rawValue: UserDefaults.standard.string(forKey: "appearanceMode") ?? ""
         ) ?? .system
         NSApp.appearance = appearanceMode.appearance
-        appIcon = Self.resolveStoredIcon(.standard)
         terminalTheme = UserDefaults.standard.string(forKey: "terminalTheme") ?? "sheepterm"
         terminalFontFamily = Theme.terminalFontFamily
         terminalFontSize = Double(Theme.terminalFontSize)
         terminalFontWeight = Theme.terminalFontWeight
         terminalFontSmoothing = Theme.terminalFontSmoothing
-        applyDockIcon()
         showStatusBar = UserDefaults.standard.object(forKey: "showStatusBar") as? Bool ?? true
         // Session text (device IP + username), shortcut hints and This-Mac IP
         // start HIDDEN — the bar shows just the connection dot, the highlight
@@ -407,6 +258,22 @@ final class AppModel: ObservableObject {
         statusShowClock = UserDefaults.standard.object(forKey: "statusShowClock") as? Bool ?? true
         // Launched from Finder the cwd is "/"; start shells at home like Terminal.app.
         FileManager.default.changeCurrentDirectoryPath(NSHomeDirectory())
+        // hosts.json / recents.json unreadable at launch: the file is kept as
+        // .corrupt-<timestamp> and writes are held until the next edit — and
+        // for two releases nothing SAID so (`dataLoadWarning` had no reader;
+        // ARCHITECTURE claimed it was shown). Every group vanishing with no
+        // dialog is indistinguishable from data loss. Deferred off `init` for
+        // the reason `CredentialStore` defers its own.
+        if let warning = store.dataLoadWarning {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "Saved hosts could not be read"
+                alert.informativeText = warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
         purgeTeamShareLeftovers()
         // The highlight rules and their colours are fixed built-in constants
         // now. Compile the per-vendor packs once, here — there is no Settings
@@ -426,7 +293,6 @@ final class AppModel: ObservableObject {
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
         safePasteEnabled = defaults.object(forKey: "safePasteEnabled") as? Bool ?? true
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
-        appIcon = Self.resolveStoredIcon(defaults)
         terminalTheme = defaults.string(forKey: "terminalTheme") ?? "sheepterm"
         terminalFontFamily = Theme.terminalFontFamily
         terminalFontSize = Double(Theme.terminalFontSize)
@@ -439,7 +305,6 @@ final class AppModel: ObservableObject {
         statusShowClock = defaults.object(forKey: "statusShowClock") as? Bool ?? true
         let width = defaults.double(forKey: "sidebarWidth")
         sidebarWidth = width == 0 ? 232 : min(max(width, 200), 320)
-        applyDockIcon()
         store.reloadFromDisk()
         credentialStore.reloadFromDisk()
     }
@@ -467,9 +332,20 @@ final class AppModel: ObservableObject {
             panel.allowedContentTypes = [type]
         }
         panel.nameFieldStringValue = "\(group.name).sheepterm"
-        guard panel.runModal() == .OK, let url = panel.url,
-              let data = try? ShareCodec.encode(group, sender: ShareCodec.deviceName) else { return }
-        try? data.write(to: url, options: .atomic)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try ShareCodec.encode(group, sender: ShareCodec.deviceName)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            // `try?` here meant a full disk or a read-only folder produced no
+            // file and no word — the panel closed as if it had worked.
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "The group could not be exported"
+            alert.informativeText = "\(url.lastPathComponent): \(error.localizedDescription)"
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     /// Opening a .sheepterm file (Finder double-click, `open`, drag onto the
@@ -479,7 +355,9 @@ final class AppModel: ObservableObject {
     /// the very same TerminalView instances, so the terminal blanks and
     /// reparents between them.
     func importFile(at url: URL) {
-        guard url.pathExtension == "sheepterm" else { return }
+        // Case-insensitively: the Import menu goes through UTType, which does
+        // not care, and a file called `.SHEEPTERM` used to open silently.
+        guard url.pathExtension.lowercased() == "sheepterm" else { return }
         guard let payload = decodeImport(at: url) else { return }
         // Never import silently — same confirmation as the menu path.
         confirmImport(payload)
@@ -529,13 +407,122 @@ final class AppModel: ObservableObject {
     /// Quit: every SSH/serial worker stopped and every log closed and
     /// flushed before the process exits. Synchronous by design — there is
     /// no "later" after applicationShouldTerminate returns.
+    ///
+    /// Two phases, and the split is the whole reason this is not a one-liner.
+    /// Phase 1 starts every tab's shutdown without waiting for any of it, so
+    /// the fifteenth tab's log close is queued microseconds after the first
+    /// one's. Phase 2 then waits for all of them against ONE pair of absolute
+    /// deadlines. The old shape did both per tab, in a loop, so a bound that
+    /// was honest for one tab was paid once per tab by the user who had more.
+    /// Measured against ten tabs on a volume that never completes a write:
+    /// 35.0 s unbounded, 17.1 s bounded per tab (2 s × tabs in the worst
+    /// case), 2.0 s this way. Ten healthy tabs: 0.002 s.
     func shutdownSessionsForQuit() {
+        // Phase 1 — nothing here waits. See `beginShutdownForQuit`.
+        var flushes: [QuitLogFlush] = []
         for tab in tabs {
             switch tab.content {
-            case .ssh(let controller): controller.shutdownForQuit()
-            case .serial(let controller): controller.shutdownForQuit()
-            case .local: break
+            case .ssh(let controller): flushes.append(controller.beginShutdownForQuit())
+            case .serial(let controller): flushes.append(controller.beginShutdownForQuit())
+            case .local: break          // no worker, no log
             }
+        }
+        guard !flushes.isEmpty else { return }
+
+        // Phase 2 — one budget for the whole quit, taken once, in
+        // `QuitLogFlush.waitForAll` (there rather than here so that
+        // Tests/backpressure can run the real thing against real loggers).
+        let unflushed = QuitLogFlush.waitForAll(flushes)
+        guard !unflushed.isEmpty else { return }
+        reportUnflushedLogs(unflushed)
+    }
+
+    /// A log whose tail could not be written is evidence that is quietly
+    /// missing — the one failure in this whole path the user cannot see for
+    /// themselves, and would otherwise meet weeks later as a file that stops
+    /// mid-sentence. Said once, at the end of the quit, naming the sessions:
+    /// an NSAlert because it is the last moment anything of ours is on
+    /// screen, and the same idiom `askAboutLiveSessions` already uses for the
+    /// other question ⌘Q has to ask. It only ever appears when a volume
+    /// stopped accepting writes.
+    private func reportUnflushedLogs(_ unflushed: [QuitLogFlush]) {
+        let names = unflushed.map(\.session)
+        // Per log, which of the three things happened, because they point at
+        // different parts of the file: the volume refused a write at some
+        // point (the hole is wherever that was — an hour ago, with the tail
+        // landed fine; the session was told at the time), the shutdown threw
+        // away output the session had already received (an amount, at the
+        // end), or the last writes never landed (too slow). The first used
+        // to be reported with the third's words, sending the user to the
+        // wrong end of the file.
+        func detail(_ flush: QuitLogFlush) -> String {
+            if flush.writesWereRefused {
+                return "a write was refused earlier in the session, so the file has a hole"
+            }
+            if flush.droppedBytes > 0 {
+                return "\(ByteCountFormatter.string(fromByteCount: Int64(flush.droppedBytes), countStyle: .file)) of output at the end not written"
+            }
+            return "the last writes did not land in time"
+        }
+        // The post-mortem copy: an alert is dismissed and gone, and this is
+        // the half that is still there tomorrow.
+        NSLog("SheepTerm: quit could not complete %d session log(s) — %@",
+              names.count,
+              unflushed.map { "\($0.session) (\(detail($0)))" }.joined(separator: ", "))
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = names.count == 1
+            ? "The end of one session log could not be written."
+            : "The end of \(names.count) session logs could not be written."
+        let listed = unflushed.prefix(8).map { flush in
+            var line = "• \(flush.session)"
+            if let name = flush.logName { line += " — \(name)" }
+            return line + " (\(detail(flush)))"
+        }.joined(separator: "\n")
+        let more = unflushed.count > 8 ? "\n• and \(unflushed.count - 8) more" : ""
+        alert.informativeText = """
+            \(names.count == 1 ? "This log does not match its session." : "These logs do not match their sessions.") \
+            SheepTerm waited up to \(Int(QuitLogFlush.budget)) seconds for the disk before quitting. \
+            What each one is missing:
+
+            \(listed)\(more)
+            """
+        alert.addButton(withTitle: "OK")
+        // …but not when the Mac is logging out, restarting or shutting down.
+        // This alert asks nothing — it reports. A modal that reports during a
+        // restart does not inform anybody: nobody is looking at the screen,
+        // macOS shows "SheepTerm cancelled the restart", and the restart the
+        // user asked for does not happen until they come back and dismiss a
+        // dialog about a log file. The NSLog above is the copy that survives
+        // and is the one they would read afterwards anyway. A quit the user
+        // typed still gets the alert, because then they ARE looking.
+        guard !Self.quitIsFromLogoutOrRestart() else { return }
+        alert.runModal()
+    }
+
+    /// Why this quit happened, as far as the Apple Event says. `nil` for ⌘Q
+    /// and for the red button — those carry no reason, which is exactly the
+    /// case where someone is at the keyboard.
+    ///
+    /// The MECHANISM this rests on, so nobody removes it by accident: the
+    /// answer is only there while the quit Apple Event is being dispatched.
+    /// `applicationShouldTerminate` calls `shutdownSessionsForQuit` and this
+    /// synchronously, on the main thread, inside that dispatch — a nested
+    /// `runModal` is still on the same stack. If the quit ever becomes
+    /// `.terminateLater` with the flush continued asynchronously,
+    /// `currentAppleEvent` is nil by the time this runs, the guard passes,
+    /// and the alert is back to cancelling restarts with no test to say so.
+    /// Keep the quit path synchronous, or carry the reason across yourself.
+    private static func quitIsFromLogoutOrRestart() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              let reason = event.attributeDescriptor(forKeyword: kAEQuitReason)?.enumCodeValue
+        else { return false }
+        switch Int(reason) {
+        case Int(kAELogOut), Int(kAEReallyLogOut), Int(kAEShowRestartDialog),
+             Int(kAERestart), Int(kAEShowShutdownDialog), Int(kAEShutDown):
+            return true
+        default:
+            return false
         }
     }
 
@@ -545,24 +532,26 @@ final class AppModel: ObservableObject {
     func confirmImport(_ payload: SharePayload) {
         var group = payload.group
         let sender = Self.sanitizedForDialog(payload.sender)
-        // Control characters in a stored group name would break the
+        // Control characters in a stored group or host name would break the
         // sidebar — strip them from the value itself, not just the dialog.
-        group.name = Self.sanitizedForDialog(group.name)
-        if group.name.isEmpty { group.name = "Imported Group" }
-        // Host names get the same treatment. They were left raw, and they
-        // reach further than the group name does: the sidebar, the tab title,
-        // and SessionLogger's file name — which only replaces "/" and ":".
-        for index in group.hosts.indices {
-            group.hosts[index].name = Self.sanitizedForDialog(group.hosts[index].name)
-            if group.hosts[index].name.isEmpty {
-                group.hosts[index].name = group.hosts[index].address
-            }
-        }
+        // Host names reach further than the group name does: the sidebar, the
+        // tab title, and SessionLogger's file name — which only replaces "/"
+        // and ":". `ConfigurationHygiene` also narrows a port that is not a
+        // port; it is the SAME pass `BackupManager` runs on a restore, so the
+        // two ways someone else's file becomes your configuration cannot
+        // drift apart again.
+        var groups = [group]
+        let hygiene = ConfigurationHygiene.sanitize(&groups, emptyGroupName: "Imported Group")
+        group = groups[0]
+        // Not silent: a name that was trimmed or a baud that was replaced is
+        // still the user's data, and they get to see which of it changed
+        // before they accept the import.
+        let corrections = hygiene.summary.map { "\n\n\($0)" } ?? ""
 
         guard let existing = store.existingGroup(matching: group) else {
             let alert = NSAlert()
             alert.messageText = "Import group?"
-            alert.informativeText = "“\(group.name)” (\(group.hosts.count) hosts) from \(sender) will be added as a new group. Passwords are not included."
+            alert.informativeText = "“\(group.name)” (\(group.hosts.count) hosts) from \(sender) will be added as a new group. Passwords are not included.\(corrections)"
             alert.addButton(withTitle: "Import")
             alert.addButton(withTitle: "Cancel")
             if alert.runModal() == .alertFirstButtonReturn {
@@ -577,7 +566,7 @@ final class AppModel: ObservableObject {
         alert.informativeText = """
         Your group has \(existing.hosts.count) hosts — the file from \(sender) contains \(group.hosts.count) hosts.
 
-        Merge adds new hosts to your group and asks about each conflicting host. Create New Group imports it as a separate numbered group. Passwords are not included.
+        Merge adds new hosts to your group and asks about each conflicting host. Create New Group imports it as a separate numbered group. Passwords are not included.\(corrections)
         """
         alert.addButton(withTitle: "Merge into Existing")
         alert.addButton(withTitle: "Create New Group")
@@ -627,10 +616,12 @@ final class AppModel: ObservableObject {
     }
 
     /// 0.4 (ค)5: file-sourced text shown in a dialog is stripped of
-    /// control characters and capped at 64 characters.
+    /// control characters and capped at 64 characters. This is the DIALOG
+    /// half — the sender line and the diff rows, which are not stored
+    /// anywhere. The rule itself lives in `ConfigurationHygiene`, so what is
+    /// SHOWN and what is SAVED can never disagree about it.
     private static func sanitizedForDialog(_ text: String) -> String {
-        let noControls = text.components(separatedBy: .controlCharacters).joined()
-        return String(noControls.prefix(64))
+        ConfigurationHygiene.sanitizedName(text)
     }
 
     /// 0.4 (ข): shows exactly which fields differ between the two entries.
@@ -679,9 +670,8 @@ final class AppModel: ObservableObject {
         view.window?.makeFirstResponder(view)
     }
 
-    /// The selected tab's terminal view, whatever kind of session it is.
-    /// LocalProcessTerminalView is a TerminalView subclass, so one accessor
-    /// covers all three.
+    /// The selected tab's terminal view, whatever kind of session it is —
+    /// all three sessions host the same `SheepVTRender.TerminalView`.
     var activeTerminalView: TerminalView? {
         guard let tab = selectedTab else { return nil }
         switch tab.content {
@@ -691,16 +681,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Find in scrollback. SwiftTerm already ships the search engine AND the
-    /// find bar (`TerminalFindBarView`, anchored top-trailing inside the
-    /// terminal view) wired to the standard `performTextFinderAction:`
-    /// responder action — the menu items just have to reach it. The action is
-    /// sent STRAIGHT to the terminal view rather than down the responder
-    /// chain from nil: with the sidebar search field or the find bar's own
-    /// field focused, chain dispatch would land somewhere else entirely.
+    /// Find in scrollback. SheepVT ships the search engine AND the find bar
+    /// (`FindBar`, anchored top-trailing inside the terminal view) wired to
+    /// the standard `performTextFinderAction:` responder action — the menu
+    /// items just have to reach it. The action is sent STRAIGHT to the
+    /// terminal view rather than down the responder chain from nil: with the
+    /// sidebar search field or the find bar's own field focused, chain
+    /// dispatch would land somewhere else entirely.
     private func sendFinderAction(_ action: NSTextFinder.Action) {
         guard let view = activeTerminalView else { return }
-        // SwiftTerm reads the requested action off the sender's tag, so the
+        // The view reads the requested action off the sender's tag, so the
         // sender has to be a tagged NSMenuItem.
         let sender = NSMenuItem()
         sender.tag = action.rawValue
@@ -716,9 +706,7 @@ final class AppModel: ObservableObject {
     /// the shell's own state are left alone (same meaning as Terminal.app's
     /// Clear Scrollback, not a reset).
     func clearScrollback() {
-        guard let view = activeTerminalView else { return }
-        view.getTerminal().clearScrollback()
-        view.setNeedsDisplay(view.bounds)
+        activeTerminalView?.clearScrollback()
     }
 
     /// SSH/serial tabs that are still up — what a quit would actually cut.
@@ -758,29 +746,34 @@ final class AppModel: ObservableObject {
         controller.start()
     }
 
-    func open(host: Host, password overridePassword: String? = nil, serialLog: Bool? = nil, reusingLogger: SessionLogger? = nil) {
+    /// The one way in for a connection. `completeness` says whether `host` is
+    /// an ANSWER (every field is what the user chose, nil included) or a
+    /// TARGET (a recents row, a sidebar entry, a typed `user@host`) whose
+    /// missing credential/cipher/family may be filled from the saved host on
+    /// the same endpoint — see `HostCompleteness`. The default is the
+    /// historical behaviour; Quick Connect's Connect button and a reconnect
+    /// are the callers that say `.complete`.
+    func open(host: Host, completeness: HostCompleteness = .needsCompletion,
+              password overridePassword: String? = nil, serialLog: Bool? = nil,
+              reusingLogger: SessionLogger? = nil) {
         switch host.kind {
         case .local:
             newLocalTab()
         case .ssh:
-            var host = host
-            // Recent/ad-hoc copies may lack settings made via Edit Host —
-            // inherit credential/username/cipher from the saved host in groups.
-            if host.credentialID == nil {
-                let match = store.groups.flatMap(\.hosts).first {
-                    $0.kind == .ssh && $0.address == host.address && $0.port == host.port
-                        && (host.username.isEmpty || $0.username.isEmpty || $0.username == host.username)
-                }
-                if let match {
-                    host.credentialID = match.credentialID
-                    if host.username.isEmpty { host.username = match.username }
-                    if host.cipherMode == nil { host.cipherMode = match.cipherMode }
-                    if host.agentForward == nil { host.agentForward = match.agentForward }
-                    if host.vendor == nil { host.vendor = match.vendor }
-                }
-            }
+            // A target inherits credential/username/cipher/family from the
+            // saved host on the same endpoint; an answer is taken as it is.
+            // The rule itself is `Host.completed`, out where Tests/tests can
+            // run it — it decides which password a session authenticates with.
+            var host = host.completed(from: store.groups.flatMap(\.hosts), when: completeness)
             let credential = host.credentialID.flatMap { credentialStore.credential(for: $0) }
-            if host.username.isEmpty, let credential {
+            // The credential names the login its password belongs to, so it
+            // wins over a username stored beside it — not only when that one
+            // is empty. Both forms now save the pair together, but hosts.json
+            // still holds entries written while Edit Host paired a new
+            // credential with the old username, and connecting as one
+            // identity with another's password fails in the least readable
+            // way there is: "Access denied" from a name that is spelled right.
+            if let credential, !credential.username.isEmpty {
                 host.username = credential.username
             }
             let password = overridePassword
@@ -913,26 +906,114 @@ final class AppModel: ObservableObject {
     /// typed in the form is used for this session even when not saved.
     func connectQuick(host: Host, saveTo groupName: String?, password: String? = nil, serialLog: Bool? = nil) {
         if let groupName {
-            // Saving from Quick Connect is a user action, so it has to re-arm
-            // writes the same way every HostStore mutator does — this path
-            // reaches into `groups` directly and used to skip that, which
-            // under post-corrupt suppression meant the new group appeared in
-            // the sidebar and was never written to disk.
-            store.noteExplicitUserMutation()
-            if let index = store.groups.firstIndex(where: { $0.name == groupName }) {
-                let duplicate = store.groups[index].hosts.contains {
-                    $0.address == host.address && $0.port == host.port && $0.username == host.username
-                }
-                if !duplicate {
-                    store.groups[index].hosts.append(host)
-                }
-            } else {
-                store.groups.append(HostGroup(name: groupName, hosts: [host]))
-            }
-            store.save()
+            saveSession(host: host, toGroupNamed: groupName)
         }
-        open(host: host, password: password, serialLog: serialLog)
+        // `.complete`: the form answered every question. "Enter manually" with
+        // no password means ask me, "Auto" means detect — neither is a hole to
+        // fill from a saved host on the same endpoint, which is what happened
+        // when nil meant both (recheck finding 3: the session came up on the
+        // saved Cisco host's credential with detection off, and the Update
+        // Saved Host prompt ran a turn later and could not have fixed it).
+        open(host: host, completeness: .complete, password: password, serialLog: serialLog)
         collapseSidebar()
+    }
+
+    /// The "Save session to group" half of Quick Connect.
+    ///
+    /// The duplicate check used to compare address+port+username and then, on
+    /// a match, do NOTHING — no add, no update — while the session opened with
+    /// the new values anyway. Changing the name, the credential, the cipher or
+    /// the device family and saving to the same group therefore looked like it
+    /// worked, and was gone the moment the host was opened from the sidebar
+    /// instead. The match also ignored the connection KIND — harmless only
+    /// because the sheet's group picker is SSH-only today, which is exactly
+    /// the kind of accident that stops being harmless quietly. `sameConnection`
+    /// (Models) is the one definition of "same target" in this app — the same
+    /// one recents dedup by — and it includes the kind.
+    private func saveSession(host: Host, toGroupNamed groupName: String) {
+        // Saving from Quick Connect is a user action, so it has to re-arm
+        // writes the same way every HostStore mutator does — this path
+        // reaches into `groups` directly and used to skip that, which
+        // under post-corrupt suppression meant the new group appeared in
+        // the sidebar and was never written to disk.
+        guard let index = store.groups.firstIndex(where: { $0.name == groupName }) else {
+            store.noteExplicitUserMutation()
+            store.groups.append(HostGroup(name: groupName, hosts: [host]))
+            store.save()
+            return
+        }
+        guard let existing = store.groups[index].hosts.first(where: { $0.sameConnection(as: host) }) else {
+            store.noteExplicitUserMutation()
+            store.groups[index].hosts.append(host)
+            store.save()
+            return
+        }
+        // Same target, already saved. Keep the entry's own id: the sidebar
+        // rows and everything else holding a host id are keyed on it, and a
+        // fresh id would read as a delete plus an insert.
+        var updated = host
+        updated.id = existing.id
+        // The Session name field is optional and the form fills it with the
+        // address (or the device leaf) when it is left empty. That is not a
+        // name the user asked to save, so it neither counts as a change nor
+        // renames a saved host: nobody ticks "save to group" expecting
+        // “Core Switch” to become 10.0.0.1.
+        if isGeneratedName(host) { updated.name = existing.name }
+        let changes = Self.savedHostChanges(from: existing, to: updated)
+        // Nothing differs — the common "connect again to a host I already
+        // saved" case. Silence is the right answer only HERE.
+        guard !changes.isEmpty else { return }
+        // Deferred a turn, for the reason SidebarView.reportNameTaken is:
+        // this runs from the sheet's Connect button while the sheet is still
+        // on screen, and an alert stacked on a sheet is a mess.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let alert = NSAlert()
+            alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”"
+            alert.informativeText = "This session connects to the same target with different settings.\n\n"
+                + changes.joined(separator: "\n")
+                + "\n\nUpdate rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered."
+            alert.addButton(withTitle: "Update Saved Host")
+            alert.addButton(withTitle: "Keep Saved Host")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            // updateHost finds the entry by id, carries matching recents over,
+            // re-arms writes and saves.
+            self.store.updateHost(updated)
+        }
+    }
+
+    /// True when this host's name is the one the form invents for an empty
+    /// Session name field: the address for SSH, the device leaf for serial.
+    private func isGeneratedName(_ host: Host) -> Bool {
+        host.name == host.address || host.name == (host.address as NSString).lastPathComponent
+    }
+
+    /// What saving this session would change about the host already in the
+    /// group, in words. Empty = the two say the same thing, so there is
+    /// nothing to ask about. Compared as EFFECTIVE values (a nil cipher is
+    /// auto, a nil agentForward is off, a nil vendor is auto) — an entry
+    /// written before one of those fields existed must not read as a change
+    /// for the rest of its life.
+    private static func savedHostChanges(from existing: Host, to incoming: Host) -> [String] {
+        var changes: [String] = []
+        if incoming.name != existing.name {
+            changes.append("name: \(sanitizedForDialog(existing.name)) → \(sanitizedForDialog(incoming.name))")
+        }
+        if incoming.credentialID != existing.credentialID {
+            let label = { (id: UUID?) in id == nil ? "none" : "saved credential" }
+            changes.append("credential: \(label(existing.credentialID)) → \(label(incoming.credentialID))")
+        }
+        if (incoming.cipherMode ?? .auto) != (existing.cipherMode ?? .auto) {
+            changes.append("cipher: \((existing.cipherMode ?? .auto).label) → \((incoming.cipherMode ?? .auto).label)")
+        }
+        if (incoming.agentForward ?? false) != (existing.agentForward ?? false) {
+            let label = { (on: Bool) in on ? "on" : "off" }
+            changes.append("agent forwarding: \(label(existing.agentForward ?? false)) → \(label(incoming.agentForward ?? false))")
+        }
+        if incoming.highlightVendor != existing.highlightVendor {
+            changes.append("device family: \(existing.highlightVendor.label) → \(incoming.highlightVendor.label)")
+        }
+        return changes
     }
 
     func close(tab: SessionTab) {
@@ -951,24 +1032,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Auto-reconnect timestamps per host (user@address:port). Beyond the
-    /// 3-attempts-per-drop limit, one host gets at most this many automatic
-    /// reconnects per hour — a flapping link must not reconnect forever.
-    private var reconnectHistory: [String: [Date]] = [:]
-    private static let maxAutoReconnectsPerHour = 10
-
-    private func reconnectBudgetAllows(for host: Host) -> Bool {
-        let key = "\(host.username)@\(host.address):\(host.port)"
-        let cutoff = Date().addingTimeInterval(-3600)
-        let recent = (reconnectHistory[key] ?? []).filter { $0 > cutoff }
-        reconnectHistory[key] = recent
-        return recent.count < Self.maxAutoReconnectsPerHour
-    }
-
-    private func recordAutoReconnect(for host: Host) {
-        let key = "\(host.username)@\(host.address):\(host.port)"
-        reconnectHistory[key, default: []].append(Date())
-    }
+    /// The policy lives in `ReconnectBudget` (Models) so it can be tested
+    /// without a window; this is only where it is consulted.
+    private var reconnectBudget = ReconnectBudget()
 
     /// A session that had connected successfully and then dropped gets up to
     /// three automatic reconnect attempts (2 s / 5 s / 10 s backoff). Serial
@@ -983,13 +1049,19 @@ final class AppModel: ObservableObject {
         case .local: return
         }
         let attempts = tab.autoReconnectAttempts
-        guard attempts < 3 else { return }
+        guard attempts < 3 else {
+            // Say so. Three silent failures and then nothing looks exactly
+            // like a tab that is still trying, and the user waits for a
+            // reconnect that is never coming.
+            tab.statusInfo = "disconnected — auto-reconnect gave up"
+            return
+        }
         // Never loop on a session that failed its very first connect
         // (wrong password / unreachable) — only revive proven sessions.
         guard tab.wasConnected || attempts > 0 else { return }
-        // Overall cap on top of the per-drop limit: at most 10 automatic
-        // reconnects per host per hour, across separate drops.
-        guard reconnectBudgetAllows(for: host) else {
+        // Overall cap on top of the per-drop limit: at most 10 drops per host
+        // per hour are recovered from automatically.
+        guard reconnectBudget.claim(host: host, attempt: attempts) else {
             tab.statusInfo = "disconnected — auto-reconnect limit reached"
             return
         }
@@ -997,11 +1069,13 @@ final class AppModel: ObservableObject {
         let delay = [2.0, 5.0, 10.0][attempts]
         let tabID = tab.id
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self,
+            // Re-check the setting, not just the tab: the user may have turned
+            // auto-reconnect off during the 2/5/10 s wait, and a queued block
+            // must not connect anyway.
+            guard let self, self.autoReconnect,
                   let current = self.tabs.first(where: { $0.id == tabID }),
                   current.statusInfo == "disconnected" else { return }
             let focusBefore = self.selectedID
-            self.recordAutoReconnect(for: host)
             self.reconnect(tab: current)
             if let newTab = self.selectedTab {
                 newTab.autoReconnectAttempts = attempts + 1
@@ -1047,7 +1121,13 @@ final class AppModel: ObservableObject {
         let oldHighlightEnabled = tab.highlightEnabled
         let index = tabs.firstIndex { $0.id == tab.id }
         close(tab: tab)
-        open(host: host, serialLog: serialLog, reusingLogger: handedLogger)
+        // `.complete`: the controller's host is the one this session actually
+        // connected with, completed once already if it was ever a target.
+        // Running the lookup again against today's store is how a session
+        // that said "Enter manually" drifted onto a saved credential on its
+        // reconnect (recheck finding 3); the password it authenticated with is
+        // in `passwordCache`, keyed on this very host.
+        open(host: host, completeness: .complete, serialLog: serialLog, reusingLogger: handedLogger)
         if let newTab = tabs.last {
             newTab.vendorManuallyChosen = oldManual
             // An explicit choice (including an explicit .auto) must keep
@@ -1063,7 +1143,13 @@ final class AppModel: ObservableObject {
             // enabled) and the on/off state; once the session connects, the
             // onStatus/onData path schedules the first paint.
             newTab.highlightVendor = oldVendor
+            // Carrying the toggle over is not the user toggling: the didSet
+            // writes `highlightDefault` for the NEXT tab, and an automatic
+            // reconnect of a tab the user had switched off was silently
+            // changing the default for every tab after it. Put it back.
+            let defaultBefore = UserDefaults.standard.object(forKey: "highlightDefault")
             newTab.highlightEnabled = oldHighlightEnabled
+            UserDefaults.standard.set(defaultBefore, forKey: "highlightDefault")
             if let index, tabs.count > 1, index < tabs.count - 1 {
                 tabs.removeLast()
                 tabs.insert(newTab, at: index)
@@ -1075,9 +1161,12 @@ final class AppModel: ObservableObject {
         if let tab = selectedTab {
             close(tab: tab)
         }
-        if tabs.isEmpty {
-            NSApp.keyWindow?.performClose(nil)
-        }
+        // Closing the last TAB does not close the window. It used to, back
+        // when a closed window merely left the app running invisibly; now that
+        // the window is the app's life, that made ⇧⌘W on a single tab quit
+        // SheepTerm outright. The window has a designed empty state
+        // (`EmptyPaneView`) — landing on it is the honest result of closing
+        // the last tab, and ⌘Q or the close button are still how you quit.
     }
 
     func selectTab(number: Int) {
@@ -1109,6 +1198,11 @@ final class AppModel: ObservableObject {
     /// scrollback that repaint costs ~200 ms of main thread.
     func setHighlightVendorCurrent(_ vendor: Vendor) {
         guard let tab = selectedTab else { return }
+        // A local shell has no vendor: nothing below applies to it, and
+        // recording a manual choice and a highlightVendor for it only left
+        // state that reads as if something had happened. The menu disables the
+        // item too; this is the half that cannot be reached around.
+        if case .local = tab.content { return }
         // Mark the choice as the user's BEFORE changing the vendor, and stop
         // passive detection on the controller — a deliberate pick (including
         // an explicit Auto) must never be undone by the stream fingerprint.
@@ -1163,7 +1257,9 @@ final class AppModel: ObservableObject {
         // Highlighting, so pressing ⇧⌘H HID THE APP instead of flipping the
         // colors. A local monitor sees the event before menu dispatch, which
         // is the only way to keep the documented shortcut.
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        // The token is dropped on purpose: the monitor lives for the whole run
+        // of the app and is never removed.
+        _ = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard flags == .command || flags == [.command, .shift] else { return event }
             // On non-Latin layouts (Thai) charactersIgnoringModifiers is the
@@ -1178,10 +1274,20 @@ final class AppModel: ObservableObject {
             guard let characters, characters.allSatisfy(\.isASCII) else { return event }
             // Only intercept in the main terminal window — never inside
             // sheets, auth panels, or the Settings window.
+            //
+            // Through the shared `isMainTerminalWindow`, not a second copy of
+            // the same three tests. A review claimed the copy was a hole — a
+            // SwiftUI sheet passing as the main window, so ⌘W would close a
+            // tab behind an open form. Measured on this macOS with a probe app
+            // of the same shape, it is not: the sheet comes back as a real
+            // `NSSheet` (`isSheet == true`) and does NOT carry
+            // `.fullSizeContentView`, so both the old copy and this helper
+            // exclude it. What is left is the reason to share one predicate
+            // anyway — two heuristics that must agree cannot be kept in step
+            // by hoping.
             let isMainWindow = MainActor.assumeIsolated {
                 guard let key = NSApp?.keyWindow else { return false }
-                return !key.isSheet && !(key is NSPanel)
-                    && key.styleMask.contains(.fullSizeContentView)
+                return isMainTerminalWindow(key)
             }
             guard isMainWindow else { return event }
             switch (flags, characters) {

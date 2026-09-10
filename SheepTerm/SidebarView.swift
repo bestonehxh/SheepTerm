@@ -12,7 +12,6 @@ struct SidebarView: View {
     @State private var showNewGroup = false
     @State private var renameTarget: HostGroup?
     @State private var editTarget: Host?
-    @FocusState private var searchFocused: Bool
     /// Mirrors TopBarView's own fullscreen state — same will*-notification
     /// pattern, so the gap changes DURING the system transition.
     @State private var isFullScreen = false
@@ -39,6 +38,26 @@ struct SidebarView: View {
         return alert.runModal() == .alertSecondButtonReturn
     }
 
+    /// HostStore refuses a duplicate group name and says nothing, so creating
+    /// or renaming onto a name that is taken looked like the sheet had simply
+    /// been ignored. Deferred a turn: the prompt sheet is still on screen when
+    /// its commit closure runs, and an alert stacked on a sheet is a mess.
+    private func reportNameTaken(_ name: String) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "The name “\(name)” is already used."
+            alert.informativeText = "Two groups with the same name cannot be told apart in the sidebar or in the Move to Group menu."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    /// The ONE writer. Every change to `collapsedGroups` — a row toggled in
+    /// the outline, the collapse-all button, a delete, the prune below — goes
+    /// through the same @State, so the `.onChange` on the outline sees all of
+    /// them. The call sites used to persist as well, which meant two writes
+    /// for one change and one more place to forget.
     private func persistCollapsed() {
         UserDefaults.standard.set(collapsedGroups.map(\.uuidString), forKey: Self.collapsedKey)
     }
@@ -51,7 +70,6 @@ struct SidebarView: View {
         let pruned = collapsedGroups.intersection(valid)
         if pruned != collapsedGroups {
             collapsedGroups = pruned
-            persistCollapsed()
         }
     }
 
@@ -90,7 +108,6 @@ struct SidebarView: View {
                     // Forget its collapsed state too — a stale id would
                     // linger in UserDefaults forever.
                     collapsedGroups.remove(original.id)
-                    persistCollapsed()
                     store.deleteGroup(original)
                 }
             },
@@ -153,7 +170,6 @@ struct SidebarView: View {
                     } else {
                         collapsedGroups = []
                     }
-                    persistCollapsed()
                 } label: {
                     Image(systemName: collapsedGroups.isEmpty
                           ? "arrow.down.right.and.arrow.up.left"
@@ -177,12 +193,21 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $showNewGroup) {
             NamePromptSheet(title: "New Group", confirmLabel: "Create") { name in
+                guard !store.groups.contains(where: { $0.name == name }) else {
+                    reportNameTaken(name)
+                    return
+                }
                 store.addGroup(named: name)
             }
         }
         .sheet(item: $renameTarget) { group in
             NamePromptSheet(title: "Rename Group", initialName: group.name) { name in
-                store.renameGroup(group, to: name)
+                // A false result also means "the group is gone" (deleted in
+                // another window) — only the taken-name case is worth a word.
+                if !store.renameGroup(group, to: name),
+                   store.groups.contains(where: { $0.id != group.id && $0.name == name }) {
+                    reportNameTaken(name)
+                }
             }
         }
         .sheet(item: $editTarget) { host in
@@ -198,7 +223,6 @@ struct SidebarView: View {
             TextField("Search or user@host", text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
-                .focused($searchFocused)
                 .onSubmit {
                     if let target = searchConnectTarget {
                         connect(to: target)

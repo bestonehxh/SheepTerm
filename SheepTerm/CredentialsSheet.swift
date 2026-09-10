@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// Manage saved credentials: add new ones and remove old ones.
-/// Passwords go straight to the Keychain and are never displayed back.
+/// A password goes straight to the Keychain — nothing here keeps a copy.
+/// The eye button reads one back out of the Keychain for as long as the row
+/// stays revealed; the value is never held in this view's state.
 struct CredentialsSheet: View {
     @EnvironmentObject var model: AppModel
     /// Observed explicitly: `credentials` is @Published on CredentialStore,
@@ -86,15 +88,29 @@ struct CredentialsSheet: View {
                 RevealableSecureField(title: "Password", text: $password)
             }
             .textFieldStyle(.roundedBorder)
+            // Return in one of these fields adds the credential. "Done" is
+            // the default button, so without this the Return that ends
+            // typing a password closed the sheet and threw it away.
+            .onSubmit(add)
 
             HStack {
                 Button("Add") { add() }
                     // A credential without a password is useless — every
                     // connect would still prompt interactively.
-                    .disabled(username.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
+                    // Exactly the test add() makes, so the button is never
+                    // enabled for input add() would then refuse.
+                    .disabled(!canAdd)
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                // Done keeps a finished credential instead of dropping it.
+                // Typing name, username and password and then pressing the
+                // button that says you are done reads as "save this" — it
+                // threw the whole thing away without a word, which is the
+                // same trap Return used to be.
+                Button("Done") {
+                    if canAdd { add() }
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
@@ -118,15 +134,27 @@ struct CredentialsSheet: View {
         }
     }
 
+    /// The one test for "is there a credential here to keep": the Add button,
+    /// Return and Done all ask it, so none of them can disagree with `add()`.
+    private var canAdd: Bool {
+        !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !password.isEmpty
+    }
+
     private func add() {
-        let trimmedUser = username.trimmingCharacters(in: .whitespaces)
+        // whitespacesAndNewlines: .whitespaces keeps the newline a pasted
+        // value carries, and " admin\n" fails authentication while looking
+        // exactly like "admin" in the list. The PASSWORD is never trimmed —
+        // a leading or trailing space can be part of it.
+        let trimmedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        uiTrace("CredentialsSheet.add user=\(trimmedUser.isEmpty ? "<empty>" : "set") password=\(password.isEmpty ? "<empty>" : "set") existing=\(model.credentialStore.credentials.count)")
         guard !trimmedUser.isEmpty, !password.isEmpty else { return }
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         model.credentialStore.add(
             name: trimmedName.isEmpty ? trimmedUser : trimmedName,
             username: trimmedUser,
             password: password
         )
+        uiTrace("CredentialsSheet.add done, store now has \(model.credentialStore.credentials.count)")
         name = ""
         username = ""
         password = ""
@@ -135,9 +163,14 @@ struct CredentialsSheet: View {
     /// Removes the credential and clears it from every host that
     /// references it, so no host points at a dead Keychain entry.
     private func delete(_ credential: Credential) {
-        // Before the hosts lose the reference — that is how they are found.
+        // The credential goes FIRST, because it is the step that can fail. It
+        // rolls itself back when credentials.json cannot be written, and the
+        // two steps below cannot be rolled back with it — they were running
+        // first, so a failed write left the credential restored to the list
+        // with every host's reference to it already stripped and saved.
+        guard model.credentialStore.remove(credential) else { return }
+        // Still before the hosts lose the reference — that is how they are found.
         model.forgetCachedPasswords(forCredential: credential.id)
         model.store.clearCredentialID(credential.id)
-        model.credentialStore.remove(credential)
     }
 }

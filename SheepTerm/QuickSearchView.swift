@@ -16,19 +16,49 @@ struct QuickSearchView: View {
     /// locale-aware filter over every host twice.
     private var matches: [Host] { computeMatches() }
 
+    /// The query the list actually filters on. Untrimmed, a stray pasted
+    /// space matched every host whose NAME contains a space — and ↩ then
+    /// connected to whichever of them came first.
+    private var query: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The palette draws at most this many rows, so nothing past the eighth
+    /// unique match is ever seen.
+    private static let maxResults = 8
+
+    /// Recents first, then the groups, stopping at the eighth match. It used
+    /// to concatenate both lists and run the locale-aware filter over EVERY
+    /// host before the loop below threw all but eight away — on every
+    /// keystroke, over a list that grows with the user's config.
     private func computeMatches() -> [Host] {
-        var all = model.store.recents + model.store.groups.flatMap(\.hosts)
-        if !text.isEmpty {
-            all = all.filter { $0.name.matchesSearch(text) || $0.address.matchesSearch(text) }
-        }
+        let needle = query
         var seen = Set<String>()
         var unique: [Host] = []
-        for host in all {
-            let key = "\(host.kind.rawValue)|\(host.address)|\(host.port)|\(host.username)"
-            if seen.insert(key).inserted {
-                unique.append(host)
+        unique.reserveCapacity(Self.maxResults)
+
+        /// Returns true once the list is full and there is nothing left to do.
+        func collect(_ hosts: [Host]) -> Bool {
+            for host in hosts {
+                if !needle.isEmpty,
+                   !host.name.matchesSearch(needle), !host.address.matchesSearch(needle) {
+                    continue
+                }
+                // The recent entry and the saved host it came from are two
+                // rows for one target — `connectionKey` (kind, address, port,
+                // user) is what tells them apart, and it is the same
+                // definition recents dedup by.
+                if seen.insert(host.connectionKey).inserted {
+                    unique.append(host)
+                }
+                if unique.count == Self.maxResults { return true }
             }
-            if unique.count == 8 { break }
+            return false
+        }
+
+        guard !collect(model.store.recents) else { return unique }
+        for group in model.store.groups {
+            if collect(group.hosts) { break }
         }
         return unique
     }

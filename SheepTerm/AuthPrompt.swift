@@ -12,8 +12,10 @@ enum AuthPrompt {
         }
         let box = Box()
 
-        // Credentials are ASCII — force-switch the keyboard to an
-        // English-capable layout so Thai input never gets in the way.
+        // Force-switch the keyboard to an English-capable layout so a Thai
+        // input source cannot swallow the first characters of a login. It is
+        // a convenience, not a restriction: whatever ends up in the field is
+        // sent unchanged.
         forceASCIIKeyboard()
 
         let panel = NSPanel(
@@ -42,6 +44,18 @@ enum AuthPrompt {
         panel.center()
 
         NSApp.runModal(for: panel)
+        // orderOut, NOT close() — and it is not a leak. Two things were
+        // checked before leaving it this way:
+        //   • ARC alone frees the panel here: nothing (NSApp.windows
+        //     included) still holds an ordered-out window once the last
+        //     strong reference goes out of scope, so the hosting view and
+        //     the SwiftUI state holding what was typed die with this call.
+        //   • close() would post the "last window closed" question. The app
+        //     answers it with applicationShouldTerminateAfterLastWindowClosed
+        //     == true, and a prompt CAN be the only window on screen: cancel
+        //     a quit and the main window is already gone while the sessions
+        //     live on, and the next auto-reconnect asks for a password from
+        //     a windowless app. Closing that panel would offer to quit.
         panel.orderOut(nil)
         return box.value
     }
@@ -80,6 +94,21 @@ struct AuthPromptView: View {
         text.contains { !$0.isASCII }
     }
 
+    /// What the prompt answers with. A USERNAME is trimmed for the same
+    /// reason the sheets trim theirs — " admin" pasted out of a runbook
+    /// fails authentication and looks identical to a good one. A PASSWORD is
+    /// never touched: a leading or trailing space can be part of it.
+    private var answer: String {
+        secure ? text : text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // NOT gated on an empty answer. It is tempting to disable "Continue" for
+    // an empty non-secure answer (an empty username is useless, and SSHWorker
+    // closes the session with "no username given" for it) — but this same
+    // dialog also answers an ECHOED keyboard-interactive challenge, where an
+    // empty answer can be the right one. The two are indistinguishable here:
+    // both arrive as secure == false.
+
     var body: some View {
         VStack(spacing: 18) {
             SheepLockBadge()
@@ -109,7 +138,12 @@ struct AuthPromptView: View {
                 }
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .onSubmit { completion(text) }
+                // Neither a password nor a username is a word: autocorrect,
+                // completion and text replacement have no business rewriting
+                // one — and the revealed field is an ordinary TextField, so
+                // without this they would.
+                .autocorrectionDisabled(true)
+                .onSubmit { completion(answer) }
                 if secure {
                     Button {
                         revealed.toggle()
@@ -148,7 +182,19 @@ struct AuthPromptView: View {
                 // Same policy as RevealableSecureField: keep the pasted value
                 // intact, just flag it — a silently mangled paste is
                 // undebuggable.
-                Text("Contains non-ASCII characters (passwords are ASCII only)")
+                //
+                // What it used to say — "passwords are ASCII only" — was a
+                // rule nothing here enforces: the field takes these
+                // characters and SSHWorker sends them as typed. Whether the
+                // far end accepts them is the far end's business, and this
+                // dialog cannot know. All this app does is switch the
+                // keyboard to an ASCII-capable layout when the panel opens.
+                //
+                // One line, deliberately: the panel is sized ONCE from
+                // `hosting.fittingSize` before this warning can appear, so a
+                // message that wraps to three lines is a message that gets
+                // clipped.
+                Text("Contains non-ASCII characters — sent exactly as typed")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange)
             }
@@ -158,7 +204,7 @@ struct AuthPromptView: View {
                     .keyboardShortcut(.cancelAction)
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
-                Button(secure ? "Connect" : "Continue") { completion(text) }
+                Button(secure ? "Connect" : "Continue") { completion(answer) }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)

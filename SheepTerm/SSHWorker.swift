@@ -60,6 +60,11 @@ nonisolated final class SSHWorker: Sendable {
         /// from a real authentication failure so auto-reconnect does not
         /// re-raise the same prompt three times.
         var authCancelled = false
+        /// Set when authentication ended because the TRANSPORT died, not
+        /// because a credential was wrong. libssh reports both through the
+        /// same return value; telling them apart is what stops a link that
+        /// dropped mid-handshake from being blamed on the user.
+        var authTransportError: String?
     }
     private let state = Mutex(State())
     /// Cap on buffered input — a wedged session must not grow it forever.
@@ -82,6 +87,10 @@ nonisolated final class SSHWorker: Sendable {
     private var authCancelled: Bool {
         get { state.withLock { $0.authCancelled } }
         set { state.withLock { $0.authCancelled = newValue } }
+    }
+    private var authTransportError: String? {
+        get { state.withLock { $0.authTransportError } }
+        set { state.withLock { $0.authTransportError = newValue } }
     }
     var onNotice: (@Sendable (String) -> Void)? {
         get { state.withLock { $0.onNotice } }
@@ -185,7 +194,10 @@ nonisolated final class SSHWorker: Sendable {
         var accepted = false
         var discarded: (@Sendable () -> Void)?
         state.withLock { state in
-            guard state.running else { return }
+            // A dead session refuses the same way a wedged one does: the Bool
+            // says so, and `onInputDiscarded` fires, so a paced paste stops
+            // here instead of counting the line. SerialWorker already did.
+            guard state.running else { discarded = state.onInputDiscarded; return }
             // All-or-nothing. The old code appended `bytes.prefix(room)`,
             // which on a wedged session sent the FRONT of a paste and threw
             // the rest away — half an escape sequence or half a config line
@@ -329,14 +341,27 @@ nonisolated final class SSHWorker: Sendable {
         // The tab may have been closed while the (blocking) connect ran.
         guard isRunning else { return }
         guard verifyHostKey(session) else { return }
+        enableTCPKeepalive(on: ssh_get_fd(session))
         authCancelled = false
+        authTransportError = nil
         guard authenticate(session, config) else {
             // Only a live session reports failure — a tab closed mid-auth
             // must not print a fake "authentication failed". A prompt the
             // user dismissed is reported as a cancellation: the controller
             // turns that into a status auto-reconnect leaves alone.
             if isRunning {
-                onClosed?(authCancelled ? "connection cancelled — no password given" : "authentication failed")
+                // A link that died during the handshake is NOT a credential
+                // problem, and saying it was did real damage: the prompt came
+                // up on a socket that was already gone, the dismissal was
+                // recorded as "cancelled", and "cancelled" is exactly the
+                // status auto-reconnect refuses to act on. The one moment a
+                // drop is most likely to be misread was also the one moment
+                // recovery was switched off.
+                if let transport = authTransportError {
+                    onClosed?(transport)
+                } else {
+                    onClosed?(authCancelled ? "connection cancelled — no password given" : "authentication failed")
+                }
             }
             return
         }
@@ -387,10 +412,16 @@ nonisolated final class SSHWorker: Sendable {
             onClosed?("channel open failed: \(errorString(session))")
             return
         }
-        _ = "xterm-256color".withCString {
+        let ptyGranted = "xterm-256color".withCString {
             ssh_channel_request_pty_size(channel, $0, Int32(config.initialCols), Int32(config.initialRows))
+        } == SSH_OK
+        // Only record a size the server actually took. `resize` skips a request
+        // that matches the last APPLIED size, so claiming this one regardless
+        // meant a refused pty-size swallowed the first real resize to the same
+        // dimensions — and the far end never learned how big the window was.
+        if ptyGranted {
+            state.withLock { $0.appliedResize = (config.initialCols, config.initialRows) }
         }
-        state.withLock { $0.appliedResize = (config.initialCols, config.initialRows) }
         if forwarder != nil, ssh_channel_request_auth_agent(channel) != SSH_OK {
             // Not fatal — the shell is still perfectly usable without it.
             onNotice?("agent forwarding refused by the server: \(errorString(session))")
@@ -484,14 +515,109 @@ nonisolated final class SSHWorker: Sendable {
         let clock = ContinuousClock()
         var lastKeepalive = clock.now
         let socketFD = ssh_get_fd(session)
+        // Liveness. A link can die without anyone hanging up — a firewall that
+        // drops the flow, a middlebox that keeps ACKing an association it has
+        // already forgotten, an RST that arrives out of window during a flood
+        // and is discarded. SheepTerm never noticed any of those: a black-holed
+        // session was measured accepting 328 typed lines over five and a half
+        // minutes with the status bar still saying "ssh2". Nothing ever looked
+        // again, because the old keepalive was `ssh_send_ignore`, which asks
+        // the far end for NOTHING — its answer is silence whether the device is
+        // there or gone.
+        //
+        // `ssh_send_keepalive` sends a global request with want_reply, which
+        // RFC 4254 requires an answer to (REQUEST_FAILURE, since nobody knows
+        // the name). Three of those with no inbound byte in between means the
+        // peer is gone.
+        //
+        // Three things this got wrong when it was first written, all measured
+        // against a real sshd behind a proxy that could stall the link:
+        //
+        //  - `ssh_send_keepalive` puts nothing on the wire on alternate calls
+        //    and returns SSH_OK anyway. Measured on the socket: 52 B, 0 B,
+        //    52 B, 0 B… and a following `ssh_blocking_flush` does not recover
+        //    the missing one, nor does the next channel write carry it — the
+        //    call simply never became a packet. A cadence of 60 s was really
+        //    120, and a verdict that claimed three unanswered probes rested on
+        //    one. So a probe is TWO calls: with a strict alternation, at least
+        //    one of them is real. If some future libssh sends on every call we
+        //    spend 104 bytes a minute instead of 52; if it sends on fewer, the
+        //    deadline simply never arms and behaviour falls back to what it was
+        //    before this code existed. Both directions are safe, which is the
+        //    only reason a workaround shaped like this is acceptable. Measured
+        //    after the change: 52 B on the wire on 8 of 8 cycles, and 7 of 7
+        //    probes real over a 320 s idle session — the alternation means the
+        //    pair costs nothing extra.
+        //
+        // One limit, measured, worth knowing: once a peer STOPS answering,
+        // libssh leaves its global-request state pending and both calls become
+        // no-ops, so no further probe reaches the wire. Detection is unaffected
+        // — the signal is inbound silence, not the packets — and arming already
+        // happened while the peer was answering. What stops is the keepalive's
+        // OTHER job: after the first missed reply nothing is nudging the
+        // device's idle timer any more. On a link whose answers have stopped
+        // that timer is the smaller problem.
+        //  - The first probe went out at t+60 s, so a link that died in the
+        //    first minute was never armed and never noticed. The first two
+        //    probes now go at 1 s and 15 s: a session that lives a quarter of a
+        //    minute is covered. A link that dies before THAT cannot be caught
+        //    this way at all — there is no evidence yet that this device
+        //    answers probes, and disconnecting on a guess is worse than the
+        //    bug. TCP keepalive is the half that covers it, for every peer
+        //    that stops ACKing rather than one that ACKs and discards.
+        //  - Arming on "any inbound after a probe" can be fooled by output
+        //    that merely happened to arrive. A reply comes back in about
+        //    0.2 ms; two answers inside a one-second window are asked for
+        //    before the deadline is armed, so a device that ignores global
+        //    requests is never held to it and never disconnected for being
+        //    quiet — the one failure a liveness check must not have.
+        var probesSinceInbound = 0
+        var probeConfirmations = 0
+        var replyWindowEnds: ContinuousClock.Instant?
+        var probesSent = 0
+        var armed: Bool { probeConfirmations >= 2 }
+        /// Any byte from the socket — a channel byte, a window adjust, or the
+        /// answer to a probe. All that matters is that the far end spoke.
+        func noteInbound() {
+            if let window = replyWindowEnds, clock.now <= window {
+                probeConfirmations += 1
+                replyWindowEnds = nil
+            }
+            probesSinceInbound = 0
+        }
+        /// 1 s, then 15 s, then every 60 s — early enough to arm before a link
+        /// has had time to go bad, rare enough afterwards to stay invisible.
+        func probeDue() -> Bool {
+            let waited = lastKeepalive.duration(to: clock.now)
+            switch probesSent {
+            case 0: return waited > .seconds(1)
+            case 1: return waited > .seconds(14)
+            default: return waited > .seconds(60)
+            }
+        }
 
         while isRunning {
-            // Keepalive so idle sessions survive device exec-timeouts.
-            // Best-effort: in non-blocking mode SSH_AGAIN just means "not
-            // right now", and a dropped keepalive is retried a minute later.
-            if lastKeepalive.duration(to: clock.now) > .seconds(60) {
-                _ = "keepalive@sheepterm".withCString { ssh_send_ignore(session, $0) }
+            // Keepalive so idle sessions survive device exec-timeouts, and so
+            // a dead link is noticed. Sent on a cadence rather than only when
+            // the session is quiet: a device that talks (a chatty log) still
+            // counts US as idle and will time the session out.
+            if probeDue() {
+                let first = ssh_send_keepalive(session)
+                let second = ssh_send_keepalive(session)
+                // A failure is only conclusive when the session agrees it is
+                // gone; SSH_AGAIN on a busy socket is not a dead link.
+                let flushed = ssh_blocking_flush(session, 0)
+                if first != SSH_OK || second != SSH_OK || flushed == SSH_ERROR,
+                   ssh_is_connected(session) == 0 {
+                    return "connection lost: \(errorString(session))"
+                }
                 lastKeepalive = clock.now
+                probesSent += 1
+                probesSinceInbound += 1
+                replyWindowEnds = clock.now.advanced(by: .seconds(1))
+                if armed, probesSinceInbound >= 3 {
+                    return "no answer to three keepalives — connection lost"
+                }
             }
 
             let writes = takeWrites()
@@ -556,10 +682,12 @@ nonisolated final class SSHWorker: Sendable {
                                 drainWakePipe(pipeRead)
                             }
                             var delivered = false
-                            if Int32(wfds[0].revents) & Int32(POLLIN) != 0,
-                               let failure = readAvailable(session: session, channel: channel, buffer: &buffer, delivered: &delivered) {
-                                requeueWrites(writes[offset...])
-                                return failure
+                            if Int32(wfds[0].revents) & Int32(POLLIN) != 0 {
+                                noteInbound()
+                                if let failure = readAvailable(session: session, channel: channel, buffer: &buffer, delivered: &delivered) {
+                                    requeueWrites(writes[offset...])
+                                    return failure
+                                }
                             }
                             if Int32(wfds[0].revents) & Int32(POLLHUP | POLLERR | POLLNVAL) != 0 {
                                 requeueWrites(writes[offset...])
@@ -635,9 +763,11 @@ nonisolated final class SSHWorker: Sendable {
                     drainWakePipe(pipeRead)
                 }
                 let revents = Int32(pfds[0].revents)
-                if revents & Int32(POLLIN) != 0,
-                   let failure = readAvailable(session: session, channel: channel, buffer: &buffer, delivered: &delivered) {
-                    return failure
+                if revents & Int32(POLLIN) != 0 {
+                    noteInbound()
+                    if let failure = readAvailable(session: session, channel: channel, buffer: &buffer, delivered: &delivered) {
+                        return failure
+                    }
                 }
                 // HUP/ERR is checked independently of POLLIN: a hangup
                 // arriving WITH final data must still be honored after the
@@ -748,10 +878,22 @@ nonisolated final class SSHWorker: Sendable {
             return false
         }
         if state == SSH_KNOWN_HOSTS_OTHER {
-            onNotice?("host key type changed for this server; saving the new key")
-        } else {
-            onNotice?("first connection — host key saved to known_hosts")
+            // libssh: "a key of a type while we had an other type recorded.
+            // It is a possible attack." This used to print a grey notice,
+            // save the new key and log in — the one host-key outcome that
+            // accepted an attacker-chosen key with no question asked. A MITM
+            // that offers only a key TYPE the victim has not pinned (the
+            // device is pinned as ed25519; the attacker presents its own RSA
+            // key and drops the ed25519 offer) lands exactly here. OpenSSH
+            // asks; we cannot ask mid-handshake, so we refuse and say how to
+            // proceed — the same shape as CHANGED, which is the same attack
+            // with the same key type.
+            onClosed?("⚠️ HOST KEY TYPE CHANGED — the server offers a key of a type that is not the one "
+                      + "pinned in ~/.ssh/known_hosts (possible man-in-the-middle). If the device was "
+                      + "upgraded or reinstalled, remove its entry from ~/.ssh/known_hosts and reconnect.")
+            return false
         }
+        onNotice?("first connection — host key saved to known_hosts")
         if ssh_session_update_known_hosts(session) != 0 {
             // A failed save must not be silent — the user would otherwise
             // believe the key is pinned when it isn't.
@@ -763,17 +905,43 @@ nonisolated final class SSHWorker: Sendable {
     private func authenticate(_ session: ssh_session, _ config: SSHConfig) -> Bool {
         let AUTH_SUCCESS: Int32 = 0
         let AUTH_INFO: Int32 = 3
+        let AUTH_DENIED: Int32 = 1
+        /// True when a method failed because the TRANSPORT is gone rather than
+        /// because the credential was wrong.
+        ///
+        /// The test is `ssh_is_connected`, NOT the return code. libssh answers
+        /// a dead link with whatever the method happens to produce — measured
+        /// across 18 cuts, `ssh_userauth_publickey_auto` returned 4
+        /// (SSH_AUTH_AGAIN) after its timeout or 1 (SSH_AUTH_DENIED) at once,
+        /// and essentially never -1 — so gating on SSH_AUTH_ERROR threw the
+        /// detection away before it was made. In the same 18 observations
+        /// `ssh_is_connected` was 0 exactly when the transport was dead and 1
+        /// when it was alive, including a genuine "Access denied".
+        /// Set once a credential has actually been REFUSED by a live server.
+        /// After that, a dropped connection is almost certainly the server
+        /// hanging up on too many failures — sshd does exactly that at
+        /// MaxAuthTries — and calling that a transport failure would send
+        /// auto-reconnect back with the same wrong password.
+        var credentialRefused = false
+        func transportDied(_ result: Int32) -> Bool {
+            guard result != AUTH_SUCCESS, !credentialRefused else { return false }
+            guard ssh_is_connected(session) == 0 else { return false }
+            authTransportError = "connection lost during authentication: \(errorString(session))"
+            return true
+        }
 
         // Stop before each blocking attempt when the tab was closed.
         guard isRunning else { return false }
-        if ssh_userauth_none(session, nil) == AUTH_SUCCESS {
-            return true
-        }
+        let none = ssh_userauth_none(session, nil)
+        if none == AUTH_SUCCESS { return true }
+        if transportDied(none) { return false }
         guard isRunning else { return false }
-        if ssh_userauth_publickey_auto(session, nil, nil) == AUTH_SUCCESS {
+        let publicKey = ssh_userauth_publickey_auto(session, nil, nil)
+        if publicKey == AUTH_SUCCESS {
             onNotice?("authenticated with public key")
             return true
         }
+        if transportDied(publicKey) { return false }
 
         var password = config.password
         for _ in 0..<3 {
@@ -795,12 +963,26 @@ nonisolated final class SSHWorker: Sendable {
                 onPasswordWorked?(config.username, currentPassword)
                 return true
             }
+            // BEFORE the transport test, not after: a server at MaxAuthTries
+            // answers "no" and hangs up in the same exchange, so by the time
+            // the socket is examined it is legitimately gone — and blaming the
+            // network for a refused password sends auto-reconnect back with
+            // the same wrong one. rc == AUTH_DENIED means the server ANSWERED.
+            if passwordResult == AUTH_DENIED { credentialRefused = true }
+            if transportDied(passwordResult) { return false }
 
             // Old network gear + TACACS very often use keyboard-interactive.
             // Whether the cached password — not a typed challenge answer — is what
             // satisfied the exchange.
             var usedCachedPassword = false
             var interactive = ssh_userauth_kbdint(session, nil, nil)
+            // Rounds that asked nothing. A server may legitimately send one
+            // informational AUTH_INFO with zero prompts before the real one;
+            // a server that sends them forever pinned the tab in an exchange
+            // only closing it could end (every wrong credential is already
+            // bounded by the outer attempt loop — this was the one unbounded
+            // path).
+            var emptyRounds = 0
             while interactive == AUTH_INFO {
                 // The tab may have closed while prompts were answered.
                 guard isRunning else { return false }
@@ -808,6 +990,13 @@ nonisolated final class SSHWorker: Sendable {
                 guard prompts >= 0 else {
                     onNotice?("keyboard-interactive prompt error: \(errorString(session))")
                     return false
+                }
+                if prompts == 0 {
+                    emptyRounds += 1
+                    if emptyRounds > 8 {
+                        onNotice?("keyboard-interactive: the server keeps asking nothing — giving up")
+                        return false
+                    }
                 }
                 for index in 0..<prompts {
                     var echo: CChar = 0
@@ -847,6 +1036,8 @@ nonisolated final class SSHWorker: Sendable {
                 }
                 interactive = ssh_userauth_kbdint(session, nil, nil)
             }
+            if interactive == AUTH_DENIED { credentialRefused = true }
+            if transportDied(interactive) { return false }
             if interactive == AUTH_SUCCESS {
                 // Only report the password when it is what actually answered.
                 // A denied password followed by a successful OTP challenge
@@ -862,6 +1053,31 @@ nonisolated final class SSHWorker: Sendable {
             password = nil
         }
         return false
+    }
+
+    /// TCP-level keepalive on libssh's socket. This is the half of liveness
+    /// that needs no cooperation from the device and cannot false-positive: the
+    /// kernel probes, and a peer that has stopped ACKing at all (cable out, host
+    /// rebooted, VPN gone, NAT entry expired) makes the socket fail, which the
+    /// io loop already reports through POLLERR/POLLHUP or a read error. Without
+    /// it macOS leaves an idle TCP connection alone indefinitely, so the app sat
+    /// on a socket to a machine that had been off for an hour.
+    ///
+    /// 60 s idle, then 6 probes 10 s apart — dead in about two minutes, which
+    /// is under the SSH-level deadline on purpose: whichever notices first is
+    /// right, and this one is the one that works on gear that ignores global
+    /// requests.
+    private func enableTCPKeepalive(on fd: Int32) {
+        guard fd >= 0 else { return }
+        var on: Int32 = 1
+        var idle: Int32 = 60
+        var interval: Int32 = 10
+        var count: Int32 = 6
+        let size = socklen_t(MemoryLayout<Int32>.size)
+        _ = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, size)
+        _ = setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, size)
+        _ = setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, size)
+        _ = setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, size)
     }
 
     private func setOption(_ session: ssh_session?, _ option: ssh_options_e, _ value: String) {

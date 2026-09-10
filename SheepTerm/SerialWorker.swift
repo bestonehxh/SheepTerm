@@ -58,7 +58,26 @@ nonisolated final class SerialWorker: Sendable {
         set { state.withLock { $0.onClosed = newValue } }
     }
 
+    /// `cfsetspeed` takes a `speed_t`, which is UNSIGNED: `speed_t(-1)` is a
+    /// Swift trap and not a failed guard, so a `Host.port` of −1 restored from
+    /// a backup used to kill the whole process — every other open session with
+    /// it. Refuse the value the way `SSHWorker.connect` refuses a port outside
+    /// 1…65535: with a sentence the user can read, on the session that asked
+    /// for it, leaving the rest of the app alone.
+    private static func rejection(forBaud baudRate: Int) -> String? {
+        guard !Host.serialBaudRange.contains(baudRate) else { return nil }
+        return "invalid baud rate \(baudRate) — must be between "
+            + "\(Host.serialBaudRange.lowerBound) and \(Host.serialBaudRange.upperBound). "
+            + "Edit the host and pick a baud rate."
+    }
+
     func start(devicePath: String, baudRate: Int) {
+        // Before the run is claimed, so a refused baud leaves the worker free
+        // for the corrected host instead of parked in `runActive`.
+        if let rejection = Self.rejection(forBaud: baudRate) {
+            onClosed?(rejection)
+            return
+        }
         let accepted = state.withLock { state in
             // One file descriptor owns this worker queue at a time. Do not let
             // a new run overtake teardown after stop().
@@ -162,6 +181,14 @@ nonisolated final class SerialWorker: Sendable {
                 state.runActive = false
             }
         }
+        // `start` already refused an unusable baud, but the trap is one line
+        // below `cfsetspeed` and the promise is that NO path reaches it with a
+        // value `speed_t` cannot hold — so the check is repeated here, where
+        // it is next to the thing it protects, rather than trusted from afar.
+        if let rejection = Self.rejection(forBaud: baudRate) {
+            onClosed?(rejection)
+            return
+        }
         var fd = open(devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK)
         // A reconnect reaches open() before the PREVIOUS session's defers
         // have run: stop() only pokes the self-pipe, so for a few
@@ -233,6 +260,32 @@ nonisolated final class SerialWorker: Sendable {
         onStatus?("serial · \((devicePath as NSString).lastPathComponent) · \(baudRate) 8N1")
 
         var buffer = [UInt8](repeating: 0, count: 4096)
+
+        /// One non-blocking read, handed straight to the session. Returns
+        /// false when the session is over — the caller must return, and
+        /// `onClosed` has already been fired.
+        ///
+        /// A nested function and not two copies: the write loop and the idle
+        /// poll below both read, and the last time they each had their own
+        /// copy only one of them ran while the send side was blocked. See the
+        /// note in the write loop.
+        func readOnce() -> Bool {
+            let count = buffer.withUnsafeMutableBytes { raw in
+                Darwin.read(fd, raw.baseAddress, raw.count)
+            }
+            if count > 0 {
+                onData?(Array(buffer[0..<count]))
+            } else if count == 0 {
+                // EOF — device gone (cable unplugged).
+                onClosed?("serial device disconnected")
+                return false
+            } else if errno != EAGAIN, errno != EINTR {
+                onClosed?("read failed: \(String(cString: strerror(errno)))")
+                return false
+            }
+            return true
+        }
+
         while isRunning {
             let writes = takeWrites()
             if !writes.isEmpty {
@@ -256,33 +309,49 @@ nonisolated final class SerialWorker: Sendable {
                     if written > 0 {
                         offset += written
                         lastProgress = Date()
-                        // A long drain must not starve inbound data — the
-                        // port is non-blocking, so check for input between
-                        // write chunks.
-                        let count = buffer.withUnsafeMutableBytes { raw in
-                            Darwin.read(fd, raw.baseAddress, raw.count)
-                        }
-                        if count > 0 {
-                            onData?(Array(buffer[0..<count]))
-                        } else if count == 0 {
-                            // EOF — device gone (cable unplugged).
-                            onClosed?("serial device disconnected")
-                            return
-                        } else if errno != EAGAIN, errno != EINTR {
-                            onClosed?("read failed: \(String(cString: strerror(errno)))")
-                            return
-                        }
                     } else if written < 0, errno == EINTR {
                         continue
                     } else if written < 0, errno != EAGAIN {
                         onClosed?("write failed: \(String(cString: strerror(errno)))")
                         return
-                    } else {
+                    }
+                    // Inbound, WHATEVER the write did. This read used to sit
+                    // inside the `written > 0` branch, so a port whose output
+                    // buffer was full stopped reading altogether — the two
+                    // directions of a serial line are independent, and the
+                    // send side being wedged is exactly when the far end is
+                    // most likely to be saying why. Measured against a pty
+                    // with 1 MB queued and the master not draining: 0 bytes
+                    // of 14 injected inbound arrived in 2 s, and all 14 landed
+                    // the instant the send side drained — up to the 60 s
+                    // stall deadline below, that is how long a console can go
+                    // unread (and unlogged).
+                    guard readOnce() else { return }
+                    if written <= 0 {
                         // EAGAIN or a 0-byte write: output buffer full —
                         // sleep in the kernel until the port is writable
-                        // instead of usleep-spinning.
-                        var wfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                        // instead of usleep-spinning. POLLIN as well as
+                        // POLLOUT: waiting on writability alone would leave
+                        // arriving bytes sitting in the driver for the whole
+                        // 100 ms even though we could take them at once.
+                        var wfd = pollfd(fd: fd, events: Int16(POLLIN | POLLOUT), revents: 0)
                         _ = poll(&wfd, 1, 100)
+                        let revents = Int32(wfd.revents)
+                        if revents & Int32(POLLIN) != 0 {
+                            guard readOnce() else { return }
+                        }
+                        // Same rule as the idle poll below: checked after the
+                        // read and not as an else of POLLIN, so a hangup that
+                        // arrives WITH data is honored without losing what
+                        // came with it. Without it, a device that hangs up
+                        // while our send side is wedged is noticed only when
+                        // the write itself fails or the 60 s stall deadline
+                        // runs out — and a hangup does not always fail a
+                        // write that is already parked on EAGAIN.
+                        if revents & Int32(POLLHUP | POLLERR | POLLNVAL) != 0 {
+                            onClosed?("serial device disconnected")
+                            return
+                        }
                     }
                 }
             }
@@ -312,19 +381,7 @@ nonisolated final class SerialWorker: Sendable {
                 }
                 let revents = Int32(pfds[0].revents)
                 if revents & Int32(POLLIN) != 0 {
-                    let count = buffer.withUnsafeMutableBytes { raw in
-                        Darwin.read(fd, raw.baseAddress, raw.count)
-                    }
-                    if count > 0 {
-                        onData?(Array(buffer[0..<count]))
-                    } else if count == 0 {
-                        // EOF — device gone (cable unplugged).
-                        onClosed?("serial device disconnected")
-                        return
-                    } else if errno != EAGAIN && errno != EINTR {
-                        onClosed?("read failed: \(String(cString: strerror(errno)))")
-                        return
-                    }
+                    guard readOnce() else { return }
                 }
                 // Checked independently, NOT as an else of POLLIN: a hangup
                 // arriving WITH pending data (POLLIN|POLLHUP) must still be

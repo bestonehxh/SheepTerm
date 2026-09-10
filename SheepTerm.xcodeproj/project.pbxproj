@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5EEB00000000000000000040 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000051 /* SwiftTerm */; };
+		5EEB00000000000000000040 /* SheepVTRender in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000051 /* SheepVTRender */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,7 +40,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5EEB00000000000000000040 /* SwiftTerm in Frameworks */,
+				5EEB00000000000000000040 /* SheepVTRender in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -84,7 +84,7 @@
 			);
 			name = SheepTerm;
 			packageProductDependencies = (
-				5EEB00000000000000000051 /* SwiftTerm */,
+				5EEB00000000000000000051 /* SheepVTRender */,
 			);
 			productName = SheepTerm;
 			productReference = 5EEB00000000000000000020 /* SheepTerm.app */;
@@ -115,7 +115,7 @@
 			mainGroup = 5EEB00000000000000000022;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				5EEB00000000000000000050 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				5EEB00000000000000000050 /* XCLocalSwiftPackageReference "Packages/SheepVT" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5EEB00000000000000000023 /* Products */;
@@ -151,7 +151,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nFW=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nBIN=\"${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}\"\nmkdir -p \"$FW\"\ncp -f /opt/homebrew/lib/libssh.4.dylib \"$FW/\"\ncp -f /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib \"$FW/\"\nchmod u+w \"$FW/libssh.4.dylib\" \"$FW/libcrypto.3.dylib\"\ninstall_name_tool -id @rpath/libssh.4.dylib \"$FW/libssh.4.dylib\" 2>/dev/null\ninstall_name_tool -id @rpath/libcrypto.3.dylib \"$FW/libcrypto.3.dylib\" 2>/dev/null\ninstall_name_tool -change /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib @rpath/libcrypto.3.dylib \"$FW/libssh.4.dylib\" 2>/dev/null\nfixssh() {\n  for P in /opt/homebrew/lib/libssh.4.dylib /opt/homebrew/opt/libssh/lib/libssh.4.dylib; do\n    install_name_tool -change \"$P\" @rpath/libssh.4.dylib \"$1\" 2>/dev/null || true\n  done\n}\nfixssh \"$BIN\"\nDBG=\"${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/SheepTerm.debug.dylib\"\nif [ -f \"$DBG\" ]; then\n  fixssh \"$DBG\"\n  codesign --force --sign - \"$DBG\"\nfi\ncodesign --force --sign - \"$FW/libcrypto.3.dylib\" \"$FW/libssh.4.dylib\"\n";
+			shellScript = "set -e\nFW=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nBIN=\"${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}\"\nmkdir -p \"$FW\"\n\n# The two dylibs this app carries, by exact soname. Not a glob on purpose: if\n# Homebrew moves libssh to a new major the binary still LINKS libssh.4, so\n# quietly copying libssh.5 would produce an app that cannot launch. Fail here,\n# saying which file moved and what has to change with it. Keep in step with\n# BUNDLED_LIBS in .ship.conf, which Tools/deps.sh and the release script read.\nneed() {  # need <path> <what to do about it>\n  [ -f \"$1\" ] || { echo \"error: $1 is missing. $2\" >&2; exit 1; }\n}\nneed /opt/homebrew/lib/libssh.4.dylib \"Run 'brew install libssh'. If Homebrew has moved to a new soname (libssh.5), this phase, the app's linked library and .ship.conf all have to be updated together.\"\nneed /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib \"Run 'brew install openssl@3'. A new OpenSSL major (libcrypto.4) needs this phase and .ship.conf updated together.\"\n\ncp -f /opt/homebrew/lib/libssh.4.dylib \"$FW/\"\ncp -f /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib \"$FW/\"\nchmod u+w \"$FW/libssh.4.dylib\" \"$FW/libcrypto.3.dylib\"\ninstall_name_tool -id @rpath/libssh.4.dylib \"$FW/libssh.4.dylib\" 2>/dev/null\ninstall_name_tool -id @rpath/libcrypto.3.dylib \"$FW/libcrypto.3.dylib\" 2>/dev/null\ninstall_name_tool -change /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib @rpath/libcrypto.3.dylib \"$FW/libssh.4.dylib\" 2>/dev/null\nfixssh() {\n  for P in /opt/homebrew/lib/libssh.4.dylib /opt/homebrew/opt/libssh/lib/libssh.4.dylib; do\n    install_name_tool -change \"$P\" @rpath/libssh.4.dylib \"$1\" 2>/dev/null || true\n  done\n}\nfixssh \"$BIN\"\nDBG=\"${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/SheepTerm.debug.dylib\"\nif [ -f \"$DBG\" ]; then\n  fixssh \"$DBG\"\n  codesign --force --sign - \"$DBG\"\nfi\ncodesign --force --sign - \"$FW/libcrypto.3.dylib\" \"$FW/libssh.4.dylib\"\n\n# Every install_name_tool call above is allowed to fail quietly (they are\n# no-ops on a build that was already fixed up), so this is what actually\n# proves the job was done: an absolute Homebrew path left in any of the three\n# binaries is an app that runs on THIS Mac and cannot launch on one without\n# Homebrew — the failure that would otherwise be found by a user, not by us.\nLEAKS=\"\"\nfor F in \"$BIN\" \"$FW/libssh.4.dylib\" \"$FW/libcrypto.3.dylib\"; do\n  if otool -L \"$F\" | tail -n +2 | grep -q /opt/homebrew; then\n    LEAKS=\"$LEAKS $F\"\n  fi\ndone\nif [ -n \"$LEAKS\" ]; then\n  echo \"error: these still link an absolute Homebrew path and would not launch elsewhere:$LEAKS\" >&2\n  for F in $LEAKS; do otool -L \"$F\" | grep /opt/homebrew >&2; done\n  exit 1\nfi";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -297,7 +297,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -310,7 +310,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = /opt/homebrew/lib;
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Bestchaan.SheepTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -331,7 +331,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -344,7 +344,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = /opt/homebrew/lib;
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Bestchaan.SheepTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -381,22 +381,17 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		5EEB00000000000000000050 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
-			requirement = {
-				kind = exactVersion;
-				version = 1.18.0;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		5EEB00000000000000000050 /* XCLocalSwiftPackageReference "Packages/SheepVT" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SheepVT;
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		5EEB00000000000000000051 /* SwiftTerm */ = {
+		5EEB00000000000000000051 /* SheepVTRender */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5EEB00000000000000000050 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
-			productName = SwiftTerm;
+			productName = SheepVTRender;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

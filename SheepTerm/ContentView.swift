@@ -2,8 +2,11 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
-    /// Last color painted on the window — skips redundant writes during resize.
-    private static var lastBackgroundColor: NSColor?
+    /// The chrome fill as one dynamic NSColor. Built once so the identity
+    /// check in syncFullscreen compares against the very object it assigned —
+    /// and so didResize, which fires per frame, doesn't bridge a Color across
+    /// on every tick.
+    private static let chromeWindowColor = NSColor(Theme.chrome)
 
     /// The sidebar is a full-height column that owns the traffic-light row;
     /// the tab bar spans only the detail pane. (Before 2.3 (12) the tab bar
@@ -90,19 +93,29 @@ struct ContentView: View {
         // bar is standard macOS behavior (Chrome/VS Code do the same);
         // titlebar-accessory mirrors don't render in hiddenTitleBar windows.
         // didResize fires per frame during a resize — skip redundant writes.
-        let color = NSColor(Theme.chrome)
-        if color != Self.lastBackgroundColor {
-            Self.lastBackgroundColor = color
-            window.backgroundColor = color
+        // The comparison is against THIS window, not a static cache of the
+        // last colour painted: one cache is shared by every window the app
+        // ever opens, so after the window was closed and reopened (Dock click)
+        // the fresh one matched the cache and was never painted — its
+        // fullscreen titlebar strip stayed the default window grey.
+        if window.backgroundColor !== Self.chromeWindowColor {
+            window.backgroundColor = Self.chromeWindowColor
         }
     }
 }
 
 /// Hands the hosting NSWindow to SwiftUI as soon as the view lands in one.
 /// For syncFullscreen only (titlebar transparency + background colour, both
-/// harmless on a sheet). The traffic-light spacer must NOT be keyed on this:
-/// a SwiftUI sheet also carries fullSizeContentView and on macOS 26 is
-/// neither an NSSheet nor an NSPanel — TopBarView keys on window identity.
+/// harmless on a sheet). The traffic-light spacer must NOT be keyed on this —
+/// it keys on window identity in TopBarView, which is the only test that
+/// cannot be fooled by a second window of any kind.
+///
+/// The three clauses are belt and braces, and measured: on this macOS a
+/// SwiftUI sheet comes back as a real NSSheet (`isSheet == true`) and does not
+/// carry `.fullSizeContentView` at all, so it fails twice over. An earlier
+/// comment here asserted the opposite; a probe app of the same shape said
+/// otherwise, and the extra clauses stay because a predicate this cheap should
+/// not depend on which of those facts a future macOS keeps.
 func isMainTerminalWindow(_ window: NSWindow) -> Bool {
     window.styleMask.contains(.fullSizeContentView)
         && !window.isSheet && window.sheetParent == nil && !(window is NSPanel)
@@ -250,11 +263,11 @@ struct TopBarView: View {
     @EnvironmentObject var model: AppModel
     @State private var isFullScreen = false
     /// The window this bar lives in. Fullscreen state is read from THIS
-    /// window and healed only from ITS notifications: any test by styleMask
-    /// or class let a SwiftUI sheet (which also carries fullSizeContentView
-    /// and, on macOS 26, is neither an NSSheet nor an NSPanel) pass as the
-    /// main window while it was key, and its styleMask — never .fullScreen —
-    /// put the 64 pt traffic-light spacer back in the middle of fullscreen.
+    /// window and healed only from ITS notifications. Identity, not a test by
+    /// styleMask or class: whatever a sheet or panel happens to report on any
+    /// given macOS, a window that is not this one has a styleMask that is
+    /// never `.fullScreen`, and reading it put the 64 pt traffic-light spacer
+    /// back in the middle of fullscreen.
     @State private var hostWindow: NSWindow?
 
     var body: some View {
@@ -305,8 +318,12 @@ struct TopBarView: View {
             Spacer(minLength: 8)
 
             Menu {
+                // No `.keyboardShortcut` on any of these: ⌘T, ⌘⇧N and the rest
+                // belong to the File menu (`SheepTermApp.body`), which is the
+                // one place that owns them. Declaring ⌘T here as well bound the
+                // same key twice for the same action — harmless in effect, but
+                // the top bar does not get to claim a menu's shortcut.
                 Button("New Terminal Tab") { model.newLocalTab() }
-                    .keyboardShortcut("t", modifiers: .command)
                 Divider()
                 Button("New SSH Connection…") { model.openQuickConnect(.ssh) }
                 Button("New Serial Console…") { model.openQuickConnect(.serial) }
@@ -335,6 +352,9 @@ struct TopBarView: View {
         .background(WindowSyncAccessor { window in
             DispatchQueue.main.async {
                 hostWindow = window
+                // Stand in front of SwiftUI's delegate so the close button can
+                // ask about live sessions while the window is still here.
+                MainWindowCloseGuard.shared.attach(to: window)
                 let actual = window.styleMask.contains(.fullScreen)
                 if actual != isFullScreen { isFullScreen = actual }
             }
@@ -345,23 +365,35 @@ struct TopBarView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { note in
             healFullScreen(from: note)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
-            isFullScreen = true
+        // These four carry no styleMask reading of their own, so they must at
+        // least be filtered by window — otherwise any OTHER window going
+        // fullscreen moves this bar's traffic-light spacer.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { note in
+            if isOurWindow(note) { isFullScreen = true }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { _ in
-            isFullScreen = false
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { note in
+            if isOurWindow(note) { isFullScreen = false }
         }
         // Safety net for aborted/restored transitions that skip the will* pair.
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
-            isFullScreen = true
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
+            if isOurWindow(note) { isFullScreen = true }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
-            isFullScreen = false
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
+            if isOurWindow(note) { isFullScreen = false }
         }
     }
 }
 
 extension TopBarView {
+    /// Until the accessor has handed us our window there is nothing to compare
+    /// against, and dropping the will*/did* pair of a restore straight into
+    /// fullscreen is exactly the failure §2 warns about — so an unknown window
+    /// still counts. Once we know ours, only it may move the spacer.
+    private func isOurWindow(_ note: Notification) -> Bool {
+        guard let hostWindow else { return true }
+        return (note.object as? NSWindow) === hostWindow
+    }
+
     /// The spacer for the traffic lights must match what the window IS, not
     /// what the last notification said. A restore into fullscreen used to
     /// leave a 64 pt gap with no buttons behind it until the next toggle.
@@ -381,11 +413,11 @@ struct SessionContentView: View {
     var body: some View {
         switch tab.content {
         case .local(let controller):
-            TerminalViewRepresentable(terminalView: controller.terminalView, isActive: isActive)
+            TerminalViewRepresentable(host: controller.terminalHost, isActive: isActive)
         case .ssh(let controller):
-            TerminalViewRepresentable(terminalView: controller.terminalView, isActive: isActive)
+            TerminalViewRepresentable(host: controller.terminalHost, isActive: isActive)
         case .serial(let controller):
-            TerminalViewRepresentable(terminalView: controller.terminalView, isActive: isActive)
+            TerminalViewRepresentable(host: controller.terminalHost, isActive: isActive)
         }
     }
 }

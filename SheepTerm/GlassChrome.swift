@@ -21,14 +21,9 @@ enum ChromeStyle: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Every reader is a SwiftUI view holding `@AppStorage(storageKey)`, so the
+    /// chrome re-renders the moment the setting changes.
     static let storageKey = "chromeStyle"
-
-    /// For the non-SwiftUI readers (AppKit-side helpers) that cannot observe
-    /// @AppStorage. SwiftUI views read the setting through @AppStorage so they
-    /// re-render the moment it changes.
-    static var current: ChromeStyle {
-        UserDefaults.standard.string(forKey: storageKey).flatMap(ChromeStyle.init) ?? .glass
-    }
 }
 
 /// The chrome surfaces that can be painted. The status bar is deliberately

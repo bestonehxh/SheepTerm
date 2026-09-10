@@ -40,7 +40,11 @@ final class CredentialStore: ObservableObject {
         let (loaded, warning) = Self.load()
         credentials = loaded
         suppressWritesAfterCorruptLoad = warning != nil
-        if let warning { Self.reportCorruptLoad(warning) }
+        // Deferred: this runs from `AppModel.init`, i.e. while the SwiftUI
+        // `App` is still being constructed and no window exists. A modal
+        // there is the same mistake as the one in the Apple Event callback
+        // (ARCHITECTURE §11) — run it once the run loop is up.
+        if let warning { DispatchQueue.main.async { Self.reportCorruptLoad(warning) } }
     }
 
     /// Re-reads credentials.json after a backup restore.
@@ -55,14 +59,24 @@ final class CredentialStore: ObservableObject {
         let (loaded, warning) = Self.load()
         credentials = loaded
         suppressWritesAfterCorruptLoad = warning != nil
-        if let warning { Self.reportCorruptLoad(warning) }
+        if let warning { DispatchQueue.main.async { Self.reportCorruptLoad(warning) } }
     }
 
     /// A missing file is normal (fresh install). A file that exists but does
     /// not decode is data the user had, so it is preserved rather than
     /// overwritten — same rule, same naming, as HostStore.loadList.
     private static func load() -> (value: [Credential], warning: String?) {
-        guard let data = try? Data(contentsOf: fileURL) else { return ([], nil) }
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            // Same rule as hosts.json: unreadable is not empty (see Models).
+            if !FileManager.default.fileExists(atPath: fileURL.path) { return ([], nil) }
+            let warning = "\(fileURL.lastPathComponent) could not be read (\(error.localizedDescription)). "
+                + "The credential list starts empty and the file will not be overwritten until you change something."
+            NSLog("SheepTerm: %@", warning)
+            return ([], warning)
+        }
         do {
             return (try JSONDecoder().decode([Credential].self, from: data), nil)
         } catch {
@@ -97,10 +111,13 @@ final class CredentialStore: ObservableObject {
         suppressWritesAfterCorruptLoad = false
     }
 
-    func save() {
+    /// True when what is in memory is now what is on disk. `remove` needs that
+    /// answer before it touches the Keychain — see there.
+    @discardableResult
+    func save() -> Bool {
         guard !suppressWritesAfterCorruptLoad else {
             NSLog("SheepTerm: write to credentials.json suppressed until the first user change (corrupt previous file was preserved)")
-            return
+            return false
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -111,18 +128,26 @@ final class CredentialStore: ObservableObject {
         do {
             let data = try encoder.encode(credentials)
             if FileManager.default.fileExists(atPath: Self.fileURL.path) {
+                // Staged and swapped, as `HostStore.write` does: remove-then-
+                // copy left NO backup when the copy failed, which is the one
+                // moment a backup is wanted.
                 let backupURL = Self.fileURL.appendingPathExtension("bak")
-                try? FileManager.default.removeItem(at: backupURL)
+                let stagingURL = Self.fileURL.appendingPathExtension("bak.tmp")
                 do {
-                    try FileManager.default.copyItem(at: Self.fileURL, to: backupURL)
+                    try? FileManager.default.removeItem(at: stagingURL)
+                    try FileManager.default.copyItem(at: Self.fileURL, to: stagingURL)
+                    _ = try FileManager.default.replaceItemAt(backupURL, withItemAt: stagingURL)
                 } catch {
+                    try? FileManager.default.removeItem(at: stagingURL)
                     NSLog("SheepTerm: could not back up credentials.json: %@",
                           error.localizedDescription)
                 }
             }
             try data.write(to: Self.fileURL, options: .atomic)
+            return true
         } catch {
             Self.reportSaveFailure(error)
+            return false
         }
     }
 
@@ -152,6 +177,7 @@ final class CredentialStore: ObservableObject {
         let credential = Credential(name: name, username: username)
         noteUserMutation()
         credentials.append(credential)
+        uiTrace("CredentialStore.add appended \(credential.name) → \(credentials.count) entries")
         save()
         // The Keychain CAN refuse (locked keychain, denied access). Saying
         // nothing left the credential listed as if it had a password, and
@@ -185,16 +211,35 @@ final class CredentialStore: ObservableObject {
         Keychain.password(for: credential.id)
     }
 
-    func remove(_ credential: Credential) {
+    /// False when nothing was removed, so the caller can leave the rest of the
+    /// configuration alone. `CredentialsSheet.delete` also strips the id off
+    /// every host and out of the password cache, and doing that around a
+    /// rollback would swap one inconsistency for another: the credential back
+    /// in the list with no host pointing at it any more.
+    @discardableResult
+    func remove(_ credential: Credential) -> Bool {
         noteUserMutation()
+        let index = credentials.firstIndex { $0.id == credential.id }
         credentials.removeAll { $0.id == credential.id }
-        save()
-        // Delete the secret only after its metadata is safely gone. If the
-        // Keychain refuses (locked, denied), the item would otherwise stay
-        // forever with nothing left that can name it — so say so.
+        // "Only after its metadata is safely gone" is what the comment here
+        // used to claim while `save()` returned Void, so the Keychain item went
+        // whatever happened to the file. A failed write (full disk, a file-sync
+        // client holding the file) then left the credential still LISTED on
+        // disk with its password already deleted: it comes back on the next
+        // launch, authenticates against nothing, and the reason is invisible.
+        // Put it back instead — what is on screen then matches what is on
+        // disk, and `save()` has already told the user why.
+        guard save() else {
+            if let index { credentials.insert(credential, at: min(index, credentials.count)) }
+            else { credentials.append(credential) }
+            return false
+        }
+        // If the Keychain refuses (locked, denied), the item would otherwise
+        // stay forever with nothing left that can name it — so say so.
         if !Keychain.deletePassword(for: credential.id) {
             Self.reportKeychainDeleteFailure(for: credential)
         }
+        return true
     }
 
     private static func reportKeychainDeleteFailure(for credential: Credential) {

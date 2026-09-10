@@ -6,11 +6,15 @@ import Foundation
 /// over the bytes that can never backtrack: a 256-entry start table says
 /// which rules may begin at each byte, and each matcher is a direct hand
 /// translation of its default regex. Measured against the regex path on a
-/// 4 MB dump: ~17x faster match phase, identical output byte-for-byte.
+/// 4 MB dump: ~14x faster match phase, identical output byte-for-byte.
 ///
-/// Used by `Highlighter.colorize` only when the text is pure ASCII and a
-/// rule's pattern is untouched default — anything else stays on the regex
-/// path, so semantics can never drift from what the user configured.
+/// It is the ONLY matcher the app ships: `Highlighter.spans` refuses
+/// non-ASCII input and every pack rule is a built-in, so there is nothing
+/// left for a regex to serve. ICU has not disappeared from the design
+/// though — `Tests/tests/main.swift` still compiles each pack's generated
+/// pattern and asserts, span for span, that the scanner agrees with it. That
+/// equivalence is what licenses every hand translation below; a matcher
+/// changed without its pattern (or the other way round) fails there.
 ///
 /// ## Vendors
 ///
@@ -856,9 +860,12 @@ nonisolated extension HighlightScanner {
     ]
 
     /// Key of the catalogue profile — every rule, the union vocabulary. It
-    /// is NOT a vendor and is never used to match anything: it exists so the
-    /// settings list and highlight-rules.json can carry all eleven rule names
-    /// whatever pack a session happens to be on.
+    /// is NOT a vendor and is never used to match anything: it carries all
+    /// eleven rule names whatever pack a session happens to be on, which is
+    /// what `defaultConfigs` and the tests enumerate. (It used to back a
+    /// Settings list and a `highlight-rules.json`; both were removed in 3.0,
+    /// and nothing reads that file any more — an old copy left in Application
+    /// Support is inert.)
     static let catalogueKey = "\u{0}catalogue"
 
     /// Never nil in practice — `Vendor` and `profiles` are kept in step by
@@ -884,9 +891,22 @@ nonisolated extension HighlightScanner {
 /// matches inside a bounded byte budget it gives up for good, so a session
 /// that never shows a banner costs nothing after that.
 struct VendorFingerprint {
-    /// Locked once a signature has matched (holds the vendor) OR the byte
-    /// budget ran out with no match. Either way `consider` becomes a no-op.
-    private(set) var locked = false
+    /// True once a signature has matched — the lock exists — OR the byte
+    /// budget is spent. `consider` still runs after a match, until the
+    /// budget is spent, but only a MORE specific family can replace the lock.
+    var locked: Bool { lockedPriority != nil || spent }
+    /// Index into `signatures` of the family currently locked. Priority
+    /// order used to matter only within one chunk: the first chunk with ANY
+    /// signature won for the whole session, so a Cisco switch printing `show
+    /// lldp neighbors detail` with a CentOS neighbour locked Linux, and its
+    /// own `show version` three lines later could not undo it. Now a lock is
+    /// provisional until the budget is spent or the top family matches:
+    /// a signature earlier in the list replaces one later in it, never the
+    /// other way round.
+    private var lockedPriority: Int?
+    /// Nothing more can change: the budget is spent or the most specific
+    /// family matched.
+    private var spent = false
     /// Total bytes examined so far. Past `budget`, give up: a banner shows up
     /// in the first handful of kilobytes or not at all, and an endless scan
     /// of a `cat bigfile` must not cost anything.
@@ -966,11 +986,12 @@ struct VendorFingerprint {
         ]
     }()
 
-    /// Feed the next chunk. Returns the detected vendor exactly once, on the
-    /// first chunk that completes a signature; nil otherwise (including once
-    /// locked or over budget). Cost after a lock is a single branch.
+    /// Feed the next chunk. Returns a vendor when this chunk locks one, or
+    /// replaces the current lock with a more specific family (earlier in
+    /// `signatures`); nil otherwise. After the budget is spent, or once the
+    /// most specific family has matched, the cost is a single branch.
     mutating func consider(_ bytes: [UInt8]) -> Vendor? {
-        guard !locked, scanned < Self.budget, !bytes.isEmpty else { return nil }
+        guard !spent, scanned < Self.budget, !bytes.isEmpty else { return nil }
         scanned += bytes.count
 
         // Search over (carry + lowercased(chunk)) so a signature that
@@ -988,13 +1009,17 @@ struct VendorFingerprint {
             carry = hay
         }
 
-        for (vendor, patterns) in Self.signatures {
+        for (priority, (vendor, patterns)) in Self.signatures.enumerated() {
+            // Only a family ABOVE the current lock can replace it.
+            if let current = lockedPriority, priority >= current { break }
             for pattern in patterns where Self.contains(hay, pattern) {
-                locked = true
+                lockedPriority = priority
+                // The top of the list cannot be outranked: stop scanning.
+                if priority == 0 || scanned >= Self.budget { spent = true }
                 return vendor
             }
         }
-        if scanned >= Self.budget { locked = true }   // spent; stop for good
+        if scanned >= Self.budget { spent = true }   // spent; stop for good
         return nil
     }
 

@@ -86,35 +86,51 @@ final class SafePastePacer {
         case keyboardInput
         case sessionEnded
         case replaced
-        /// The transport refused the line — the device did NOT receive it,
-        /// so the run must not be reported as finished.
+        /// The transport refused the line — the session's worker did NOT take
+        /// those bytes, so the run must not be reported as finished.
         case inputDiscarded
     }
 
     private var task: Task<Void, Never>?
     private var completion: ((EndReason, Int) -> Void)?
     private(set) var sentCount = 0
-    private(set) var totalCount = 0
 
     var isActive: Bool { task != nil }
 
+    /// - Parameter send: hands one line's bytes to the session and returns
+    ///   whether they were ACCEPTED — meaning the session's worker took them
+    ///   into its write queue. It is not, and cannot be, an acknowledgement
+    ///   from the device: nothing in this design reads a reply back, so a
+    ///   line that was accepted may still be rejected by the CLI at the far
+    ///   end. Accepted is the strongest fact available here, and it is the
+    ///   one the run needs: a refusal means those bytes went nowhere.
     func start(
         plan: SafePastePlan,
         delayMilliseconds: Int,
-        send: @escaping ([UInt8]) -> Void,
+        send: @escaping ([UInt8]) -> Bool,
         progress: @escaping (_ sent: Int, _ total: Int) -> Void,
         completion: @escaping (_ reason: EndReason, _ sent: Int) -> Void
     ) {
         stop(reason: .replaced)
         sentCount = 0
-        totalCount = plan.lines.count
         self.completion = completion
         let delay = max(delayMilliseconds, 1)
 
         task = Task { @MainActor [weak self] in
             for index in plan.lines.indices {
                 guard !Task.isCancelled, self != nil else { return }
-                send(plan.bytes(forLine: index))
+                // Acceptance is a VALUE handed straight back, not something
+                // inferred from the passage of time. The worker also reports
+                // a refusal through `onInputDiscarded`, but that hops to the
+                // main queue, so the old `await Task.yield()` before
+                // finishing was a hope, not a guarantee: a refused LAST line
+                // regularly showed N/N with no warning. The refusal now ends
+                // the run on the spot, and the line that was refused is not
+                // counted as sent.
+                guard send(plan.bytes(forLine: index)) else {
+                    self?.finish(reason: .inputDiscarded)
+                    return
+                }
                 self?.sentCount = index + 1
                 progress(index + 1, plan.lines.count)
                 guard index + 1 < plan.lines.count else { continue }
@@ -124,6 +140,7 @@ final class SafePastePacer {
                     return
                 }
             }
+            guard !Task.isCancelled else { return }
             self?.finish(reason: .finished)
         }
     }
@@ -134,11 +151,13 @@ final class SafePastePacer {
         task = nil
         let callback = completion
         completion = nil
-        // sentCount counts lines HANDED to the transport. A refusal is
-        // reported synchronously from inside that hand-over, so the refused
-        // line is always the last one counted — and the device never got it.
-        let delivered = reason == .inputDiscarded ? max(sentCount - 1, 0) : sentCount
-        callback?(reason, delivered)
+        // sentCount counts only lines the session's worker ACCEPTED — the
+        // send closure's answer is what advances it — so there is nothing to
+        // discount here any more. The old `-1` for `.inputDiscarded` existed
+        // because a line was counted before its fate was known; a refusal now
+        // ends the run through `finish` before the count moves, and this
+        // late-arriving stop finds the task already gone.
+        callback?(reason, sentCount)
     }
 
     private func finish(reason: EndReason) {

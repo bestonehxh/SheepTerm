@@ -59,7 +59,17 @@ struct StatusBarView: View {
                 .frame(height: 1)
         }
         .onAppear {
+            // Same guard as the tick below: no getifaddrs for a segment that
+            // isn't shown (it starts hidden).
+            guard model.statusShowIP else { return }
             localAddress = NetworkInfo.summary()
+        }
+        // Switching "This Mac IP" on used to show whatever was read at
+        // onAppear — the ticks in between were skipped, so on a laptop that
+        // had changed networks meanwhile the bar displayed the old address
+        // until the next tick up to 15 s later.
+        .onChange(of: model.statusShowIP) { _, shown in
+            if shown { localAddress = NetworkInfo.summary() }
         }
         .onReceive(Self.ipTimer) { _ in
             // getifaddrs isn't free — skip while the IP segment is hidden or
