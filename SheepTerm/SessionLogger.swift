@@ -823,7 +823,10 @@ nonisolated final class SessionLogger: Sendable {
                     addPending(notice.count)
                     ioQueue.async { [self] in
                         Self.simulateSlowDisk()
-                        try? handle.write(contentsOf: notice)
+                        // Not `try?`: this is the marker that says the file
+                        // stops here. Unreported, a refused marker left the
+                        // file ending mid-stream with `close()` saying true.
+                        do { try handle.write(contentsOf: notice) } catch { reportWriteFailureOnce(error) }
                         removePending(notice.count)
                         // Say it in the SESSION too, not only in the file. The
                         // line above is at the end of a 100 MB file nobody is
@@ -1092,8 +1095,15 @@ nonisolated final class SessionLogger: Sendable {
         if tail.isEmpty {
             // A dangling final ESC may be the ST half of an open string
             // sequence (ESC ] / ESC P / ESC _ … ESC \) — hold from that
-            // opener when one is still unterminated.
-            return Self.unterminatedStringOpener(bytes, before: esc) ?? esc
+            // opener when one is still unterminated. Under the same hold cap
+            // as every other path: without it a string payload past 1 MB was
+            // re-held whole on every chunk that happened to end in ESC, and
+            // scanned backwards each time — the "bounded" quadratic was not.
+            if let opener = Self.unterminatedStringOpener(bytes, before: esc),
+               bytes.count - opener <= Self.maxEscapeHold {
+                return opener
+            }
+            return esc
         }
         let complete: Bool
         if tail.first == UInt8(ascii: "[") {

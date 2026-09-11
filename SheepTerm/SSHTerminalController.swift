@@ -45,6 +45,17 @@ final class SSHTerminalController: NSObject {
     /// Stops passive detection for good — the vendor is now the user's (or a
     /// saved host's) explicit choice.
     func suppressVendorDetection() { vendorChosenByUser = true }
+
+    /// A reconnect successor takes over a family the FINGERPRINT chose in
+    /// the previous session: detection stays on (only a more specific family
+    /// can replace it), and the fresh fingerprint is seeded so a generic
+    /// signature in the reconnected stream cannot undo the previous lock.
+    /// `AppModel.reconnect` opens the successor with `.auto` so `open` does
+    /// not read the carried family as a saved choice, then calls this.
+    func carryAutoDetected(_ vendor: Vendor) {
+        fingerprint.seed(with: vendor)
+        autoDetected = true
+    }
     /// Pushed from the main actor and read from worker/highlight queues.
     /// Swift's Mutex expresses shared ownership without unsafe isolation.
     nonisolated private let highlightState = Mutex(false)
@@ -201,8 +212,18 @@ final class SSHTerminalController: NSObject {
                 // A prompt the user dismissed is a decision, not a drop. Plain
                 // "disconnected" is what auto-reconnect keys on, and it would
                 // put the same prompt straight back up — three times.
-                self.onStatus?(message.hasPrefix("connection cancelled")
-                               ? "disconnected — cancelled" : "disconnected")
+                // …and so is a refused host key (CHANGED / other type /
+                // unreadable known_hosts): retrying re-raises the MITM
+                // warning up to three times and never gets anywhere.
+                let status: String
+                if message.hasPrefix("connection cancelled") {
+                    status = "disconnected — cancelled"
+                } else if message.hasPrefix(SSHWorker.hostKeyRefusedPrefix) {
+                    status = "disconnected — host key refused"
+                } else {
+                    status = "disconnected"
+                }
+                self.onStatus?(status)
                 // The log is NOT closed here. Auto-reconnect hands this
                 // logger to the successor 2–10 s from now, and a logger closed
                 // in between dropped every byte of the reconnected session

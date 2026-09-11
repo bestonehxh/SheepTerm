@@ -223,6 +223,7 @@ final class AppModel: ObservableObject {
 
     let store = HostStore()
     let credentialStore = CredentialStore()
+    private var dataWarningSubscriptions = Set<AnyCancellable>()
     /// Session-lifetime memory of passwords that worked (keyed
     /// user@host:port) so reconnects don't ask again. Never written to disk.
     private var passwordCache: [String: String] = [:]
@@ -264,8 +265,15 @@ final class AppModel: ObservableObject {
         // ARCHITECTURE claimed it was shown). Every group vanishing with no
         // dialog is indistinguishable from data loss. Deferred off `init` for
         // the reason `CredentialStore` defers its own.
-        if let warning = store.dataLoadWarning {
-            DispatchQueue.main.async {
+        // Observed, not read once: the warning is also set at SAVE time, when
+        // a merge finds the file changed underneath us and unreadable
+        // (`quarantineUnreadable`), and after a restore's `reloadFromDisk`.
+        // A one-shot read at launch left those two with no audience.
+        store.$dataLoadWarning
+            .compactMap { $0 }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { warning in
                 let alert = NSAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "Saved hosts could not be read"
@@ -273,7 +281,7 @@ final class AppModel: ObservableObject {
                 alert.addButton(withTitle: "OK")
                 alert.runModal()
             }
-        }
+            .store(in: &dataWarningSubscriptions)
         purgeTeamShareLeftovers()
         // The highlight rules and their colours are fixed built-in constants
         // now. Compile the per-vendor packs once, here — there is no Settings
@@ -460,7 +468,11 @@ final class AppModel: ObservableObject {
                 return "a write was refused earlier in the session, so the file has a hole"
             }
             if flush.droppedBytes > 0 {
-                return "\(ByteCountFormatter.string(fromByteCount: Int64(flush.droppedBytes), countStyle: .file)) of output at the end not written"
+                // "up to": the count is an upper bound by at most one chunk
+                // (the one between being refused and being released is in
+                // both terms of the reading), and the alert must not present
+                // a bound as a measurement.
+                return "up to \(ByteCountFormatter.string(fromByteCount: Int64(flush.droppedBytes), countStyle: .file)) of output at the end not written"
             }
             return "the last writes did not land in time"
         }
@@ -639,8 +651,16 @@ final class AppModel: ObservableObject {
         if incoming.username != existing.username {
             diffs.append("username: \(sanitizedForDialog(existing.username)) → \(sanitizedForDialog(incoming.username))")
         }
-        if incoming.cipherMode != existing.cipherMode {
-            diffs.append("cipher: \(existing.cipherMode?.rawValue ?? "auto") → \(incoming.cipherMode?.rawValue ?? "auto")")
+        // Effective values, as `sameForImport` compares them — nil IS auto,
+        // and a line reading "cipher: auto → auto" explained nothing.
+        if (incoming.cipherMode ?? .auto) != (existing.cipherMode ?? .auto) {
+            diffs.append("cipher: \((existing.cipherMode ?? .auto).rawValue) → \((incoming.cipherMode ?? .auto).rawValue)")
+        }
+        // `sameForImport` raises a conflict on the family, so the dialog has
+        // to be able to name it — a family-only difference used to read
+        // "The two entries differ." and nothing else.
+        if incoming.highlightVendor != existing.highlightVendor {
+            diffs.append("device family: \(existing.highlightVendor.label) → \(incoming.highlightVendor.label)")
         }
         if (incoming.agentForward ?? false) != (existing.agentForward ?? false) {
             let label = { (on: Bool) in on ? "on" : "off" }
@@ -1095,7 +1115,7 @@ final class AppModel: ObservableObject {
         // reconnect — must not open a SECOND session to the host and take
         // the log file out from under the one already running.
         guard tabs.contains(where: { $0.id == tab.id }) else { return }
-        let host: Host
+        var host: Host
         var serialLog: Bool?
         var handedLogger: SessionLogger?
         switch tab.content {
@@ -1119,6 +1139,13 @@ final class AppModel: ObservableObject {
         let oldVendor = tab.highlightVendor
         let oldManual = tab.vendorManuallyChosen
         let oldHighlightEnabled = tab.highlightEnabled
+        // A family the FINGERPRINT chose is written onto `controller.host` by
+        // `adoptVendor`, so `open` would read it as a saved choice and switch
+        // detection off for good on the successor — while the tab flag said
+        // it was nobody's choice. Open with `.auto`, then hand the family and
+        // the provisional lock to the new controller below.
+        let carriedAuto = !oldManual && oldVendor != .auto
+        if carriedAuto { host.vendor = .auto }
         let index = tabs.firstIndex { $0.id == tab.id }
         close(tab: tab)
         // `.complete`: the controller's host is the one this session actually
@@ -1143,6 +1170,13 @@ final class AppModel: ObservableObject {
             // enabled) and the on/off state; once the session connects, the
             // onStatus/onData path schedules the first paint.
             newTab.highlightVendor = oldVendor
+            if carriedAuto {
+                switch newTab.content {
+                case .ssh(let controller): controller.carryAutoDetected(oldVendor)
+                case .serial(let controller): controller.carryAutoDetected(oldVendor)
+                case .local: break
+                }
+            }
             // Carrying the toggle over is not the user toggling: the didSet
             // writes `highlightDefault` for the NEXT tab, and an automatic
             // reconnect of a tab the user had switched off was silently
@@ -1260,7 +1294,14 @@ final class AppModel: ObservableObject {
         // The token is dropped on purpose: the monitor lives for the whole run
         // of the app and is never removed.
         _ = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Caps Lock (and the keypad/function bits) are in
+            // `deviceIndependentFlagsMask` and are not part of the chord:
+            // with Caps Lock on, `flags == .command` was false, the event
+            // went to menu dispatch, and ⌘W became File → Close (the window)
+            // while ⇧⌘H became Hide — the two mistakes this monitor exists
+            // to prevent.
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .subtracting([.capsLock, .numericPad, .function])
             guard flags == .command || flags == [.command, .shift] else { return event }
             // On non-Latin layouts (Thai) charactersIgnoringModifiers is the
             // native glyph ("ธ" for the T key), so matching it alone makes

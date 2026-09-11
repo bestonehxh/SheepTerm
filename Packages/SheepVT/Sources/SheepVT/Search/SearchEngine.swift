@@ -196,6 +196,7 @@ public final class SearchEngine {
     private var cachedLimit = 0
     private var cachedBufferID: ObjectIdentifier?
     private var cachedCols = -1
+    private var cachedReshape: UInt64 = 0
 
     private var regexSource: String?
     private var regexIgnoresCase = false
@@ -258,10 +259,16 @@ public final class SearchEngine {
     /// renumbered under us: a different buffer, or a different width.
     private func syncBuffer(_ buffer: Buffer) {
         let id = ObjectIdentifier(buffer)
-        guard id != cachedBufferID || buffer.cols != cachedCols else { return }
+        // `reshapeCount`, not `rows`: a shrink and a grow between two scans
+        // leave `rows` where it was while the rows themselves have been
+        // freed and re-created — the ABA the row cache cannot see (see
+        // `Buffer.reshapeCount`).
+        guard id != cachedBufferID || buffer.cols != cachedCols
+            || buffer.reshapeCount != cachedReshape else { return }
         invalidateAll()
         cachedBufferID = id
         cachedCols = buffer.cols
+        cachedReshape = buffer.reshapeCount
     }
 
     /// Point the caches at the buffer in front of us and work out how this pass
@@ -1212,7 +1219,19 @@ public final class SearchEngine {
     /// shaped like that costs O(line) PER MATCH and a 20,000-scalar line with
     /// 10,000 matches took 2.4 s on the paint path. Past the budget the line's
     /// list is cut short; `regexBudgetExhaustions` counts it for the tests.
-    static func regexBudget(for scalarCount: Int) -> Int { 64 * scalarCount + 1_000_000 }
+    ///
+    /// Capped in absolute terms as well: the linear bound is a bound per
+    /// LINE, and one logical line can be the whole ring — a `cat`ed blob at
+    /// the default 10,000 × 200 is two million scalars, which the linear rule
+    /// alone let spend 129M steps ≈ 1.2 s on the paint path, again on every
+    /// output byte because the blob is the cursor's line and regex cannot
+    /// resume. 16M steps is ~150 ms here and still above what ordinary
+    /// patterns need on that line (`[0-9]+\.[0-9]+`: ~10M); a pattern past it
+    /// is reported "too complex" rather than allowed to stall the frame.
+    static let regexBudgetCeiling = 16_000_000
+    static func regexBudget(for scalarCount: Int) -> Int {
+        Swift.min(64 * scalarCount + 1_000_000, regexBudgetCeiling)
+    }
     public private(set) var regexBudgetExhaustions = 0
 
     private func regexRanges(in scalars: [Unicode.Scalar],

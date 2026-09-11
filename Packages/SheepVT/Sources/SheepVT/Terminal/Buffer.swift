@@ -75,6 +75,15 @@ public final class Buffer {
     @exclusivity(unchecked) public private(set) var rows: Int
     /// How many lines of history this buffer may keep beyond the screen.
     @exclusivity(unchecked) public private(set) var scrollback: Int
+    /// Bumped by every `resize`. A cache keyed on a row's identity and
+    /// generation cannot tell a row from its successor at the same line
+    /// number after a height shrink and grow: `pop` frees the Row, the grow
+    /// allocates a new one, malloc hands back the same address, and a row
+    /// written the same number of times reaches the same generation — so
+    /// the search served the text of a row that no longer existed (30 of
+    /// 200 rounds). The renderer drops its row caches on every resize; this
+    /// lets the search engine do the same without being told.
+    public private(set) var reshapeCount: UInt64 = 0
 
     /// Absolute line index of screen row 0.
     @exclusivity(unchecked) public var ybase: Int = 0
@@ -287,6 +296,7 @@ public final class Buffer {
         let nc = Swift.max(newCols, 1)
         let nr = Swift.max(newRows, 1)
         let oldCols = cols
+        reshapeCount &+= 1
 
         let newMax = hasScrollback ? nr + scrollback : nr
         if newMax > lines.maxLength { lines.setMaxLength(newMax) }

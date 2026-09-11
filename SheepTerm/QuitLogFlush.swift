@@ -77,7 +77,13 @@ final class QuitLogFlush {
     /// Never decreases: each reading is a floor, and the last one before the
     /// report is the one that counts.
     private func accountDropped() {
-        droppedBytes = Swift.max(droppedBytes, (logger?.refusedBytes ?? 0) + gate.outstandingBytes)
+        // No logger (session logging off): nothing is ever refused, so a
+        // chunk still in the gate at the instant of a reading is simply one
+        // whose release has not run yet. Booking it as dropped — and `max`
+        // then keeping that transient forever — put "4 KB of output at the
+        // end not written" on the quit alert for a tab that has no log file.
+        guard let logger else { return }
+        droppedBytes = Swift.max(droppedBytes, logger.refusedBytes + gate.outstandingBytes)
     }
 
     /// Re-read the accounting at reporting time. The reading taken when the

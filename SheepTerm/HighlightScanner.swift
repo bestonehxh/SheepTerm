@@ -907,6 +907,18 @@ struct VendorFingerprint {
     /// Nothing more can change: the budget is spent or the most specific
     /// family matched.
     private var spent = false
+
+    /// Start out already locked on `vendor`, as if this fingerprint had
+    /// detected it: only a MORE specific family can replace it from here.
+    /// For a reconnect — the successor controller gets a fresh fingerprint,
+    /// and one with no lock would have let a generic signature in the
+    /// reconnected stream (a neighbour table naming Linux) replace the
+    /// family the previous session had already pinned down.
+    mutating func seed(with vendor: Vendor) {
+        guard let priority = Self.signatures.firstIndex(where: { $0.0 == vendor }) else { return }
+        lockedPriority = priority
+        if priority == 0 { spent = true }
+    }
     /// Total bytes examined so far. Past `budget`, give up: a banner shows up
     /// in the first handful of kilobytes or not at all, and an endless scan
     /// of a `cat bigfile` must not cost anything.

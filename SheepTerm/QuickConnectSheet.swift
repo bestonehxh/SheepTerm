@@ -19,6 +19,11 @@ struct QuickConnectSheet: View {
     @State private var name = ""
     @State private var address = ""
     @State private var port = "22"
+    /// Whether the user touched the Port field. `parsedPort` lets a `:port`
+    /// in the Host field win over the DEFAULT 22, not over a 22 the user
+    /// typed back deliberately — the same `portEdited` rule HostEditSheet
+    /// has; testing `value == 22` alone could not tell the two apart.
+    @State private var portEdited = false
 
     // Credential
     @State private var credentialSelection: UUID?   // nil = enter manually
@@ -73,6 +78,7 @@ struct QuickConnectSheet: View {
                             .foregroundStyle(.red)
                     }
                     TextField("Port", text: $port, prompt: Text("22"))
+                        .onChange(of: port) { portEdited = true }
                     if let portError {
                         Text(portError)
                             .font(.system(size: 10))
@@ -298,7 +304,7 @@ struct QuickConnectSheet: View {
         guard let value = Int(trimmed), (1...65535).contains(value) else {
             return trimmed.isEmpty ? splitTarget?.port : nil
         }
-        if let fromTarget = splitTarget?.port, value == 22 { return fromTarget }
+        if let fromTarget = splitTarget?.port, !portEdited { return fromTarget }
         return value
     }
 

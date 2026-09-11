@@ -861,20 +861,30 @@ nonisolated final class SSHWorker: Sendable {
         return session
     }
 
+    /// Prefix of every `onClosed` message that means "the host key was
+    /// refused" — a decision, which the controller must not hand to
+    /// auto-reconnect as if it were a dropped link. See `verifyHostKey`.
+    static let hostKeyRefusedPrefix = "host key refused: "
+
     private func verifyHostKey(_ session: ssh_session) -> Bool {
         let state = ssh_session_is_known_server(session)
         // Fail closed: an unreadable/corrupt known_hosts must never look
         // like "first connection" — that would silently disable MITM
         // protection and overwrite the stored key.
+        // Every refusal below starts with `hostKeyRefusedPrefix`: the
+        // controller keys on it to give the tab a status auto-reconnect
+        // leaves alone. A refused host key is a decision, not a link drop —
+        // retried, it re-raised the MITM warning three times and spent the
+        // reconnect budget on a device that would never be trusted that way.
         if state == SSH_KNOWN_HOSTS_ERROR {
-            onClosed?("cannot read ~/.ssh/known_hosts — refusing to trust any host key. Fix or remove the file, then reconnect.")
+            onClosed?(Self.hostKeyRefusedPrefix + "cannot read ~/.ssh/known_hosts — refusing to trust any host key. Fix or remove the file, then reconnect.")
             return false
         }
         if state == SSH_KNOWN_HOSTS_OK {
             return true
         }
         if state == SSH_KNOWN_HOSTS_CHANGED {
-            onClosed?("⚠️ HOST KEY CHANGED — possible man-in-the-middle. If the device was reinstalled, remove its entry from ~/.ssh/known_hosts and reconnect.")
+            onClosed?(Self.hostKeyRefusedPrefix + "⚠️ HOST KEY CHANGED — possible man-in-the-middle. If the device was reinstalled, remove its entry from ~/.ssh/known_hosts and reconnect.")
             return false
         }
         if state == SSH_KNOWN_HOSTS_OTHER {
@@ -888,7 +898,7 @@ nonisolated final class SSHWorker: Sendable {
             // asks; we cannot ask mid-handshake, so we refuse and say how to
             // proceed — the same shape as CHANGED, which is the same attack
             // with the same key type.
-            onClosed?("⚠️ HOST KEY TYPE CHANGED — the server offers a key of a type that is not the one "
+            onClosed?(Self.hostKeyRefusedPrefix + "⚠️ HOST KEY TYPE CHANGED — the server offers a key of a type that is not the one "
                       + "pinned in ~/.ssh/known_hosts (possible man-in-the-middle). If the device was "
                       + "upgraded or reinstalled, remove its entry from ~/.ssh/known_hosts and reconnect.")
             return false

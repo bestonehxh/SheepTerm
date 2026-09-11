@@ -139,8 +139,15 @@ final class CredentialStore: ObservableObject {
                     _ = try FileManager.default.replaceItemAt(backupURL, withItemAt: stagingURL)
                 } catch {
                     try? FileManager.default.removeItem(at: stagingURL)
-                    NSLog("SheepTerm: could not back up credentials.json: %@",
+                    // Never overwrite a file that could not be backed up: an
+                    // existing file we cannot READ (permissions, a cloud file
+                    // never downloaded) fails the copy for the same reason,
+                    // and the atomic write below would then replace the only
+                    // copy of every credential — orphaning every Keychain
+                    // item, since they are keyed by the ids in that file.
+                    NSLog("SheepTerm: could not back up credentials.json (%@) — not overwriting it",
                           error.localizedDescription)
+                    throw error
                 }
             }
             try data.write(to: Self.fileURL, options: .atomic)
@@ -166,7 +173,7 @@ final class CredentialStore: ObservableObject {
         alert.messageText = "Credentials not saved"
         alert.informativeText = """
             SheepTerm could not write credentials.json (\(error.localizedDescription)). \
-            Recent changes to your saved hosts may be lost the next time SheepTerm quits.
+            The credential you just changed is not saved; its password was not stored either.
             """
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -178,7 +185,12 @@ final class CredentialStore: ObservableObject {
         noteUserMutation()
         credentials.append(credential)
         uiTrace("CredentialStore.add appended \(credential.name) → \(credentials.count) entries")
-        save()
+        // The Keychain item is keyed by an id that exists only in
+        // credentials.json. If that file did not take the new entry, a
+        // password stored anyway is an orphan nothing can ever reach — the
+        // list forgets the credential at the next launch and the Keychain
+        // keeps its secret forever. `save()` has already told the user.
+        guard save() else { return credential }
         // The Keychain CAN refuse (locked keychain, denied access). Saying
         // nothing left the credential listed as if it had a password, and
         // every connect would then prompt with no clue why — the failure has

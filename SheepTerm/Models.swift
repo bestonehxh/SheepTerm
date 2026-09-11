@@ -390,8 +390,18 @@ enum ConfigurationHygiene {
     /// Strips control characters and caps the length — exactly what
     /// `AppModel.confirmImport` did inline. It lives here so the restore path
     /// applies the same rule rather than a copy of it that can drift.
+    /// C0 and C1 CONTROL characters only. `CharacterSet.controlCharacters`
+    /// is Cc AND Cf, and Cf is the zero-width joiner in "🏳️‍🌈", the ZWNJ that
+    /// Persian spelling depends on, the BOM: stripping those rewrote names
+    /// and then reported "had control characters removed" on every import.
+    static let controlOnly: CharacterSet = {
+        var set = CharacterSet(charactersIn: Unicode.Scalar(0)...Unicode.Scalar(0x1F))
+        set.insert(charactersIn: Unicode.Scalar(0x7F)...Unicode.Scalar(0x9F))
+        return set
+    }()
+
     static func sanitizedName(_ text: String) -> String {
-        let noControls = text.components(separatedBy: .controlCharacters).joined()
+        let noControls = text.components(separatedBy: controlOnly).joined()
         return String(noControls.prefix(maxNameLength))
     }
 
@@ -408,7 +418,7 @@ enum ConfigurationHygiene {
             // where a newline is a different (wrong) value, not a long one.
             for keyPath in [\Host.address, \Host.username] {
                 let value = hosts[index][keyPath: keyPath]
-                let cleaned = value.components(separatedBy: .controlCharacters).joined()
+                let cleaned = value.components(separatedBy: controlOnly).joined()
                 if cleaned != value {
                     hosts[index][keyPath: keyPath] = cleaned
                     report.cleanedFields += 1
@@ -554,7 +564,9 @@ enum ConnectParser {
     static func looksLikeIPv6(_ text: String) -> Bool {
         let parts = text.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
         guard let address = parts.first, !address.isEmpty else { return false }
-        guard address.allSatisfy({ $0.isHexDigit || $0 == ":" || $0 == "." }) else { return false }
+        // `isHexDigit` alone admits fullwidth Ａ–Ｆ／０–９, which made
+        // "ＡＢ::１" a Connect row.
+        guard address.allSatisfy({ ($0.isASCII && $0.isHexDigit) || $0 == ":" || $0 == "." }) else { return false }
         if parts.count == 2 {
             let zone = parts[1]
             guard !zone.isEmpty, zone.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else { return false }
@@ -677,7 +689,15 @@ final class HostStore: ObservableObject {
     /// Set when a corrupt file was found at launch: blocks automatic
     /// writes until the first explicit user mutation, so a corrupt
     /// original is never overwritten by empty in-memory state.
-    private var suppressWritesAfterCorruptLoad = false
+    /// Per FILE, not one flag for both: with one flag a corrupt hosts.json
+    /// held every recents.json write for the whole session although that file
+    /// was fine, and a connect's recent never reached the disk.
+    private var suppressHostsWrites = false
+    private var suppressRecentsWrites = false
+    /// A recent that `noteRecent` could not write (writes held) and that the
+    /// next real save has to carry to disk — `noteRecent` is not a user
+    /// mutation, so nothing else would.
+    private var recentsPendingWrite = false
 
     /// Test hook: when set, hosts/recents live here instead of
     /// Application Support. Production code never sets it.
@@ -700,10 +720,9 @@ final class HostStore: ObservableObject {
         let recentsLoad = Self.loadList([Host].self, from: Self.recentsURL)
         recents = recentsLoad.value
         let warnings = [groupsLoad.warning, recentsLoad.warning].compactMap { $0 }
-        if !warnings.isEmpty {
-            dataLoadWarning = warnings.joined(separator: "\n")
-            suppressWritesAfterCorruptLoad = true
-        }
+        if !warnings.isEmpty { dataLoadWarning = warnings.joined(separator: "\n") }
+        suppressHostsWrites = groupsLoad.warning != nil
+        suppressRecentsWrites = recentsLoad.warning != nil
         knownGroupsMtime = Self.mtime(of: Self.fileURL)
         knownRecentsMtime = Self.mtime(of: Self.recentsURL)
     }
@@ -723,8 +742,18 @@ final class HostStore: ObservableObject {
             // cloud file that never downloaded) must NOT look like an empty
             // list: saving over it would destroy the data it is guarding.
             if !FileManager.default.fileExists(atPath: url.path) { return ([], nil) }
-            let warning = "\(url.lastPathComponent) could not be read (\(error.localizedDescription)). "
-                + "SheepTerm started with an empty list and will not overwrite the file until you change something."
+            // Set aside, exactly as an undecodable file is: left in place,
+            // the first user edit's `.bak` copy fails for the same reason the
+            // read did, and the atomic write then replaces the only copy —
+            // measured, the original was gone and the `.bak` was an older
+            // version. A rename needs no read permission on the file.
+            let corruptURL = url.appendingPathExtension("corrupt-\(corruptStamp())")
+            let setAside = (try? FileManager.default.moveItem(at: url, to: corruptURL)) != nil
+            let warning = setAside
+                ? "\(url.lastPathComponent) could not be read (\(error.localizedDescription)); "
+                    + "it was preserved as \(corruptURL.lastPathComponent) and the list starts empty."
+                : "\(url.lastPathComponent) could not be read (\(error.localizedDescription)) and could not "
+                    + "be set aside. SheepTerm started with an empty list and will not overwrite the file."
             NSLog("SheepTerm: %@", warning)
             return ([], warning)
         }
@@ -768,7 +797,8 @@ final class HostStore: ObservableObject {
         recents = recentsLoad.value
         let warnings = [groupsLoad.warning, recentsLoad.warning].compactMap { $0 }
         dataLoadWarning = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
-        suppressWritesAfterCorruptLoad = !warnings.isEmpty
+        suppressHostsWrites = groupsLoad.warning != nil
+        suppressRecentsWrites = recentsLoad.warning != nil
         knownGroupsMtime = Self.mtime(of: Self.fileURL)
         knownRecentsMtime = Self.mtime(of: Self.recentsURL)
         // The dataset was replaced wholesale, so what this session had deleted
@@ -783,7 +813,8 @@ final class HostStore: ObservableObject {
     /// Every public mutator calls this first — the user's own change is
     /// what re-arms saving after a corrupt load.
     private func noteUserMutation() {
-        suppressWritesAfterCorruptLoad = false
+        suppressHostsWrites = false
+        suppressRecentsWrites = false
     }
 
     /// For the one caller that mutates `groups` directly instead of going
@@ -797,12 +828,19 @@ final class HostStore: ObservableObject {
         if write(groups, to: Self.fileURL) {
             knownGroupsMtime = Self.mtime(of: Self.fileURL)
         }
+        // A user edit re-armed writes; recents that a connect could not write
+        // while they were held go now, or a quit before the next recents
+        // mutator would lose the session's connections.
+        if recentsPendingWrite { saveRecents() }
     }
 
     private func saveRecents() {
         mergeRecentsFromDiskIfNeeded()
         if write(recents, to: Self.recentsURL) {
             knownRecentsMtime = Self.mtime(of: Self.recentsURL)
+            recentsPendingWrite = false
+        } else if suppressRecentsWrites {
+            recentsPendingWrite = true
         }
     }
 
@@ -844,14 +882,19 @@ final class HostStore: ObservableObject {
             // quarantine exists to break.
             NSLog("SheepTerm: could not set aside unreadable %@: %@",
                   url.lastPathComponent, error.localizedDescription)
+            let held = url == Self.recentsURL ? suppressRecentsWrites : suppressHostsWrites
             let warning = "\(url.lastPathComponent) was changed by something else, could not be read, "
                 + "and could not be set aside either (\(error.localizedDescription)). "
-                + "SheepTerm saved what it had, which replaced it."
+                + (held ? "SheepTerm is holding its own save until you change something."
+                        : "SheepTerm saved what it had, which replaced it.")
             dataLoadWarning = [dataLoadWarning, warning].compactMap { $0 }.joined(separator: "\n")
             return false
         }
+        let held = url == Self.recentsURL ? suppressRecentsWrites : suppressHostsWrites
         let warning = "\(url.lastPathComponent) was changed by something else and could not be read. "
-            + "It was preserved as \(corruptURL.lastPathComponent); SheepTerm saved what it had."
+            + "It was preserved as \(corruptURL.lastPathComponent); "
+            + (held ? "SheepTerm is holding its own save until you change something."
+                    : "SheepTerm saved what it had.")
         NSLog("SheepTerm: %@", warning)
         dataLoadWarning = [dataLoadWarning, warning].compactMap { $0 }.joined(separator: "\n")
         return true
@@ -964,7 +1007,8 @@ final class HostStore: ObservableObject {
     /// next launch.
     @discardableResult
     private func write(_ value: some Encodable, to url: URL) -> Bool {
-        guard !suppressWritesAfterCorruptLoad else {
+        let suppressed = url == Self.recentsURL ? suppressRecentsWrites : suppressHostsWrites
+        guard !suppressed else {
             NSLog("SheepTerm: write to %@ suppressed until the first user change (corrupt previous file was preserved)",
                   url.lastPathComponent)
             return false
@@ -984,8 +1028,15 @@ final class HostStore: ObservableObject {
                     _ = try FileManager.default.replaceItemAt(backupURL, withItemAt: stagingURL)
                 } catch {
                     try? FileManager.default.removeItem(at: stagingURL)
-                    NSLog("SheepTerm: could not back up %@: %@",
+                    // Refuse, do not proceed: a file that cannot be copied
+                    // is most often one that cannot be READ, and writing over
+                    // it would destroy the only copy of whatever it holds.
+                    // The change stays in memory and is retried by the next
+                    // save; losing a change is recoverable, losing the file
+                    // is not.
+                    NSLog("SheepTerm: could not back up %@ (%@) — not overwriting it",
                           url.lastPathComponent, error.localizedDescription)
+                    return false
                 }
             }
             try data.write(to: url, options: .atomic)
@@ -1181,6 +1232,10 @@ final class HostStore: ObservableObject {
                     merged.credentialID = current.credentialID
                     merged.id = current.id
                     groups[index].hosts[hostIndex] = merged
+                    // As `updateHost` does: the recent keyed by the old
+                    // target follows the edit instead of pointing at a
+                    // connection that no longer exists.
+                    updateRecents(from: current, to: merged)
                     stats.replacedHosts += 1
                 } else {
                     var added = inc
@@ -1272,6 +1327,9 @@ final class HostStore: ObservableObject {
             changed = true
         }
         guard changed else { return }
+        // The pre-edit target no longer exists as a saved host; a newer
+        // recents.json from another copy must not bring it back.
+        if old.connectionKey != new.connectionKey { deletedRecentKeys.insert(old.connectionKey) }
         var seen = Set<String>()
         recents = recents.filter { seen.insert($0.connectionKey).inserted }
         if recents.count > Self.maxRecents {
@@ -1289,6 +1347,7 @@ final class HostStore: ObservableObject {
         // A removed host must not linger in Recent — it can no longer be
         // connected to.
         let countBefore = recents.count
+        deletedRecentKeys.insert(host.connectionKey)     // or a newer recents.json puts it back
         recents.removeAll { $0.sameConnection(as: host) }
         if recents.count != countBefore { saveRecents() }
         save()
@@ -1301,8 +1360,13 @@ final class HostStore: ObservableObject {
     /// Counts recents too: the delete dialog quoting a smaller number than
     /// the change actually affects is worse than no number.
     func hostCount(usingCredential id: UUID) -> Int {
-        groups.reduce(0) { $0 + $1.hosts.filter { $0.credentialID == id }.count }
-            + recents.filter { $0.credentialID == id }.count
+        // Every connect writes a recent carrying the credential, so a recent
+        // whose target is a saved host is that host again, not a second one
+        // — counted twice, the delete dialog doubled its number.
+        let saved = groups.flatMap(\.hosts)
+        let savedKeys = Set(saved.map(\.connectionKey))
+        return saved.filter { $0.credentialID == id }.count
+            + recents.filter { $0.credentialID == id && !savedKeys.contains($0.connectionKey) }.count
     }
 
     /// Detaches a credential from every host that references it (used

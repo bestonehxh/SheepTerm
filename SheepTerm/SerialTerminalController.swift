@@ -55,6 +55,17 @@ final class SerialTerminalController: NSObject {
     /// saved host's) explicit choice.
     func suppressVendorDetection() { vendorChosenByUser = true }
 
+    /// A reconnect successor takes over a family the FINGERPRINT chose in
+    /// the previous session: detection stays on (only a more specific family
+    /// can replace it), and the fresh fingerprint is seeded so a generic
+    /// signature in the reconnected stream cannot undo the previous lock.
+    /// `AppModel.reconnect` opens the successor with `.auto` so `open` does
+    /// not read the carried family as a saved choice, then calls this.
+    func carryAutoDetected(_ vendor: Vendor) {
+        fingerprint.seed(with: vendor)
+        autoDetected = true
+    }
+
     private let worker = SerialWorker()
     /// What the last `worker.write` made through `TerminalViewDelegate.send`
     /// answered. That delegate method returns Void and cannot be changed (it

@@ -78,7 +78,12 @@ extension Terminal {
 
     private func indexedColor(_ rest: String) {
         // `4 ; index ; spec [ ; index ; spec ]…`, where spec may be `?`.
-        let parts = rest.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+        // Split no further than the reply cap can use: a 7 MiB `4;0;?;0;?…`
+        // was cut down to 256 replies but still became 1.8 million Strings
+        // first. Past `maxSplits` the remainder is one piece that fails to
+        // parse as an index, which the loop already skips.
+        let parts = rest.split(separator: ";", maxSplits: 2 * palette.count + 1,
+                               omittingEmptySubsequences: false).map(String.init)
         var i = 0
         // Replies per OSC, capped: a 7 MiB `4;0;?;0;?…` under the payload cap
         // drew 1.8 million replies (45 MB) from one sequence, each one a
