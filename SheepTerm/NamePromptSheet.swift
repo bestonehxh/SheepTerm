@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// Tiny one-field prompt used for creating and renaming groups.
+/// Tiny one-field prompt used for creating and renaming groups, and for
+/// naming a section (the sub-heading inside a group). One field, one answer:
+/// where a section goes is decided by the row it was opened from, never by a
+/// second picker in here.
 struct NamePromptSheet: View {
     let title: String
     let confirmLabel: String
@@ -9,7 +12,8 @@ struct NamePromptSheet: View {
     @State private var name: String
     @Environment(\.dismiss) private var dismiss
 
-    init(title: String, confirmLabel: String = "Save", initialName: String = "", onCommit: @escaping (String) -> Void) {
+    init(title: String, confirmLabel: String = "Save", initialName: String = "",
+         onCommit: @escaping (String) -> Void) {
         self.title = title
         self.confirmLabel = confirmLabel
         self.onCommit = onCommit
@@ -33,6 +37,7 @@ struct NamePromptSheet: View {
         }
         .padding(20)
         .frame(width: 300)
+        .sheepSheetChrome()
     }
 
     /// whitespacesAndNewlines, not whitespaces: a name pasted out of a

@@ -66,30 +66,22 @@ struct QuickConnectRequest: Identifiable {
     let kind: ConnectionKind
 }
 
-enum AppearanceMode: String, CaseIterable, Identifiable {
-    case system
-    case light
-    case dark
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .system: return "System"
-        case .light: return "Light"
-        case .dark: return "Dark"
-        }
-    }
-
-    var appearance: NSAppearance? {
-        switch self {
-        case .system: return nil
-        case .light: return NSAppearance(named: .aqua)
-        case .dark: return NSAppearance(named: .darkAqua)
-        }
-    }
+/// One showing of the "Add Hosts…" sheet. `groupID` is the group it was
+/// opened FROM (a group's context menu), which the sheet preselects; nil when
+/// it came from the View menu or the sidebar button and the user picks.
+/// Identifiable so `.sheet(item:)` re-presents it — a Bool flag cannot
+/// distinguish two openings and would keep the first one's group.
+struct AddHostsRequest: Identifiable {
+    let id = UUID()
+    let groupID: UUID?
 }
 
+/// One showing of the "Set Credential for Group…" sheet, for the group it was
+/// opened from. Same reason as `AddHostsRequest` for being Identifiable.
+struct GroupCredentialRequest: Identifiable {
+    let id = UUID()
+    let groupID: UUID
+}
 
 /// Read once. `ProcessInfo.environment` builds a fresh dictionary on every
 /// access, and a tracer that is off should cost a boolean.
@@ -121,6 +113,8 @@ final class AppModel: ObservableObject {
     @Published var quickConnect: QuickConnectRequest?
     @Published var showCredentials = false
     @Published var showReorderGroups = false
+    @Published var addHostsRequest: AddHostsRequest?
+    @Published var groupCredentialRequest: GroupCredentialRequest?
     @Published var sessionLogging: Bool {
         didSet {
             UserDefaults.standard.set(sessionLogging, forKey: "logSessions")
@@ -143,12 +137,6 @@ final class AppModel: ObservableObject {
                     break
                 }
             }
-        }
-    }
-    @Published var appearanceMode: AppearanceMode = .system {
-        didSet {
-            UserDefaults.standard.set(appearanceMode.rawValue, forKey: "appearanceMode")
-            NSApp.appearance = appearanceMode.appearance
         }
     }
     @Published var showStatusBar = true {
@@ -239,10 +227,13 @@ final class AppModel: ObservableObject {
         sessionLogging = UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = UserDefaults.standard.object(forKey: "autoReconnect") as? Bool ?? true
         safePasteEnabled = UserDefaults.standard.object(forKey: "safePasteEnabled") as? Bool ?? true
-        appearanceMode = AppearanceMode(
-            rawValue: UserDefaults.standard.string(forKey: "appearanceMode") ?? ""
-        ) ?? .system
-        NSApp.appearance = appearanceMode.appearance
+        // DARK, always, and nothing to choose (4.0 (5)). The chrome colours,
+        // the terminal themes and every 10 pt secondary caption in the app
+        // were picked and measured against a dark ground; the light halves
+        // were a second design nobody used and nobody checked. Forced on
+        // NSApp so a window that inherits from somewhere else cannot arrive
+        // light either.
+        NSApp.appearance = NSAppearance(named: .darkAqua)
         terminalTheme = UserDefaults.standard.string(forKey: "terminalTheme") ?? "sheepterm"
         terminalFontFamily = Theme.terminalFontFamily
         terminalFontSize = Double(Theme.terminalFontSize)
@@ -279,7 +270,7 @@ final class AppModel: ObservableObject {
                 alert.messageText = "Saved hosts could not be read"
                 alert.informativeText = warning
                 alert.addButton(withTitle: "OK")
-                alert.runModal()
+                alert.sheepStyled().runModal()
             }
             .store(in: &dataWarningSubscriptions)
         purgeTeamShareLeftovers()
@@ -300,7 +291,6 @@ final class AppModel: ObservableObject {
         sessionLogging = defaults.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
         safePasteEnabled = defaults.object(forKey: "safePasteEnabled") as? Bool ?? true
-        appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         terminalTheme = defaults.string(forKey: "terminalTheme") ?? "sheepterm"
         terminalFontFamily = Theme.terminalFontFamily
         terminalFontSize = Double(Theme.terminalFontSize)
@@ -334,15 +324,43 @@ final class AppModel: ObservableObject {
         ] as CFDictionary)
     }
 
+    /// View → Add Hosts…, the sidebar button, and a group's context menu all
+    /// land here. Presented by ContentView, for the same reason Reorder
+    /// Groups is: the sidebar leaves the hierarchy when it is hidden.
+    func showAddHosts(groupID: UUID? = nil) {
+        addHostsRequest = AddHostsRequest(groupID: groupID)
+    }
+
+    func showGroupCredential(groupID: UUID) {
+        groupCredentialRequest = GroupCredentialRequest(groupID: groupID)
+    }
+
+    /// Applies one credential to every SSH host in a group, and forgets the
+    /// password cached for each identity it changed. The cache is keyed
+    /// `user@address:port` and lives until quit, so without this the old
+    /// username keeps authenticating with the old password for the rest of
+    /// the session — the same trap `updateHost`'s caller (`HostEditSheet`)
+    /// has to avoid one host at a time.
+    func setGroupCredential(groupID: UUID, credential: Credential?) {
+        let changed = store.setCredential(id: credential?.id,
+                                          username: credential?.username,
+                                          forGroupID: groupID)
+        for change in changed { forgetCachedPassword(for: change.old) }
+    }
+
     func exportGroup(_ group: HostGroup) {
+        export([group], named: group.name)
+    }
+
+    private func export(_ groups: [HostGroup], named name: String) {
         let panel = NSSavePanel()
         if let type = UTType(filenameExtension: "sheepterm") {
             panel.allowedContentTypes = [type]
         }
-        panel.nameFieldStringValue = "\(group.name).sheepterm"
+        panel.nameFieldStringValue = "\(name).sheepterm"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let data = try ShareCodec.encode(group, sender: ShareCodec.deviceName)
+            let data = try ShareCodec.encode(groups, sender: ShareCodec.deviceName)
             try data.write(to: url, options: .atomic)
         } catch {
             // `try?` here meant a full disk or a read-only folder produced no
@@ -352,7 +370,7 @@ final class AppModel: ObservableObject {
             alert.messageText = "The group could not be exported"
             alert.informativeText = "\(url.lastPathComponent): \(error.localizedDescription)"
             alert.addButton(withTitle: "OK")
-            alert.runModal()
+            alert.sheepStyled().runModal()
         }
     }
 
@@ -393,7 +411,7 @@ final class AppModel: ObservableObject {
             alert.messageText = "Could not import \(url.lastPathComponent)"
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: "OK")
-            alert.runModal()
+            alert.sheepStyled().runModal()
             return nil
         }
     }
@@ -509,7 +527,7 @@ final class AppModel: ObservableObject {
         // and is the one they would read afterwards anyway. A quit the user
         // typed still gets the alert, because then they ARE looking.
         guard !Self.quitIsFromLogoutOrRestart() else { return }
-        alert.runModal()
+        alert.sheepStyled().runModal()
     }
 
     /// Why this quit happened, as far as the Apple Event says. `nil` for ⌘Q
@@ -541,9 +559,49 @@ final class AppModel: ObservableObject {
     /// Shared guard for every .sheepterm import path (menu panel, Finder
     /// double-click): nothing is imported without an explicit accept, and
     /// duplicates are resolved by the user — never silently (spec 0.4).
+    /// A file normally holds ONE group — nothing in this app writes a
+    /// multi-group file any more (sections live on hosts and travel inside
+    /// their group). One that arrives from elsewhere is still read: each
+    /// group gets its own dialog, in file order, and Cancel on one skips THAT
+    /// group only rather than throwing away the rest.
+    ///
+    /// Hygiene runs over every group first, so the count the user is shown is
+    /// the whole file's, and the corrections are named once.
     func confirmImport(_ payload: SharePayload) {
-        var group = payload.group
-        let sender = Self.sanitizedForDialog(payload.sender)
+        var groups = payload.allGroups
+        let hygiene = ConfigurationHygiene.sanitize(&groups, emptyGroupName: "Imported Group")
+        // Deduped HERE, before any count is shown: `applyImport` collapses a
+        // row the file repeated exactly, so "Import “Lab” (12 hosts)?" over
+        // such a file was a promise of twelve that only eleven kept. The SAME
+        // function the store uses (`HostStore.importRows`), and after hygiene,
+        // for the reason `dedupedExactRepeats` documents — two rows only
+        // BECOME identical once a stripped control character has been applied.
+        // Counted PER GROUP: the note belongs on the dialog of the group whose
+        // rows were collapsed. On the first dialog it read as a fact about
+        // that group, which for a twelve-group file it usually was not.
+        var repeated = [Int](repeating: 0, count: groups.count)
+        for index in groups.indices {
+            let before = groups[index].hosts.count
+            groups[index].hosts = HostStore.importRows(groups[index].hosts)
+            repeated[index] = before - groups[index].hosts.count
+        }
+        // Said once: the same hygiene paragraph under twelve dialogs is noise.
+        var hygieneNote = hygiene.summary.map { "\n\n\($0)" } ?? ""
+        for (index, group) in groups.enumerated() {
+            var corrections = hygieneNote
+            hygieneNote = ""
+            // Short, because an alert whose text runs past ~3 rendered lines
+            // is laid out the wide way (see `NSAlert.sheepStyled`).
+            if repeated[index] > 0 {
+                corrections += "\n\n\(repeated[index]) repeated "
+                    + "row\(repeated[index] == 1 ? "" : "s") collapsed."
+            }
+            confirmImport(group: group, sender: payload.sender, corrections: corrections)
+        }
+    }
+
+    private func confirmImport(group: HostGroup, sender rawSender: String, corrections: String) {
+        let sender = Self.sanitizedForDialog(rawSender)
         // Control characters in a stored group or host name would break the
         // sidebar — strip them from the value itself, not just the dialog.
         // Host names reach further than the group name does: the sidebar, the
@@ -552,21 +610,21 @@ final class AppModel: ObservableObject {
         // port; it is the SAME pass `BackupManager` runs on a restore, so the
         // two ways someone else's file becomes your configuration cannot
         // drift apart again.
-        var groups = [group]
-        let hygiene = ConfigurationHygiene.sanitize(&groups, emptyGroupName: "Imported Group")
-        group = groups[0]
-        // Not silent: a name that was trimmed or a baud that was replaced is
-        // still the user's data, and they get to see which of it changed
-        // before they accept the import.
-        let corrections = hygiene.summary.map { "\n\n\($0)" } ?? ""
-
+        // Hygiene already ran over the whole payload in the caller; the
+        // corrections it found are named in the FIRST dialog. (Not silent: a
+        // name that was trimmed or a baud that was replaced is still the
+        // user's data, and they get to see what changed before accepting.)
         guard let existing = store.existingGroup(matching: group) else {
             let alert = NSAlert()
-            alert.messageText = "Import group?"
-            alert.informativeText = "“\(group.name)” (\(group.hosts.count) hosts) from \(sender) will be added as a new group. Passwords are not included.\(corrections)"
+            // Counts on the message line, detail short: an alert whose text
+            // runs long is laid out with the icon on the LEFT (see
+            // `NSAlert.sheepStyled`). `corrections` is the exception — it
+            // names changes made to the user's own data and is allowed to.
+            alert.messageText = "Import “\(group.name)” (\(group.hosts.count) hosts)?"
+            alert.informativeText = "From \(sender). Passwords are not included.\(corrections)"
             alert.addButton(withTitle: "Import")
             alert.addButton(withTitle: "Cancel")
-            if alert.runModal() == .alertFirstButtonReturn {
+            if alert.sheepStyled().runModal() == .alertFirstButtonReturn {
                 _ = store.applyImport(group, action: .createNew, replace: [:])
             }
             return
@@ -574,16 +632,15 @@ final class AppModel: ObservableObject {
 
         // 0.4 (ก): duplicate group — three choices, both host counts shown.
         let alert = NSAlert()
-        alert.messageText = "Group “\(existing.name)” already exists"
-        alert.informativeText = """
-        Your group has \(existing.hosts.count) hosts — the file from \(sender) contains \(group.hosts.count) hosts.
-
-        Merge adds new hosts to your group and asks about each conflicting host. Create New Group imports it as a separate numbered group. Passwords are not included.\(corrections)
-        """
+        alert.messageText = "“\(existing.name)” already exists"
+        // The three buttons say what the choices do; this line only has to
+        // say what is on each side of it.
+        alert.informativeText = "Yours: \(existing.hosts.count) hosts. "
+            + "The file from \(sender): \(group.hosts.count).\(corrections)"
         alert.addButton(withTitle: "Merge into Existing")
         alert.addButton(withTitle: "Create New Group")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
+        switch alert.sheepStyled().runModal() {
         case .alertFirstButtonReturn:
             resolveImportConflicts(group, into: existing)
         case .alertSecondButtonReturn:
@@ -598,11 +655,14 @@ final class AppModel: ObservableObject {
     /// every conflict has an answer — Cancel aborts the whole import.
     private func resolveImportConflicts(_ incoming: HostGroup, into existing: HostGroup) {
         let conflicts = store.conflictingHosts(incoming: incoming, existing: existing)
-        var decisions: [UUID: Bool] = [:]
+        // Keyed by the ROW the pairing chose, not by the incoming host's id: a
+        // file can carry two rows with one id (hand-written, or one host
+        // copied and re-addressed), and then one answer decided both of them.
+        var decisions: [Int: Bool] = [:]
         var applyToAll: Bool?
         for (index, pair) in conflicts.enumerated() {
             if let applyToAll {
-                decisions[pair.incoming.id] = applyToAll
+                decisions[pair.incomingIndex] = applyToAll
                 continue
             }
             let alert = NSAlert()
@@ -618,10 +678,10 @@ final class AppModel: ObservableObject {
                 target: nil, action: nil
             )
             alert.accessoryView = checkbox
-            let response = alert.runModal()
+            let response = alert.sheepStyled().runModal()
             if response == .alertThirdButtonReturn { return } // abort — nothing written yet
             let replace = response == .alertFirstButtonReturn
-            decisions[pair.incoming.id] = replace
+            decisions[pair.incomingIndex] = replace
             if checkbox.state == .on { applyToAll = replace }
         }
         _ = store.applyImport(incoming, action: .merge, replace: decisions)
@@ -968,11 +1028,12 @@ final class AppModel: ObservableObject {
             store.save()
             return
         }
-        // Same target, already saved. Keep the entry's own id: the sidebar
+        // Same target, already saved. Keep the entry's own id — the sidebar
         // rows and everything else holding a host id are keyed on it, and a
-        // fresh id would read as a delete plus an insert.
-        var updated = host
-        updated.id = existing.id
+        // fresh id would read as a delete plus an insert — and its SECTION,
+        // which this form has never heard of: writing its nil over the
+        // heading unfiled the host as a side effect of "Update Saved Host".
+        var updated = host.carryingLocalFiling(from: existing)
         // The Session name field is optional and the form fills it with the
         // address (or the device leaf) when it is left empty. That is not a
         // name the user asked to save, so it neither counts as a change nor
@@ -995,7 +1056,7 @@ final class AppModel: ObservableObject {
                 + "\n\nUpdate rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered."
             alert.addButton(withTitle: "Update Saved Host")
             alert.addButton(withTitle: "Keep Saved Host")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
             // updateHost finds the entry by id, carries matching recents over,
             // re-arms writes and saves.
             self.store.updateHost(updated)

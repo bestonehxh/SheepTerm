@@ -164,7 +164,7 @@ final class CredentialStore: ObservableObject {
         alert.messageText = "Saved credentials could not be read"
         alert.informativeText = warning
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.sheepStyled().runModal()
     }
 
     private static func reportSaveFailure(_ error: Error) {
@@ -176,7 +176,7 @@ final class CredentialStore: ObservableObject {
             The credential you just changed is not saved; its password was not stored either.
             """
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.sheepStyled().runModal()
     }
 
     @discardableResult
@@ -211,7 +211,7 @@ final class CredentialStore: ObservableObject {
             the credential is added again with the Keychain unlocked.
             """
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.sheepStyled().runModal()
     }
 
     func credential(for id: UUID?) -> Credential? {
@@ -265,7 +265,7 @@ final class CredentialStore: ObservableObject {
             remove it in Keychain Access if you want it gone.
             """
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.sheepStyled().runModal()
     }
 }
 

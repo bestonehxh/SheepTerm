@@ -157,6 +157,7 @@ struct HostEditSheet: View {
         }
         .padding(20)
         .frame(width: 400)
+        .sheepSheetChrome()
         .onAppear {
             // Only when this sheet can show a password field. Editing a
             // serial host is Name + Device path — taking the user's input

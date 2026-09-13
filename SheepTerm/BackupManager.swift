@@ -64,7 +64,10 @@ enum BackupManager {
     /// whole UserDefaults domain would also drag window frames and
     /// SwiftUI's own bookkeeping onto the other Mac.
     private static let settingKeys = [
-        "appearanceMode", "autoReconnect", "chromeStyle", "collapsedGroups",
+        // "appearanceMode" is gone (4.0 (5): the app is dark only). An old
+        // backup that carries it is not an error — the restore only writes
+        // keys that are still on this list, so it is simply not applied.
+        "autoReconnect", "chromeStyle", "collapsedGroups", "collapsedHostSections",
         "highlightDefault", "logSessions", "recentsShown", "showRecents",
         "safePasteDelayMilliseconds", "safePasteEnabled",
         "showStatusBar", "sidebarWidth", "statusShowClock", "statusShowHints",
@@ -322,7 +325,7 @@ enum BackupManager {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Restore")
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
 
         // Nothing is touched until every current file is safely copied aside:
         // a half-made snapshot used to be followed by a restore anyway, which
@@ -367,7 +370,7 @@ enum BackupManager {
         done.informativeText = snapshotNote + (hygiene.summary.map { "\n\n\($0)" } ?? "")
         done.addButton(withTitle: "OK")
         if safety != nil { done.addButton(withTitle: "Show Backup Folder") }
-        if done.runModal() == .alertSecondButtonReturn, let safety {
+        if done.sheepStyled().runModal() == .alertSecondButtonReturn, let safety {
             NSWorkspace.shared.activateFileViewerSelecting([safety])
         }
     }
@@ -646,6 +649,6 @@ enum BackupManager {
         alert.informativeText = detail
         alert.alertStyle = style
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.sheepStyled().runModal()
     }
 }

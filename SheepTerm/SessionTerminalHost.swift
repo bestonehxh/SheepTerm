@@ -310,7 +310,7 @@ final class SessionTerminalHost {
             // Application-modal: nothing else in this app runs while it is up,
             // so there is no window to end — the generation check still covers
             // a cancel that arrives from a background queue's hop to main.
-            handleResponse(alert.runModal())
+            handleResponse(alert.sheepStyled().runModal())
         }
     }
 
@@ -370,7 +370,7 @@ final class SessionTerminalHost {
         if let window = terminalView.window, window.attachedSheet == nil {
             alert.beginSheetModal(for: window)
         } else {
-            alert.runModal()
+            alert.sheepStyled().runModal()
         }
     }
 
@@ -391,7 +391,7 @@ final class SessionTerminalHost {
         if let window = terminalView.window, window.attachedSheet == nil {
             alert.beginSheetModal(for: window)
         } else {
-            alert.runModal()
+            alert.sheepStyled().runModal()
         }
     }
 

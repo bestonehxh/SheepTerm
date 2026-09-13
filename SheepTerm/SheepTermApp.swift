@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // live session, and Escape maps to it as well.
         quit.keyEquivalent = ""
         cancel.keyEquivalent = "\r"
-        return alert.runModal() == .alertFirstButtonReturn ? .quit : .cancel
+        return alert.sheepStyled().runModal() == .alertFirstButtonReturn ? .quit : .cancel
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -254,8 +254,8 @@ final class MainWindowKeyMonitor: NSObject, ObservableObject {
     }
 }
 
-/// All menu commands live here so checkmarks (Appearance, logging, …)
-/// update live — the struct observes AppModel.
+/// All menu commands live here so checkmarks (logging, device family,
+/// terminal theme, …) update live — the struct observes AppModel.
 struct SheepTermCommands: Commands {
     @ObservedObject private var model = AppModel.shared
     @ObservedObject private var mainWindowKey = MainWindowKeyMonitor.shared
@@ -342,6 +342,11 @@ struct SheepTermCommands: Commands {
                 Label("Reorder Groups…", systemImage: "arrow.up.arrow.down")
             }
             Button {
+                model.showAddHosts()
+            } label: {
+                Label("Add Hosts…", systemImage: "tablecells")
+            }
+            Button {
                 model.toggleHighlightCurrent()
             } label: {
                 Label("Toggle Highlighting", systemImage: "highlighter")
@@ -391,16 +396,6 @@ struct SheepTermCommands: Commands {
                 }
             } label: {
                 Label("Terminal Theme", systemImage: "paintpalette")
-            }
-            Menu {
-                ForEach(AppearanceMode.allCases) { mode in
-                    Toggle(mode.label, isOn: Binding(
-                        get: { model.appearanceMode == mode },
-                        set: { _ in model.appearanceMode = mode }
-                    ))
-                }
-            } label: {
-                Label("Appearance", systemImage: "circle.lefthalf.filled")
             }
             Menu {
                 Button("Bigger") { model.stepTerminalFontSize(1) }

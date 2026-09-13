@@ -47,5 +47,6 @@ struct ReorderGroupsSheet: View {
         }
         .padding(18)
         .frame(width: 320, height: 380)
+        .sheepSheetChrome()
     }
 }

@@ -189,24 +189,27 @@ enum Theme {
     static var termBackground: SwiftUI.Color { SwiftUI.Color(nsColor: termBackgroundNS) }
 
     // MARK: Chrome — the terminal follows its theme; the chrome (top bar,
-    // sidebar, status bar) follows the app's Light/Dark appearance.
+    // sidebar, status bar) is DARK, full stop (4.0 (5)).
+    //
+    // These were `dynamicColor(light:dark:)` pairs. The light halves went
+    // with the Appearance menu: every one of them was a second design that
+    // nobody used and nobody measured, while the dark values are the ones
+    // the terminal themes, the glass materials and every 10 pt secondary
+    // caption were checked against.
 
-    static let chrome = dynamicColor(light: 0xE9EBEF, dark: 0x1C1F26)
-    static let chromeLine = dynamicColor(light: 0xD3D7DD, dark: 0x2E323B)
+    static let chrome = nsColorValue(0x1C1F26)
+    static let chromeLine = nsColorValue(0x2E323B)
     /// Opaque fill for controls that sit on a glass chrome surface.
-    static let controlFill = dynamicColor(light: 0xFDFDFE, dark: 0x30343D)
-    static let tabActive = dynamicColor(light: 0xFFFFFF, dark: 0x15171C)
-    static let tabText = dynamicColor(light: 0x1B1E24, dark: 0xFFFFFF)
-    static let dimText = dynamicColor(light: 0x5B6472, dark: 0x7D8492)
-    static let accent = dynamicColor(light: 0x2C7FB8, dark: 0x5AA5D6)
-    static let ok = dynamicColor(light: 0x2B7A46, dark: 0x7DD98C)
-    static let warn = dynamicColor(light: 0x9A6A00, dark: 0xFEBC2E)
+    static let controlFill = nsColorValue(0x30343D)
+    static let tabActive = nsColorValue(0x15171C)
+    static let tabText = nsColorValue(0xFFFFFF)
+    static let dimText = nsColorValue(0x7D8492)
+    static let accent = nsColorValue(0x5AA5D6)
+    static let ok = nsColorValue(0x7DD98C)
+    static let warn = nsColorValue(0xFEBC2E)
 
-    private static func dynamicColor(light: UInt32, dark: UInt32) -> SwiftUI.Color {
-        SwiftUI.Color(nsColor: NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return nsColor(isDark ? dark : light)
-        })
+    private static func nsColorValue(_ hex: UInt32) -> SwiftUI.Color {
+        SwiftUI.Color(nsColor: nsColor(hex))
     }
 
     static func apply(to terminalView: TerminalView) {

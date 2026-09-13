@@ -115,6 +115,7 @@ struct CredentialsSheet: View {
         }
         .padding(20)
         .frame(width: 400)
+        .sheepSheetChrome()
         .onAppear {
             AuthPrompt.forceASCIIKeyboard()
         }

@@ -188,6 +188,7 @@ struct QuickConnectSheet: View {
         }
         .padding(20)
         .frame(width: 400)
+        .sheepSheetChrome()
         .onAppear {
             guard kind == .ssh else {
                 // The serial form has no text field at all, so there is

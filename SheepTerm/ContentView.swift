@@ -254,6 +254,14 @@ struct DetailPane: View {
         .sheet(isPresented: $model.showReorderGroups) {
             ReorderGroupsSheet(store: model.store)
         }
+        // Here for the same reason as Reorder Groups above: View → Add
+        // Hosts… must work whether or not the sidebar is showing.
+        .sheet(item: $model.addHostsRequest) { request in
+            AddHostsSheet(request: request)
+        }
+        .sheet(item: $model.groupCredentialRequest) { request in
+            GroupCredentialSheet(request: request)
+        }
     }
 }
 

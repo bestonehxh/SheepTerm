@@ -27,6 +27,16 @@ struct QuickSearchView: View {
     /// unique match is ever seen.
     private static let maxResults = 8
 
+    /// The address, plus the heading when THAT is what matched: a row that
+    /// appears for a word the row does not contain looks like a bug.
+    private static func detail(for host: Host, query: String) -> String? {
+        let address = host.address.isEmpty ? nil : host.address
+        guard !query.isEmpty, let section = host.sectionName,
+              !host.name.matchesSearch(query), !host.address.matchesSearch(query),
+              section.matchesSearch(query) else { return address }
+        return address.map { "\($0) · \(section)" } ?? section
+    }
+
     /// Recents first, then the groups, stopping at the eighth match. It used
     /// to concatenate both lists and run the locale-aware filter over EVERY
     /// host before the loop below threw all but eight away — on every
@@ -41,7 +51,10 @@ struct QuickSearchView: View {
         func collect(_ hosts: [Host]) -> Bool {
             for host in hosts {
                 if !needle.isEmpty,
-                   !host.name.matchesSearch(needle), !host.address.matchesSearch(needle) {
+                   !host.name.matchesSearch(needle), !host.address.matchesSearch(needle),
+                   // The sidebar matches a host's heading too; ⌘K answering
+                   // differently to the same word would be the odd one out.
+                   !(host.sectionName?.matchesSearch(needle) ?? false) {
                     continue
                 }
                 // The recent entry and the saved host it came from are two
@@ -100,7 +113,7 @@ struct QuickSearchView: View {
                         badge: host.kind.badge,
                         badgeColor: host.kind == .serial ? Theme.warn : Theme.accent,
                         name: host.name,
-                        detail: host.address.isEmpty ? nil : host.address
+                        detail: Self.detail(for: host, query: query)
                     ) {
                         connect(host)
                     }
