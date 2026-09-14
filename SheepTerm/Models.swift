@@ -299,6 +299,106 @@ struct HostGroup: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
     var hosts: [Host]
+    /// The group's own sub-headings, in the order the sidebar shows them.
+    ///
+    /// **The group owns the list; a host only points at one of its entries**
+    /// (`Host.section`). That is what makes an EMPTY heading possible — a row
+    /// you create first and drop hosts into — and what gives the headings an
+    /// order of their own instead of "wherever the first host happens to sit".
+    ///
+    /// Never read this to draw or offer headings: read `displayedSections`,
+    /// which is the list plus any label a host carries that is not in it yet
+    /// (an old file, or a group edited by a build that predates the list).
+    var sections: [String] = []
+
+    /// Written by hand for ONE reason, and it is `sections` alone: a
+    /// synthesized `init(from:)` throws `keyNotFound` for a missing key even
+    /// when the property has a default value (measured — see ARCHITECTURE
+    /// §11). Every hosts.json written before 4.1 (2) lacks `sections`, and a
+    /// throw there does not mean "no headings", it means the whole file is
+    /// unreadable — which quarantines it and starts the user's host list empty.
+    ///
+    /// `id`, `name` and `hosts` stay REQUIRED. A group without an id is a file
+    /// we do not understand, and inventing one would quietly split the user's
+    /// data on the next merge; quarantining the file (as a host without an id
+    /// already does) leaves it for them to look at. `sections` is the
+    /// opposite: it is bookkeeping the hosts can rebuild
+    /// (`sanitizeHeadings`), so a missing key AND a malformed one both mean
+    /// "no list", never "unreadable file".
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        hosts = try container.decode([Host].self, forKey: .hosts)
+        // `try?`, not `try`: a `sections` that is there but is the WRONG SHAPE
+        // (a string, numbers, an object — a hand edit, another tool, a
+        // truncated sync) is a heading list we cannot read, and the headings
+        // are all recoverable from the hosts. Throwing would have quarantined
+        // the whole hosts.json over a field that is bookkeeping.
+        sections = (try? container.decodeIfPresent([String].self, forKey: .sections)) ?? []
+    }
+
+    init(id: UUID = UUID(), name: String, hosts: [Host], sections: [String] = []) {
+        self.id = id
+        self.name = name
+        self.hosts = hosts
+        self.sections = sections
+    }
+}
+
+extension HostGroup {
+    /// **The one source of truth for "which headings does this group show, in
+    /// what order".** The declared list first, then every host label that is
+    /// not in it, in first-appearance order.
+    ///
+    /// Everything reads this: the sidebar tree, the host `Section ▸` menu, the
+    /// Add Hosts chevron, ⌘K, `HostStore.sections(in:)`, the snapping. Two
+    /// implementations of this question is how "Floor 2" came to be offered in
+    /// one place and missing in another.
+    ///
+    /// The second half is not a migration step, it is the invariant: a label
+    /// on a host is a heading whether or not the list has caught up (an old
+    /// file, a file from another machine, a group written by an older build).
+    /// Hygiene folds those into the list on the next pass.
+    var displayedSections: [String] {
+        // By KEY (`HostStore.headingKey`), never by scanning the list per
+        // entry: this runs on every sidebar rebuild and every drag-over, and
+        // `contains(where: sameHeading)` inside the loop made it quadratic
+        // (measured: ~2 s for 800 headings over 2,000 hosts).
+        var out: [String] = []
+        var seen = Set<String>()
+        for name in sections {
+            let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let key = HostStore.headingKey(label), seen.insert(key).inserted else { continue }
+            out.append(label)
+        }
+        for host in hosts {
+            guard let label = host.sectionName, let key = HostStore.headingKey(label),
+                  seen.insert(key).inserted else { continue }
+            out.append(label)
+        }
+        return out
+    }
+
+    /// Puts `label` in the declared list unless a heading already there reads
+    /// the same. Returns true when the list actually changed, so a caller can
+    /// keep the "a no-op must not re-arm writes" rule.
+    ///
+    /// Every write that gives a host a label goes through this: after any
+    /// write, a label on a host is also in its group's list.
+    @discardableResult
+    mutating func declareHeading(_ label: String) -> Bool {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let key = HostStore.headingKey(trimmed) else { return false }
+        // By key rather than by `sameHeading` per entry: the fold is a
+        // lowercase and a split, so asking it inside the scan is the expensive
+        // half. The scan itself stays — this is one heading against a list,
+        // and callers that declare MANY assign `displayedSections` once
+        // instead of calling this in a loop (see `setSection`).
+        guard !sections.contains(where: { HostStore.headingKey($0) == key }) else { return false }
+        sections.append(trimmed)
+        return true
+    }
 }
 
 /// `port` is a plain `Int` on disk and it means two different things: a TCP
@@ -368,6 +468,12 @@ enum ConfigurationHygiene {
         var shortenedNames = 0
         /// Names that were empty afterwards and had to be given one.
         var replacedNames = 0
+        /// Section names that had nothing usable in them and were dropped —
+        /// a group's DECLARED headings, and (since round 10) host labels that
+        /// clean to nothing, which leave their host loose. Its own counter
+        /// because "shortened" reads as "your row is still there, just
+        /// shorter", and this one is a heading that is gone.
+        var droppedHeadings = 0
         /// `.ssh` hosts whose port was not a port.
         var narrowedPorts = 0
         /// `.serial` hosts whose baud rate was not a baud rate.
@@ -378,12 +484,13 @@ enum ConfigurationHygiene {
 
         var isEmpty: Bool {
             shortenedNames == 0 && replacedNames == 0 && narrowedPorts == 0 && narrowedBauds == 0
-                && cleanedFields == 0
+                && cleanedFields == 0 && droppedHeadings == 0
         }
 
         static func + (lhs: Report, rhs: Report) -> Report {
             Report(shortenedNames: lhs.shortenedNames + rhs.shortenedNames,
                    replacedNames: lhs.replacedNames + rhs.replacedNames,
+                   droppedHeadings: lhs.droppedHeadings + rhs.droppedHeadings,
                    narrowedPorts: lhs.narrowedPorts + rhs.narrowedPorts,
                    narrowedBauds: lhs.narrowedBauds + rhs.narrowedBauds,
                    cleanedFields: lhs.cleanedFields + rhs.cleanedFields)
@@ -405,6 +512,9 @@ enum ConfigurationHygiene {
                 lines.append("• \(replacedNames) entr(ies) had no usable name left and were named after "
                              + "their address.")
             }
+            if droppedHeadings > 0 {
+                lines.append("• \(droppedHeadings) empty section name(s) were dropped.")
+            }
             if cleanedFields > 0 {
                 lines.append("• \(cleanedFields) address(es) or username(s) had control characters removed.")
             }
@@ -417,7 +527,10 @@ enum ConfigurationHygiene {
                 lines.append("• \(narrowedBauds) serial host(s) had a baud rate SheepTerm cannot use "
                              + "and were set to \(Host.defaultSerialBaud).")
             }
-            return "Some entries were corrected on the way in — every one of them was kept:\n"
+            // Not "every one of them was kept": a dropped section name is a
+            // row that is gone, and the bullet below says so. Short, because
+            // the alert has to stay in the compact centred-icon layout.
+            return "Some entries were corrected on the way in:\n"
                 + lines.joined(separator: "\n")
         }
     }
@@ -447,15 +560,59 @@ enum ConfigurationHygiene {
         return set
     }()
 
+    /// U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR. Neither is a
+    /// control character (Zl/Zp, not Cc/C1), so `controlOnly` leaves them —
+    /// and a single-line `NSTextField` **draws them as a line break**: probed,
+    /// the field reports a two-line intrinsic height and inks only the first
+    /// line, so "Floor⟨U+2028⟩2" and "Floor⟨U+2028⟩3" are two headings that
+    /// both read as "Floor" on screen. ⌘V of a soft line break (Shift-Return
+    /// in TextEdit, Notes, Mail) puts one in.
+    static let lineSeparators = CharacterSet(charactersIn: "\u{2028}\u{2029}")
+
+    /// C0 and C1 CONTROL characters — including "\n" and "\t" — are stripped,
+    /// as they always were. U+2028/U+2029 are FOLDED to a space instead,
+    /// because they are not controls and a single-line field draws them as a
+    /// line break: the reader sees two words on two lines, and folding keeps
+    /// them as two words on one. That is also what `HostStore.headingKey`
+    /// folds them to (so the store thought it had ONE clean heading while the
+    /// file had two).
+    ///
+    /// Before the cap, so the fold cannot push a name over it.
     static func sanitizedName(_ text: String) -> String {
-        let noControls = text.components(separatedBy: controlOnly).joined()
-        return String(noControls.prefix(maxNameLength))
+        String(uncappedName(text).prefix(maxNameLength))
     }
 
-    static func sanitize(_ hosts: inout [Host]) -> Report {
+    /// `sanitizedName` BEFORE the cap — controls stripped, line separators
+    /// folded. Separate so a caller can ask whether the cap is what changed
+    /// a name (see `sanitize(_ hosts:)`).
+    static func uncappedName(_ text: String) -> String {
+        let noControls = text.components(separatedBy: controlOnly).joined()
+        return noControls.components(separatedBy: lineSeparators).joined(separator: " ")
+    }
+
+    /// `sanitizedName` then trimmed — the name a person SEES and the store
+    /// keeps: control characters out, line separators folded, capped, and no
+    /// surrounding whitespace or newline. One helper, because the pair was
+    /// written out by hand at a dozen call sites and two of them (Edit Host,
+    /// Quick Connect) had only the trim: a pasted U+2028 still landed in a host
+    /// name and the sidebar row drew its first line only.
+    static func cleanedName(_ text: String) -> String {
+        sanitizedName(text).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// `countSections: false` is for the GROUP pass, which counts headings
+    /// itself — once per heading per group, see `sanitize(_:emptyGroupName:)`.
+    static func sanitize(_ hosts: inout [Host], countSections: Bool = true) -> Report {
         var report = Report()
         for index in hosts.indices {
-            let cleaned = sanitizedName(hosts[index].name)
+            var cleaned = sanitizedName(hosts[index].name)
+            // When the CAP cut the name, the cut can land on a space: stored,
+            // that trailing space was trimmed again in memory at the next
+            // load — a name that changed between one launch and the next. Only
+            // then, and only the trailing end, so no other count moves.
+            if uncappedName(hosts[index].name).count > maxNameLength {
+                while cleaned.last?.isWhitespace == true { cleaned.removeLast() }
+            }
             if cleaned != hosts[index].name {
                 hosts[index].name = cleaned
                 report.shortenedNames += 1
@@ -467,8 +624,19 @@ enum ConfigurationHygiene {
             // the honest outcome.
             if let section = hosts[index].section {
                 let cleaned = sanitizedName(section)
-                if cleaned != section { report.shortenedNames += 1 }
                 let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    // The label is GONE, and the host is loose. Counted as
+                    // dropped, on its own line — "shortened … every one of
+                    // them was kept" was the wrong thing to tell someone
+                    // whose host had just left its heading. Only when there
+                    // WAS a heading to lose: a whitespace-only label already
+                    // read as no section (`sectionName`), so tidying it away
+                    // is not a change the user needs to hear about.
+                    if countSections, hosts[index].sectionName != nil { report.droppedHeadings += 1 }
+                } else if countSections, cleaned != section {
+                    report.shortenedNames += 1
+                }
                 hosts[index].section = trimmed.isEmpty ? nil : trimmed
             }
             // Control characters only — no length cap here: an address is
@@ -512,7 +680,20 @@ enum ConfigurationHygiene {
             // as well, everywhere one is written, and a restored "  Lab  "
             // that kept its padding read as a different group from "Lab".
             let cleaned = HostStore.cleanGroupName(groups[index].name)
-            if cleaned != groups[index].name {
+            // The load pass's collision rule (`HostStore.cleanGroupNames`), so a
+            // restore cannot make two groups with one exact name (which
+            // addGroup/renameGroup refuse): a backup from a pre-round-10 build
+            // can hold "Lab A" AND "Lab⟨U+2028⟩A", or "  Lab  " AND "Lab".
+            //
+            // Checked against EVERY other group's CURRENT name — earlier ones
+            // as already cleaned by this loop, later ones as stored — not the
+            // earlier ones alone: with only the earlier ones, the order
+            // ["Lab⟨U+2028⟩A", "Lab A"] cleaned the first to "Lab A" beside a
+            // second that already WAS "Lab A". This way every order ends with
+            // distinct names, and an already-clean group keeps its name. A
+            // kept-raw name is not counted: nothing about it changed.
+            let taken = groups.indices.contains { $0 != index && groups[$0].name == cleaned }
+            if cleaned != groups[index].name, !taken {
                 groups[index].name = cleaned
                 report.shortenedNames += 1
             }
@@ -520,8 +701,127 @@ enum ConfigurationHygiene {
                 groups[index].name = emptyGroupName
                 report.replacedNames += 1
             }
-            report = report + sanitize(&groups[index].hosts)
+            // HEADINGS are counted here, once per heading per group, before
+            // either pass touches them. A heading that was dirty on BOTH sides —
+            // in the declared list and on a host's label — is one correction,
+            // and the two passes below used to report it twice.
+            report = report + headingCorrections(in: groups[index])
+            report = report + sanitize(&groups[index].hosts, countSections: false)
+            // The group's own heading list, AFTER the hosts (their labels have
+            // just been cleaned, and the list has to agree with them).
+            report = report + sanitizeHeadings(&groups[index], count: false)
         }
+        return report
+    }
+
+    /// The heading corrections one group needs, counted **once per distinct
+    /// raw heading spelling per group**: the same label on 30 hosts is one
+    /// correction, the same heading dirty in the declared list and on a label
+    /// is one, and two DIFFERENT raw spellings are two — even when they clean
+    /// to the same heading (identical for 64 characters and different after,
+    /// or two control-character spellings of one name). Keyed by the RAW
+    /// fold, `headingKey(raw) ?? raw`, for exactly that reason: keying by the
+    /// cleaned heading counted two different corrections as one.
+    ///
+    /// The rules for WHAT counts are the two passes' own: a declared name
+    /// that cleans to nothing is dropped; a host label that does so is
+    /// dropped only if it read as a heading at all (a whitespace-only label
+    /// never did); anything that changed on the strip is shortened.
+    static func headingCorrections(in group: HostGroup) -> Report {
+        var shortened = Set<String>()
+        var dropped = Set<String>()
+        func note(_ raw: String, countsWhenEmpty: Bool) {
+            let stripped = sanitizedName(raw)
+            let rawKey = HostStore.headingKey(raw) ?? raw
+            if HostStore.headingKey(stripped.trimmingCharacters(in: .whitespacesAndNewlines)) != nil {
+                if stripped != raw { shortened.insert(rawKey) }
+            } else if countsWhenEmpty {
+                dropped.insert(rawKey)
+            }
+        }
+        for name in group.sections { note(name, countsWhenEmpty: true) }
+        for host in group.hosts {
+            guard let raw = host.section else { continue }
+            note(raw, countsWhenEmpty: host.sectionName != nil)
+        }
+        var report = Report()
+        report.shortenedNames = shortened.count
+        report.droppedHeadings = dropped.count
+        return report
+    }
+
+    /// The declared heading list, cleaned the way every other name is, then
+    /// reconciled with the hosts:
+    ///
+    /// - each declared name stripped, capped and trimmed; empties dropped;
+    /// - duplicates that READ the same collapsed, keeping the first spelling
+    ///   (the sidebar cannot show "Floor 2" and "Floor  2" as two rows);
+    /// - every host label snapped to the spelling in the list, and any label
+    ///   the list does not have appended in first-appearance order.
+    ///
+    /// The last two are what make an old file — labels on hosts, no list at
+    /// all — come out of a restore showing exactly the headings it shows
+    /// today, in the same order. This is the only migration there is.
+    static func sanitizeHeadings(_ group: inout HostGroup, count: Bool = true) -> Report {
+        var report = Report()
+        var list: [String] = []
+        // Keyed, like every other pass over a heading list: this one runs on
+        // every LOAD, and a hand-written 10,000-name list took 49 s to get
+        // through when each entry scanned the ones before it.
+        var byKey: [String: String] = [:]
+        for name in group.sections {
+            // Counted on the STRIP, not the trim, exactly as the host pass in
+            // `sanitize(_ hosts:)` does it: "shortened or had control
+            // characters removed" is not what happened to a name that only
+            // had a space on the end, and reporting it made a tidy-up read as
+            // a correction to the user's data.
+            let stripped = sanitizedName(name)
+            let cleaned = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let key = HostStore.headingKey(cleaned) else {
+                // A heading that cleans to nothing is not a heading. Counted
+                // on its own line: "shortened" is the wrong word for a row
+                // that is gone, and the user is owed the difference.
+                if count { report.droppedHeadings += 1 }
+                continue
+            }
+            if count, stripped != name { report.shortenedNames += 1 }
+            guard byKey[key] == nil else { continue }
+            byKey[key] = cleaned
+            list.append(cleaned)
+        }
+        for index in group.hosts.indices {
+            guard let raw = group.hosts[index].section else { continue }
+            // The SAME pass the declared names get. This function is also
+            // called on its own — from `applyImport(.createNew)` and from
+            // load-time materialisation — where `sanitize(&hosts)` has NOT
+            // run, so a 70-character label (the Add Hosts Section cell had no
+            // cap) was DECLARED raw. The next load capped the declared copy,
+            // the host's raw label then folded to a different key, and the
+            // group grew a phantom empty heading: three rows where the user
+            // made two.
+            let stripped = sanitizedName(raw)
+            let cleaned = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let key = HostStore.headingKey(cleaned) else {
+                // Nothing usable left: the host is loose, and the raw value
+                // does not stay in the file to read as a heading later.
+                // Counted exactly as `sanitize(_ hosts:)` counts it, so the
+                // two passes cannot report the same file differently — and
+                // only when there was a heading to lose.
+                if count, group.hosts[index].sectionName != nil { report.droppedHeadings += 1 }
+                if group.hosts[index].section != nil { group.hosts[index].section = nil }
+                continue
+            }
+            if count, stripped != raw { report.shortenedNames += 1 }
+            if let existing = byKey[key] {
+                // Joining the list's spelling is bookkeeping, not a correction.
+                group.hosts[index].section = existing
+            } else {
+                byKey[key] = cleaned
+                list.append(cleaned)
+                group.hosts[index].section = cleaned
+            }
+        }
+        if list != group.sections { group.sections = list }
         return report
     }
 
@@ -547,6 +847,14 @@ enum ConfigurationHygiene {
         if let data = files["recents.json"] {
             do {
                 var recents = try JSONDecoder().decode([Host].self, from: data)
+                // No headings on a RESTORED recent: the file this writes is the
+                // one the next launch reads, and a label in it is a heading ⌘K
+                // can find that no group has (see `HostStore.cleanedRecents`).
+                // Cleared BEFORE the hygiene pass, so it is genuinely not
+                // counted — run after it, a recent's dirty label was reported
+                // in the restore alert as "shortened" or "dropped", although
+                // it was never the user's filing and is thrown away anyway.
+                for index in recents.indices { recents[index].section = nil }
                 report = report + sanitize(&recents)
                 files["recents.json"] = try encoder.encode(recents)
             } catch {
@@ -751,8 +1059,23 @@ enum BulkHostParser {
                        from anchor: Column,
                        columns: [Column?]? = nil) -> [(row: Int, column: Column, value: String)] {
         var cells: [(row: Int, column: Column, value: String)] = []
+        // A BLANK row (every field empty) is a row of blank cells across the
+        // block's FULL width — Excel's meaning of a blank row in an in-cell
+        // paste (decision 3). It used to blank only its first column:
+        // "sw1⇥10.0.0.1 / (blank) / sw3⇥10.0.0.3" cleared row 2's Name and
+        // left its address.
+        func isBlank(_ fields: [String]) -> Bool {
+            fields.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty }
+        }
         if let columns {
+            // Header-mapped: a blank row blanks every MAPPED column — never
+            // the anchor's own column, which the header does not name.
+            let mapped = columns.compactMap { $0 }
             for (rowOffset, fields) in block.enumerated() {
+                if isBlank(fields) {
+                    for column in mapped { cells.append((row: rowOffset, column: column, value: "")) }
+                    continue
+                }
                 for (fieldIndex, value) in fields.enumerated() {
                     guard fieldIndex < columns.count, let column = columns[fieldIndex] else { continue }
                     cells.append((row: rowOffset, column: column, value: value))
@@ -761,8 +1084,11 @@ enum BulkHostParser {
             return cells
         }
         guard let start = columnOrder.firstIndex(of: anchor) else { return [] }
+        // Positional: the width is the widest row of the block.
+        let width = block.map(\.count).max() ?? 1
         for (rowOffset, fields) in block.enumerated() {
-            for (fieldIndex, value) in fields.enumerated() {
+            let values = isBlank(fields) ? Array(repeating: "", count: width) : fields
+            for (fieldIndex, value) in values.enumerated() {
                 let columnIndex = start + fieldIndex
                 guard columnIndex < columnOrder.count else { break }
                 cells.append((row: rowOffset, column: columnOrder[columnIndex], value: value))
@@ -774,8 +1100,111 @@ enum BulkHostParser {
     /// True when text could only have arrived in a single-line field by being
     /// pasted: Tab moves focus and Return submits, so neither character can be
     /// typed into one.
+    ///
+    /// `isNewline`, not `== "\n" || == "\r"`: **CRLF is ONE Swift Character**,
+    /// and it equals neither of those, so a Windows-origin paste with no tab
+    /// in it (a single column, or comma-separated) was not a block at all —
+    /// `spreadIfPasted` returned early and left the whole thing sitting in one
+    /// cell, and over 64 characters `sectionCellEdit` then capped it, filing
+    /// "Floor 1Floor 2…Floor 9F" as a heading (the round-7 data loss, by
+    /// another door). `block(from:)` and `singleValue(ifPlain:)` already split
+    /// on `isNewline`; this gate was the one place that disagreed with them.
+    /// It also admits U+2028/U+0085, which those two already treat as lines.
     static func carriesBlockSeparators(_ text: String) -> Bool {
-        text.contains { $0 == "\t" || $0 == "\n" || $0 == "\r" }
+        text.contains { $0 == "\t" || $0.isNewline }
+    }
+
+    /// The hygiene report for the rows that will actually be WRITTEN.
+    ///
+    /// `AddHostsSheet.add()` cleans every row, dedupes, and then merges — and a
+    /// merge never overwrites, so a row whose target is already in the group
+    /// is not written at all. Reporting "3 names were shortened" for a paste
+    /// where those three rows already existed described corrections that
+    /// never reached the user's data. This mirrors `add()` exactly — clean,
+    /// first row wins per target, skip what the group already has — and then
+    /// reports on the RAW forms of the rows that are left.
+    static func hygieneReport(forRows raw: [Host], landingIn existing: [Host]) -> ConfigurationHygiene.Report {
+        var cleaned = raw
+        _ = ConfigurationHygiene.sanitize(&cleaned)
+        let taken = Set(existing.map(\.connectionKey))
+        var seen = Set<String>()
+        var landing: [Host] = []
+        for (index, host) in cleaned.enumerated() {
+            let key = host.connectionKey
+            guard !taken.contains(key), seen.insert(key).inserted else { continue }
+            landing.append(raw[index])
+        }
+        return ConfigurationHygiene.sanitize(&landing)
+    }
+
+    /// A file's bytes as text, for Import CSV… and a dropped file.
+    ///
+    /// UTF-16 FIRST, by its BOM. Excel's "UTF-16 Unicode Text" and Numbers'
+    /// UTF-16 CSV both start with FF FE (or FE FF), and the old order — UTF-8,
+    /// then Latin-1 — "succeeded" on them through Latin-1, which accepts any
+    /// byte: every other character came out as NUL and the file was refused as
+    /// "doesn't look like a host list", while ⌘V of the very same text worked.
+    ///
+    /// Then UTF-8 (a UTF-8 BOM decodes fine and `block(from:)` drops the
+    /// leading U+FEFF), then Latin-1 as the last resort for old Windows
+    /// exports. nil only when nothing decodes, which Latin-1 makes rare.
+    static func decodeImport(_ data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(2))
+        if bytes == [0xFF, 0xFE] || bytes == [0xFE, 0xFF] {
+            // `.utf16` reads the BOM itself and picks the byte order from it;
+            // naming the endianness here would make Foundation keep the BOM
+            // as a character instead.
+            if let text = String(data: data, encoding: .utf16) {
+                return text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+            }
+        }
+        if let text = String(data: data, encoding: .utf8) {
+            return text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+        }
+        return String(data: data, encoding: .isoLatin1)
+    }
+
+    /// What the Add Hosts **Section cell** should do with a value that has
+    /// just been typed or pasted into it.
+    ///
+    /// `.spread` — it carries a separator, so it is a BLOCK and belongs to the
+    /// spread path, whole. Capping first was a data-losing bug: a ten-row
+    /// paste of "Floor 1\nFloor 2\n…\nFloor 10\n" is 81 characters, so the
+    /// cap cut it at 64 and the spread then ran over the truncated string —
+    /// rows 9 and 10 gone, and the fragment left on line 8 filed as a
+    /// heading. Every value the spread LANDS is capped by
+    /// `AddHostsSheet.write(_:into:column:)`, which is the right place for it.
+    ///
+    /// `.cap(cleaned)` — one long value: shortened in place so the cell cannot
+    /// show one spelling and file another (that mismatch is what made phantom
+    /// headings). Through `ConfigurationHygiene.sanitizedName`, which strips
+    /// control characters and THEN caps — `prefix(64)` on the raw string capped
+    /// first and stripped afterwards, so a >64-character heading with a
+    /// control character in it left 63 characters in the cell against the
+    /// store's 64: two `headingKey`s, two sidebar rows, one heading.
+    ///
+    /// `.keep` — nothing to do. Note the scope: a value **at or under** the
+    /// cap that carries a control character is kept AS TYPED, and the store's
+    /// own pass strips it at `add()` — the cleaned label then snaps onto the
+    /// existing heading (`normalizedHeading`/`sanitizeHeadings`), so there is
+    /// no phantom row and nothing to show the user. The "cell must not show
+    /// one spelling and file another" rule is about the OVER-CAP case, where
+    /// the difference is a visible 63 against 64.
+    ///
+    /// Pure so the harness can hold it to all three; the view only switches.
+    enum SectionCellEdit: Equatable {
+        case spread
+        case cap(String)
+        case keep
+    }
+
+    static func sectionCellEdit(_ typed: String) -> SectionCellEdit {
+        if carriesBlockSeparators(typed) { return .spread }
+        guard typed.count > ConfigurationHygiene.maxNameLength else { return .keep }
+        // Trimmed after the cap, so the cell holds EXACTLY what the store
+        // would keep: the cap can land on a space, and a cell ending in one
+        // is a spelling the store trims away.
+        return .cap(ConfigurationHygiene.cleanedName(typed))
     }
 
     /// The pasted text as ONE value, when that is all it is — or nil when it
@@ -784,15 +1213,53 @@ enum BulkHostParser {
     /// ⌘V of a single cell out of Excel carries a trailing newline, so
     /// `carriesBlockSeparators` says "block" for it; a name like
     /// `Core, floor 3` was then split at the comma into two columns. One line
-    /// (nothing but trailing newlines) with no tab in it is a value, and the
-    /// comma inside it is part of the name — a delimiter needs a second line
-    /// or a tab to be a delimiter.
-    static func singleValue(ifPlain text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              !trimmed.contains(where: { $0.isNewline }),
-              !trimmed.contains("\t") else { return nil }
-        return trimmed
+    /// with no tab in it is a value, and the comma inside it is part of the
+    /// name.
+    ///
+    /// Exactly ONE terminal newline is the clipboard closing the row. Anything
+    /// more — a second newline, a leading one, a tab anywhere, even at the
+    /// edges — describes more cells, and it goes to the spread: in a grid a
+    /// blank row is a cell with coordinates, like Excel's (see
+    /// `block(from:preservingEmptyRows:)`).
+    ///
+    /// `skippingBlankLines` is the SHEET-level paste (no cell focused), which
+    /// has no coordinates to keep: whitespace-only lines are dropped, and what
+    /// is left is one value if it is exactly one line with no tab. Excel gives
+    /// "Core, floor 3\n\n" for two cells of a column where the second is
+    /// blank; without this the text went to the import path, which dropped
+    /// the blank line and split the one remaining comma line as CSV — a host
+    /// called "Core" pointing at "floor 3".
+    static func singleValue(ifPlain raw: String, skippingBlankLines: Bool = false) -> String? {
+        // One leading BOM dropped, the way `block(from:)` drops it — it is not
+        // part of the value.
+        var text = raw
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        if skippingBlankLines {
+            // The sheet-level paste keeps exactly the lines an IMPORT keeps
+            // (`importLines`): blank lines and "#" comments go ("Core, floor
+            // 3\n# note\n" is one value) — but a "#"-titled header stays, and
+            // a header-shaped line (even a lone one, below) goes to the block,
+            // which accepts or refuses it exactly as Import does. The tab test is on the RAW line: an edge tab is a cell
+            // boundary here too ("\tcore-sw-01" is two cells, as on import).
+            let lines = importLines(text.split(whereSeparator: \.isNewline).map(String.init))
+            guard lines.count == 1, !lines[0].contains("\t") else { return nil }
+            let value = lines[0].trimmingCharacters(in: .whitespaces)
+            // A LONE header-shaped line is a header, the way Import reads it —
+            // plain ("Name,Host") or "#"-titled — so the block path accepts it
+            // as a header or refuses it with the Alert. It landed as one value
+            // (a host called "Name,Host"). A one-line value like
+            // "Core, floor 3" names no column and stays one value.
+            let fields = value.contains(",") ? split(value, separator: ",", quoted: true) : [value]
+            guard !looksLikeHeader(fields) else { return nil }
+            return value.isEmpty ? nil : value
+        }
+        // One terminal newline closes the clipboard row; any other newline
+        // or TAB describes a cell boundary, even at the edges of the text.
+        var value = text
+        if value.last?.isNewline == true { value.removeLast() }
+        guard !value.contains(where: { $0.isNewline || $0 == "\t" }) else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// The ONLY headings this app accepts, lower-cased. A header row has to
@@ -872,18 +1339,21 @@ enum BulkHostParser {
         headingColumns[name.trimmingCharacters(in: .whitespaces).lowercased()] != nil
     }
 
-    /// Clipboard text → one array of trimmed fields per data line.
+    /// Clipboard text → one array of trimmed fields per data line — just the
+    /// data rows, for callers that do not care how the columns were labelled
+    /// (the spread's own positional path, and the tests).
     ///
-    /// Tab wins over comma wherever both appear: Excel, Numbers and Sheets all
-    /// put TAB-separated text on the clipboard, and a name like
-    /// "Core, floor 3" would otherwise split itself in half.
-    /// Just the data rows, for callers that do not care how the columns were
-    /// labelled (the spread's own positional path, and the tests).
+    /// The delimiter (`block(from:)`): a tab INSIDE a line means TSV; a tab
+    /// only at a line's edge means TSV only when every non-blank line has a
+    /// tab (a real spreadsheet copy with an empty edge column); otherwise a
+    /// comma, then whitespace per line. Excel, Numbers and Sheets put
+    /// TAB-separated text on the clipboard, so a name like "Core, floor 3"
+    /// in a TSV row is never split at its comma.
     static func rows(from text: String) -> [[String]] {
         block(from: text).rows
     }
 
-    static func block(from text: String) -> Block {
+    static func block(from text: String, preservingEmptyRows: Bool = false) -> Block {
         // One leading BOM, dropped. Excel's "CSV UTF-8" export starts with
         // U+FEFF, which made the first field "\u{FEFF}Name": the header was
         // not recognised, and a host called "Name" pointing at "IP" landed.
@@ -893,21 +1363,64 @@ enum BulkHostParser {
         // `isNewline` covers CRLF as one Character (it is a single grapheme
         // cluster), so \r\n / \r / \n all arrive here as a line break — no
         // pre-pass that turns \r\n into two empty lines.
-        let lines = text.split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            // "#" is how a hand-kept list comments out a decommissioned
-            // switch; blank lines are what a spreadsheet leaves behind.
-            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        // Never trim a whole TSV line: leading/trailing TABs are empty cells.
+        // An IN-CELL paste (`preservingEmptyRows`) follows Excel: a blank row
+        // is a real cell with coordinates, and a "#" line is an ordinary value
+        // — so Section and Credential values stay aligned with the hosts
+        // already in the grid. An import and the sheet-level paste still skip
+        // both (below).
+        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map(String.init)
+        if text.last?.isNewline == true { lines.removeLast() }
+        if !preservingEmptyRows {
+            // An IMPORT skips blank lines and "#" comments: "#" is how a
+            // hand-kept list comments out a decommissioned switch, and blank
+            // lines are what a spreadsheet leaves behind. The one kept "#" line
+            // is a header-shaped one in the header position (`importLines`).
+            // The line itself is kept whole, so a leading TAB still means an
+            // empty first cell.
+            lines = importLines(lines)
+        }
         guard !lines.isEmpty else { return Block(rows: [], columns: nil, header: nil) }
 
+        // The delimiter, decided on TRIMMED lines:
+        // - a tab INSIDE a line (after trimming its ends) means TSV;
+        // - a tab only at a line's EDGE means TSV only when EVERY non-blank
+        //   line has a tab — always true of a real Excel / Numbers / HTML-table
+        //   copy (an empty first or last column is a tab on every row), never
+        //   of a stray tab. One stray tab on one line of a one-column list
+        //   used to send the whole list down the TSV path: IPs landed in Name,
+        //   a names file was refused, "Floor 2" landed in Host / IP;
+        // - otherwise a comma means CSV, and then whitespace per line.
+        let trimmedLines = lines.map { $0.trimmingCharacters(in: .whitespaces) }
+        let innerTab = trimmedLines.contains { $0.contains("\t") }
+        let everyLineTabbed = lines.allSatisfy { line in
+            line.trimmingCharacters(in: .whitespaces).isEmpty || line.contains("\t")
+        }
+        let edgeTab = lines.contains { $0.contains("\t") }
+        let comma = trimmedLines.contains { $0.contains(",") }
+        let nonBlank = trimmedLines.filter { !$0.isEmpty }.count
+
         let fields: [[String]]
-        if lines.contains(where: { $0.contains("\t") }) {
+        if innerTab || (edgeTab && everyLineTabbed) {
+            // UNtrimmed: a leading tab is an empty first cell.
             fields = lines.map { split($0, separator: "\t", quoted: false) }
-        } else if lines.contains(where: { $0.contains(",") }) {
+        } else if preservingEmptyRows, nonBlank == 1 {
+            // An in-cell paste of ONE value between blank rows: the blank rows
+            // keep their coordinates (Excel), and the value lands WHOLE. It
+            // used to take the comma branch, because the blank line counted
+            // as the "second line" that makes a comma a delimiter —
+            // "Core, floor 3\n\n" became "Core" and "floor 3". The same holds
+            // for the whitespace `name target` split, deliberately:
+            // "\nsw1 10.0.0.1\n" lands "sw1 10.0.0.1" whole in one cell, as one
+            // value always does — the same answer the single-value paste
+            // gives when there are no blank rows around it.
+            fields = trimmedLines.map { [$0] }
+        } else if comma {
             // Quote-aware only here: a CSV file really does write
             // `"Core, floor 3",10.0.0.1`, and that is the one delimiter a
             // field is allowed to contain.
-            fields = lines.map { split($0, separator: ",", quoted: true) }
+            fields = trimmedLines.map { split($0, separator: ",", quoted: true) }
         } else {
             // A list with no delimiter at all. Two shapes arrive here: one
             // value per line (a column copied out of a spreadsheet — Excel
@@ -915,28 +1428,43 @@ enum BulkHostParser {
             // `name 10.0.0.1` pasted out of a text file. Splitting on
             // whitespace served the second and broke the first: a column of
             // section labels like "Floor 1" was cut into "Floor" and "1", and
-            // then refused as a header. So the split happens only when every
-            // line is genuinely `name target` — two or more words with an
-            // address among them; otherwise each line is one value, spaces
-            // and all.
-            // Per LINE, not per list: `sw1 10.0.0.1` and `Floor 3` arrive in
-            // the same paste all the time (a name column with a couple of
-            // `name target` lines in it), and an all-or-nothing decision
-            // either cut "Floor 3" in half or left the two real rows
-            // unsplit. A line splits when it is genuinely `name target` —
-            // two or more words with a target among them.
-            fields = lines.map { line in
-                let words = line.split(whereSeparator: \.isWhitespace).map(String.init)
-                return words.count >= 2 && words.contains(where: looksLikeTarget) ? words : [line]
+            // then refused as a header. So a line splits only when it is
+            // genuinely `name target` — two or more words with a target among
+            // them — and PER LINE, not per list: `sw1 10.0.0.1` and `Floor 3`
+            // arrive in the same paste all the time, and an all-or-nothing
+            // decision either cut "Floor 3" in half or left the real rows
+            // unsplit.
+            fields = trimmedLines.map { line in
+                isNameTargetLine(line) ? line.split(whereSeparator: \.isWhitespace).map(String.init) : [line]
             }
         }
 
-        // A line of nothing but delimiters (",,") carries no value.
-        var rows = fields.filter { row in row.contains { !$0.isEmpty } }
+        // Empty rows can be skipped when importing new records, but are real
+        // coordinates when overwriting cells in an existing grid.
+        var rows = preservingEmptyRows ? fields : fields.filter { row in row.contains { !$0.isEmpty } }
         var columns: [Column?]?
         var header: [String]?
         var mayBeHeader = false
-        if let first = rows.first, looksLikeHeader(first) {
+        // The header candidate is the first row that HAS A VALUE. In an
+        // in-cell paste the first row can be a blank cell (Excel), and testing
+        // only `rows.first` let "Name" land as a host — and an unknown header
+        // ("Name, IP, Port") through unrefused, "Port" and then "22" landing
+        // in Credential. A "#" row does not hide a header either: in-cell it
+        // is an ordinary value cell, but it is never the header. (An import
+        // has dropped both kinds of row already, so this is index 0 there.)
+        let candidate = rows.firstIndex { row in
+            let values = row.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard let first = values.first else { return false }
+            // A "#" row is skipped as a NOTE unless it is a header titled
+            // EXACTLY "#" in its first column (the same test as
+            // `isHeaderShapedCommentLine`). Such a sheet ("#⇥Name⇥Host") IS a
+            // header, and an unknown one: it must reach `headerProblems` and be
+            // refused, not land as data shifted one column. "# name" is a
+            // commented-out header, and stays a note.
+            return !first.hasPrefix("#") || (first == "#" && looksLikeHeader(row))
+        }
+        if let index = candidate, looksLikeHeader(rows[index]) {
+            let first = rows[index]
             let problems = headerProblems(first)
             // Refused, not guessed: nothing is placed, and the caller shows
             // the names it could not take.
@@ -945,12 +1473,131 @@ enum BulkHostParser {
             }
             columns = headerMap(first)
             header = first
-            rows.removeFirst()
-        } else if let first = rows.first {
-            mayBeHeader = mightHaveBeenHeader(first)
+            // THAT row goes; the blank rows before it keep their coordinates.
+            rows.remove(at: index)
+        } else if let index = candidate {
+            mayBeHeader = mightHaveBeenHeader(rows[index])
         }
         return Block(rows: rows, columns: columns, header: header,
                      rejectedHeader: nil, firstRowMayBeHeader: mayBeHeader)
+    }
+
+    /// What an in-cell spread does to the grid, worked out before it writes.
+    struct SpreadOutcome: Equatable {
+        /// Indices into `cells` that are actually written.
+        var writes: [Int]
+        /// Rows that received at least one non-empty value.
+        var filled: Int
+        /// CELLS that held text and were emptied by an empty value — counted
+        /// per cell, so a row that got a name while its old address was
+        /// cleared reports both.
+        var cleared: Int
+        /// Whether a block cell writes the anchor cell itself (with any
+        /// value, empty included). A block that does not name the anchor's
+        /// column — header-mapped, refused, header-only — leaves it alone.
+        var anchorWritten: Bool
+    }
+
+    /// Decided BEFORE anything is written, from the grid as it is:
+    /// - an EMPTY value aimed at a row the grid does not have yet is not
+    ///   written at all — trailing blank lines past the bottom of the grid
+    ///   used to append empty rows just to hold nothing ("sw1\n\n\n" into the
+    ///   last of four rows grew the grid to six);
+    /// - a row is FILLED when it gets any non-empty value, judged by what
+    ///   `write` will actually store (`storedCellValue`);
+    /// - a cell is CLEARED only when an empty value replaced text that was
+    ///   there; an empty value over an empty cell is neither.
+    ///
+    /// The anchor's text is `anchorPrevious` — the cell's value from before
+    /// the paste — and it counts only when a block cell actually writes the
+    /// anchor. The anchor is NOT cleared just because a paste started there:
+    /// a header-mapped block that does not name its column, a refused header
+    /// and a header-only paste all leave it as it was.
+    static func spreadOutcome(cells: [(row: Int, column: Column, value: String)], anchor: Int,
+                              anchorColumn: Column? = nil, anchorPrevious: String = "",
+                              rowCount: Int, oldValue: (Int, Column) -> String) -> SpreadOutcome {
+        var writes: [Int] = []
+        var filledRows = Set<Int>()
+        var cleared = 0
+        var anchorWritten = false
+        func before(_ row: Int, _ column: Column) -> String {
+            if row == anchor, column == anchorColumn { return anchorPrevious }
+            return oldValue(row, column)
+        }
+        for (index, cell) in cells.enumerated() {
+            let target = anchor + cell.row
+            // Judged by what `write` will actually STORE: a Section value of
+            // nothing but control characters lands empty, and is not "filled".
+            let stored = storedCellValue(cell.value, column: cell.column)
+            if stored.isEmpty {
+                guard target < rowCount else { continue }
+                if !before(target, cell.column).isEmpty { cleared += 1 }
+            } else {
+                filledRows.insert(target)
+            }
+            if target == anchor, cell.column == anchorColumn { anchorWritten = true }
+            writes.append(index)
+        }
+        return SpreadOutcome(writes: writes, filled: filledRows.count, cleared: cleared,
+                             anchorWritten: anchorWritten)
+    }
+
+    /// The value `AddHostsSheet.write(_:into:column:)` stores for a cell:
+    /// separators folded to a space and trimmed, and — for Section — the
+    /// store's name pass on top. One function, so the grid and the status line
+    /// agree about what "empty" means.
+    ///
+    /// The separators are everything `carriesBlockSeparators` calls one, as a
+    /// CharacterSet — `.newlines` rather than "\r\n" by hand, so the line
+    /// separators `isNewline` admits (U+2028, U+0085, …) cannot survive inside
+    /// a cell either. The invariant this keeps: **a value in a cell never
+    /// carries a separator**, so a cell the user touches again is never
+    /// mistaken for a fresh block paste.
+    static func storedCellValue(_ value: String, column: Column) -> String {
+        let trimmed = value
+            .components(separatedBy: CharacterSet.newlines.union(CharacterSet(charactersIn: "\t")))
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return column == .section ? ConfigurationHygiene.cleanedName(trimmed) : trimmed
+    }
+
+    /// A "#" line that is a HEADER, not a comment: a sheet whose first column
+    /// is titled "#". Exactly that — the FIRST field is "#" and the row looks
+    /// like a header — and nothing looser: "any field is a column name" made a
+    /// commented-out header ("# name,host,credential") into an unknown heading
+    /// that refused the whole file, and a later "# name, host" line into a
+    /// host called "# name".
+    static func isHeaderShapedCommentLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let separator: Character = trimmed.contains("\t") ? "\t" : ","
+        guard trimmed.contains(separator) else { return false }
+        let fields = split(trimmed, separator: separator, quoted: separator == ",")
+        return fields.first == "#" && looksLikeHeader(fields)
+    }
+
+    /// The lines an IMPORT (and the sheet-level paste) keeps: blank lines and
+    /// "#" comments go — except a header-shaped "#" line in the HEADER
+    /// position, i.e. the first line kept. A "#"-titled header anywhere else
+    /// is a comment like any other.
+    static func importLines(_ lines: [String]) -> [String] {
+        var seenKept = false
+        return lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return false }
+            if trimmed.hasPrefix("#") {
+                guard !seenKept, isHeaderShapedCommentLine(trimmed) else { return false }
+            }
+            seenKept = true
+            return true
+        }
+    }
+
+    /// A line that is genuinely `name target`: two or more words with a
+    /// target among them. The one test both the delimiter choice and the
+    /// whitespace split use.
+    private static func isNameTargetLine(_ line: String) -> Bool {
+        let words = line.split(whereSeparator: \.isWhitespace).map(String.init)
+        return words.count >= 2 && words.contains(where: looksLikeTarget)
     }
 
     /// A parsed paste or file: the data rows, and — when the first line was a
@@ -1039,11 +1686,17 @@ enum BulkHostParser {
         bytes >= 0 && bytes <= maxImportBytes
     }
 
-    /// How many rows a paste anchored at `anchor` may still place: the cap
-    /// bounds the GRID, not each block, so a second 2,000-row paste cannot
-    /// take the grid to 4,000 rows.
-    static func rowBudget(anchor: Int, existing: Int, cap: Int) -> Int {
-        max(0, cap - max(anchor, existing))
+    /// How many rows a paste may still place. The cap bounds the GRID, not
+    /// each block — a second 2,000-row paste cannot take it to 4,000 — and the
+    /// two kinds of paste use it differently:
+    /// - an in-cell ⌘V (`anchor` given) OVERWRITES from the anchor down, so
+    ///   the rows already there cost nothing: `cap - anchor`;
+    /// - an import (no anchor) ADDS rows, filling blank ones first
+    ///   (`place(_:)`) and then appending, so the budget is the free space
+    ///   plus the blank rows it can reuse.
+    static func rowBudget(anchor: Int? = nil, existing: Int, blankRows: Int = 0, cap: Int) -> Int {
+        if let anchor { return max(0, cap - max(0, anchor)) }
+        return max(0, cap - existing) + min(max(0, blankRows), min(existing, cap))
     }
 
     /// What to add to a paste's status line when the grid could not take the
@@ -1194,10 +1847,72 @@ enum BulkHostParser {
                                   in credentials: [(id: UUID, name: String, username: String)]) -> UUID? {
         let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty else { return nil }
-        if let match = credentials.first(where: { $0.name.caseInsensitiveCompare(wanted) == .orderedSame }) {
+        // The CLEANED name, like the pick branch below: a legacy credential
+        // named "core⟨U+2028⟩lab" or "core\tlab" resolved when PICKED (the
+        // pick writes the cleaned name) but not when the same text was typed,
+        // imported or block-pasted — the host then saved as username
+        // "core lab" with no credential. First in array order wins when a
+        // clean name and a legacy one clean to the same text.
+        if let match = credentials.first(where: {
+            ConfigurationHygiene.cleanedName($0.name).caseInsensitiveCompare(wanted) == .orderedSame
+        }) {
             return match.id
         }
+        // Usernames are LOGINS and are never cleaned: a username that differs
+        // by a character is a different login.
         return credentials.first { $0.username.caseInsensitiveCompare(wanted) == .orderedSame }?.id
+    }
+
+    /// The credential a row's Credential cell names, when the row may also
+    /// carry an explicit PICK from the cell's menu.
+    ///
+    /// Credential NAMES are not unique (`CredentialStore.add` appends without
+    /// checking, and a blank name falls back to the username), so the menu's
+    /// "core (netops)" wrote "core" into the cell and the name rule then took
+    /// the FIRST "core" — the host was saved with admin's credential. The pick
+    /// is an id and it wins, but only while it still describes the cell:
+    ///
+    /// - empty text → nil, whatever was picked: an empty cell means the
+    ///   Default, and a stale pick must not outlive the text it came with;
+    /// - a pick whose credential still exists AND whose (cleaned) name the
+    ///   cell holds → that id. The view clears a pick in ONE case only: a
+    ///   BLOCK paste (a tab or a second line) that writes the Credential
+    ///   column. Otherwise this rule alone governs it — clearing on each edit
+    ///   lost it through intermediate text ("core" → "corex" → "core", ⌘X ⌘V,
+    ///   ⌘Z) and the host saved with the other "core". A kept pick cannot
+    ///   describe different text: this check is the guard;
+    /// - otherwise the existing text rule, `resolveCredential(_:in:)`: a saved
+    ///   name or username is that credential, anything else is the host's
+    ///   username and NEVER the Default (the user's decision).
+    static func resolveCredential(_ text: String, picked: UUID?,
+                                  in credentials: [(id: UUID, name: String, username: String)]) -> UUID? {
+        let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return nil }
+        // The CLEANED name: the pick writes the cleaned form into the cell,
+        // so a name from an old credentials.json that still carries a tab or
+        // a newline is compared as the cell shows it.
+        if let picked, let match = credentials.first(where: { $0.id == picked }),
+           ConfigurationHygiene.cleanedName(match.name) == wanted {
+            return picked
+        }
+        return resolveCredential(wanted, in: credentials)
+    }
+
+    /// The Credential menu's entries, one per credential, BY ID, labelled
+    /// "name (username)" — with " — 2", " — 3" … on the second and later of
+    /// an identical pair. Two "admin (admin)" entries used to share one
+    /// `ForEach` id, and the second could never be chosen. The CELL still
+    /// holds the name; the suffix only tells the menu rows apart.
+    static func credentialMenuLabels(
+        _ credentials: [(id: UUID, name: String, username: String)]
+    ) -> [(id: UUID, label: String)] {
+        var seen: [String: Int] = [:]
+        return credentials.map { credential in
+            let base = "\(credential.name) (\(credential.username))"
+            let count = (seen[base] ?? 0) + 1
+            seen[base] = count
+            return (credential.id, count == 1 ? base : "\(base) — \(count)")
+        }
     }
 
     /// Which saved credential a table row actually uses. `rowCredential` and
@@ -1252,13 +1967,22 @@ enum BulkHostParser {
     /// existing headings; a NEW group has none, so this is what covers
     /// `.createNew` and the merge-to-new fallback.
     static func snappedHostsWithinBatch(_ hosts: [Host]) -> [Host] {
-        var seen: [String] = []
+        // Keyed, like every other pass over a heading list: `snappedHeading`
+        // scans what it is given, so a 2,000-row batch with 2,000 distinct
+        // headings was four million comparisons — measured at 1.7 s inside a
+        // paste (and `filedSummary` runs it a second time for the status line).
+        var seen: [String: String] = [:]
         return hosts.map { host in
-            guard let label = host.sectionName else { return host }
+            guard let label = host.sectionName, let key = HostStore.headingKey(label) else {
+                return host
+            }
             var copy = host
-            let snapped = HostStore.snappedHeading(label, existing: seen) ?? label
-            copy.section = snapped
-            if !seen.contains(snapped) { seen.append(snapped) }
+            if let first = seen[key] {
+                copy.section = first
+            } else {
+                seen[key] = label
+                copy.section = label
+            }
             return copy
         }
     }
@@ -1321,15 +2045,33 @@ enum BulkHostParser {
     /// after hygiene. The sheet used to count its rows instead, so "12 hosts
     /// filed under 2 sections" was printed for a paste where eleven of them
     /// were already there and nothing was filed at all.
-    static func filedSummary(hosts: [Host], existing: [Host]) -> (hosts: Int, sections: Int) {
+    static func filedSummary(hosts: [Host], existing: [Host],
+                             declared: [String] = []) -> (hosts: Int, sections: Int) {
         // Snapped the way the store will snap them — against the headings
         // already in the group, then against each other — or two spellings of
         // one heading were reported as "2 sections" and the number disagreed
         // with the sidebar the user was about to look at.
-        let already = existing.compactMap(\.sectionName)
+        //
+        // `declared` is the group's own heading list (`displayedSections`
+        // minus what the hosts say), so a row typed as "floor  2" into a group
+        // whose EMPTY "Floor 2" heading exists joins it here too — the same
+        // answer the store will write.
+        // Keyed once, not scanned per row: a 2,000-row paste into a group
+        // with 2,000 headings was four million comparisons for a status line.
+        var byKey: [String: String] = [:]
+        for name in declared + existing.compactMap(\.sectionName) {
+            guard let key = HostStore.headingKey(name), byKey[key] == nil else { continue }
+            byKey[key] = name
+        }
         let seeded = hosts.map { host -> Host in
             var copy = host
-            copy.section = HostStore.normalizedHeading(host.section, existing: already)
+            guard let asked = host.section,
+                  let key = HostStore.headingKey(ConfigurationHygiene.sanitizedName(asked)) else {
+                copy.section = nil
+                return copy
+            }
+            copy.section = byKey[key]
+                ?? ConfigurationHygiene.cleanedName(asked)
             return copy
         }
         // By KEY, not by scanning `existing` per host: 2,000 rows against a
@@ -1446,6 +2188,24 @@ final class HostStore: ObservableObject {
     /// newer recents.json on the next merge. Cleared by `noteRecent`, because
     /// connecting to that target again is the user asking for it back.
     private var deletedRecentKeys = Set<String>()
+    /// The same tombstone for HEADINGS, keyed `"<groupID>/<headingKey>"`.
+    ///
+    /// A heading is a row of its group's list, and "on disk, not in memory"
+    /// reads as "another copy added it" — which is exactly what a heading this
+    /// copy just removed (or renamed) looks like once any other copy saves
+    /// anything. Without this, A renaming Alpha → Beta and B saving an
+    /// unrelated edit put "Alpha" back, with A's host under it, and left
+    /// "Beta" behind as a phantom empty row.
+    ///
+    /// Two rules keep it coherent:
+    ///  - a heading that is DECLARED in memory again is not tombstoned any
+    ///    more (`pruneHeadingTombstones`, run before every merge) — that is
+    ///    how a deliberate re-creation by any route survives, without every
+    ///    declaring call site having to remember to clear it;
+    ///  - a host arriving from disk UNDER a tombstoned label keeps its label
+    ///    and lifts the tombstone: the other copy filed it there after we
+    ///    removed the heading, so their action is the newer one.
+    private var deletedHeadingKeys = Set<String>()
 
     /// Set when a corrupt file was found at launch: blocks automatic
     /// writes until the first explicit user mutation, so a corrupt
@@ -1477,9 +2237,11 @@ final class HostStore: ObservableObject {
 
     init() {
         let groupsLoad = Self.loadList([HostGroup].self, from: Self.fileURL)
-        groups = groupsLoad.value
+        var loadedGroups = groupsLoad.value
+        Self.materialiseHeadings(&loadedGroups)
+        groups = loadedGroups
         let recentsLoad = Self.loadList([Host].self, from: Self.recentsURL)
-        recents = recentsLoad.value
+        recents = Self.cleanedRecents(recentsLoad.value)
         let warnings = [groupsLoad.warning, recentsLoad.warning].compactMap { $0 }
         if !warnings.isEmpty { dataLoadWarning = warnings.joined(separator: "\n") }
         suppressHostsWrites = groupsLoad.warning != nil
@@ -1554,8 +2316,10 @@ final class HostStore: ObservableObject {
     func reloadFromDisk() {
         let groupsLoad = Self.loadList([HostGroup].self, from: Self.fileURL)
         let recentsLoad = Self.loadList([Host].self, from: Self.recentsURL)
-        groups = groupsLoad.value
-        recents = recentsLoad.value
+        var loadedGroups = groupsLoad.value
+        Self.materialiseHeadings(&loadedGroups)
+        groups = loadedGroups
+        recents = Self.cleanedRecents(recentsLoad.value)
         let warnings = [groupsLoad.warning, recentsLoad.warning].compactMap { $0 }
         dataLoadWarning = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
         suppressHostsWrites = groupsLoad.warning != nil
@@ -1569,6 +2333,128 @@ final class HostStore: ObservableObject {
         deletedHostIDs.removeAll()
         deletedGroupIDs.removeAll()
         deletedRecentKeys.removeAll()
+        deletedHeadingKeys.removeAll()
+    }
+
+    /// Writes each group's heading list from what the group DISPLAYS, in
+    /// memory, on every load.
+    ///
+    /// Every hosts.json written before 4.1 (2) carries labels on hosts and no
+    /// list at all, so all of a group's headings are "implied". A method that
+    /// appends to `sections` then put its heading FIRST in a group whose other
+    /// headings were not in the list yet: a renamed heading jumped to the top,
+    /// and New Section… landed above the existing rows. One pass here and the
+    /// list always describes what is on screen.
+    ///
+    /// No `save()` and no `noteUserMutation()`: reading a file is not the
+    /// user's change, and a file that was quarantined stays write-suppressed
+    /// until they make one. The list reaches disk with their next edit —
+    /// which is what a restore's hygiene would have written anyway.
+    private static func materialiseHeadings(_ groups: inout [HostGroup]) {
+        for index in groups.indices {
+            _ = ConfigurationHygiene.sanitizeHeadings(&groups[index])
+            cleanHostNames(&groups[index].hosts)
+        }
+        cleanGroupNames(&groups)
+    }
+
+    /// Host NAMES saved before rounds 10–11 can carry U+2028/U+2029 (Edit
+    /// Host and Quick Connect only trimmed), and a single-line sidebar row
+    /// draws such a name as its first line only. Headings are fixed on load by
+    /// `sanitizeHeadings`; this is the same step for names, under the same
+    /// rules: in memory only, no `save()`, no `noteUserMutation()` — the file
+    /// catches up with the user's next edit, and a quarantined file stays
+    /// write-suppressed.
+    ///
+    /// A name that would clean to NOTHING keeps its raw form: "Untitled Host"
+    /// or the address is a restore's decision to make and to report, not
+    /// something a launch should do silently. Nothing keys on a host's name
+    /// (ids, connection keys and recents' keys are all address-based), so
+    /// changing it in memory moves nothing else.
+    private static func cleanHostNames(_ hosts: inout [Host]) {
+        for index in hosts.indices { cleanHostName(&hosts[index]) }
+    }
+
+    /// THE per-host rule every load-time path shares — hosts in groups,
+    /// recents, and hosts adopted from another copy's file: the store's name
+    /// pass, the raw name kept if the pass would empty it, and nothing written
+    /// unless the name actually changes.
+    private static func cleanHostName(_ host: inout Host) {
+        let cleaned = ConfigurationHygiene.cleanedName(host.name)
+        if !cleaned.isEmpty, cleaned != host.name { host.name = cleaned }
+    }
+
+    /// Group NAMES get the same load-time pass: a group named before round 10
+    /// ("Lab⟨U+2028⟩A") drew as "Lab" in the sidebar header and the Add Hosts
+    /// picker, while `existingGroup(matching:)` and `applyImport(.merge)`
+    /// already compared the cleaned "Lab A" — the store and the screen named
+    /// the group differently.
+    ///
+    /// `cleanGroupName`, and ONLY when the result is non-empty, differs, and
+    /// no other group already has that exact name: the uniqueness rule
+    /// `addGroup`/`renameGroup` enforce. On a collision the raw name stays —
+    /// renaming one group onto another's name at launch would make them
+    /// indistinguishable in every picker, which is worse than a name that
+    /// draws on one line too few. In memory only, like the rest of this pass.
+    private static func cleanGroupNames(_ groups: inout [HostGroup]) {
+        for index in groups.indices {
+            let cleaned = cleanGroupName(groups[index].name)
+            guard !cleaned.isEmpty, cleaned != groups[index].name,
+                  !groups.indices.contains(where: { $0 != index && groups[$0].name == cleaned })
+            else { continue }
+            groups[index].name = cleaned
+        }
+    }
+
+    /// Every recents list that comes off DISK, made fit to show: no heading,
+    /// and a cleaned name.
+    ///
+    /// The heading: `noteRecent` has cleared `section` since 4.1 (2) — a
+    /// recent is a connection, not a filing, and nothing keeps that copy in
+    /// step with its group's list. But every recents.json written by 4.1 (1) or
+    /// earlier carries labels on up to twenty entries, and ⌘K searches recents
+    /// FIRST and matches `sectionName`: a heading that no longer exists
+    /// anywhere was still findable through a recent.
+    ///
+    /// The name: Quick Connect sessions ALWAYS land in recents, and before
+    /// round 11 Quick Connect only trimmed the name — so a pre-round-11
+    /// recents.json holds raw session names, and a Recent row with a U+2028 in
+    /// it drew its first line only. `cleanHostName`, the same rule the groups'
+    /// hosts get. A name is not part of `connectionKey`, so dedupe and the
+    /// recents tombstones are untouched by it.
+    private static func cleanedRecents(_ hosts: [Host]) -> [Host] {
+        hosts.map { host in
+            var copy = host
+            copy.section = nil
+            cleanHostName(&copy)
+            return copy
+        }
+    }
+
+    /// A heading tombstone's key: the group and the FOLDED heading, so
+    /// "Floor 2" and "floor  2" are the same row being remembered.
+    private static func headingTombstone(group: UUID, label: String) -> String? {
+        guard let key = headingKey(label) else { return nil }
+        return "\(group.uuidString)/\(key)"
+    }
+
+    /// Drops tombstones for headings this copy has since declared again.
+    ///
+    /// ONE rule instead of a `remove` at every declaring call site: after any
+    /// user write, what the group declares is the truth, and a tombstone for a
+    /// row that is back is stale by definition. Run before the merge union,
+    /// which is the only reader.
+    private func pruneHeadingTombstones() {
+        guard !deletedHeadingKeys.isEmpty else { return }
+        var live = Set<String>()
+        for group in groups {
+            for label in group.displayedSections {
+                if let key = Self.headingTombstone(group: group.id, label: label) {
+                    live.insert(key)
+                }
+            }
+        }
+        deletedHeadingKeys.subtract(live)
     }
 
     /// Every public mutator calls this first — the user's own change is
@@ -1662,6 +2548,7 @@ final class HostStore: ObservableObject {
     }
 
     private func mergeGroupsFromDiskIfNeeded() {
+        pruneHeadingTombstones()
         guard let diskMtime = Self.mtime(of: Self.fileURL),
               knownGroupsMtime == nil || diskMtime > knownGroupsMtime! else { return }
         guard let data = try? Data(contentsOf: Self.fileURL),
@@ -1693,10 +2580,79 @@ final class HostStore: ObservableObject {
             // Deduped by id for the same reason the group merge below is: a
             // disk group can carry the same host id twice, and appending both
             // puts two rows with one identity into the outline.
+            // Adopted hosts get their LABEL cleaned on the way in — the same
+            // pass `sanitizeHeadings` would give it at the next launch. A raw
+            // label is a heading as soon as the host carries it
+            // (`displayedSections` reads the hosts too), so leaving it raw put
+            // a second, visually identical row beside our cleaned one until
+            // that launch.
             let hostsOnlyOnDisk = diskGroup.hosts.filter { seenHostIDs.insert($0.id).inserted }
-            guard !hostsOnlyOnDisk.isEmpty else { continue }
-            merged[i].hosts.append(contentsOf: hostsOnlyOnDisk)
-            changed = true
+                .map { host -> Host in
+                    var copy = host
+                    // The NAME too, with the load pass's own rule — an adopted
+                    // host was otherwise kept raw in memory AND written raw.
+                    Self.cleanHostName(&copy)
+                    guard let raw = host.section else { return copy }
+                    let cleaned = ConfigurationHygiene.cleanedName(raw)
+                    copy.section = cleaned.isEmpty ? nil : cleaned
+                    return copy
+                }
+            if !hostsOnlyOnDisk.isEmpty {
+                merged[i].hosts.append(contentsOf: hostsOnlyOnDisk)
+                changed = true
+            }
+            // The HEADING LIST is merged too, the way `applyImport(.merge)`
+            // does it: ours first in our order, then the disk's entries we do
+            // not have. Without this, the other copy's work on its headings —
+            // an EMPTY section, a reorder — was overwritten by whatever this
+            // copy happened to hold, and an empty section has no host to bring
+            // it back the way the host union brings a new host back.
+            //
+            // Ours-first means the ORDER is this copy's; two copies that both
+            // reorder the same group cannot both win, and the one saving is
+            // the one the user is looking at.
+            var keys = Set(merged[i].sections.compactMap { Self.headingKey($0) })
+            for name in diskGroup.sections {
+                // CLEANED before it is keyed or kept, exactly as
+                // `applyImport(.merge)` does: `headingKey` folds case and
+                // whitespace but does not strip control characters or cap at
+                // 64, so a raw disk entry ("A" × 200, or "Floor\u{1} 2")
+                // keyed as a DIFFERENT heading from our cleaned spelling of
+                // it — a second, visually identical row, in memory and in the
+                // file we then wrote, until the next launch folded it.
+                let cleaned = ConfigurationHygiene.cleanedName(name)
+                guard let key = Self.headingKey(cleaned), keys.insert(key).inserted else { continue }
+                // …unless THIS copy removed or renamed that heading. Adding it
+                // back is the heading twin of resurrecting a deleted host, and
+                // it took the hosts with it: the row reappeared with our host
+                // under its old name while the new name sat empty beside it.
+                guard !deletedHeadingKeys.contains("\(merged[i].id.uuidString)/\(key)") else {
+                    keys.remove(key)
+                    continue
+                }
+                merged[i].sections.append(cleaned)
+                changed = true
+            }
+            // And the labels of the hosts that just arrived: after any write
+            // a label on a host is in its group's list (see
+            // `materialiseHeadings`), and these came in behind that rule.
+            for host in hostsOnlyOnDisk {
+                // Same cleaning as above — the label is a heading as soon as
+                // it is declared, and a raw one declares a duplicate row.
+                // (The host's own copy of it is cleaned by the next
+                // `sanitizeHeadings`; what must not happen is the LIST
+                // carrying two spellings of one heading.)
+                guard let label = host.sectionName.map({
+                          ConfigurationHygiene.cleanedName($0)
+                      }), let key = Self.headingKey(label),
+                      keys.insert(key).inserted else { continue }
+                // A host arriving UNDER a heading we removed lifts the
+                // tombstone: the other copy filed it there after our removal,
+                // so theirs is the newer action and the row is wanted again.
+                deletedHeadingKeys.remove("\(merged[i].id.uuidString)/\(key)")
+                merged[i].sections.append(label)
+                changed = true
+            }
         }
 
         // Deduped by id, not just filtered: a file can carry the SAME group
@@ -1711,10 +2667,23 @@ final class HostStore: ObservableObject {
                 // elsewhere or have deleted — same rule as above.
                 var g = group
                 g.hosts = g.hosts.filter { seenHostIDs.insert($0.id).inserted }
+                // A whole group arriving from disk gets the load-time pass —
+                // all of it: its heading list and its hosts' labels are
+                // cleaned and reconciled (so it cannot bring two spellings of
+                // one heading with it), and its hosts' names are cleaned.
+                _ = ConfigurationHygiene.sanitizeHeadings(&g)
+                Self.cleanHostNames(&g.hosts)
                 return g
             }
         if !groupsOnlyOnDisk.isEmpty {
             merged.append(contentsOf: groupsOnlyOnDisk)
+            // …and its NAME, under the load pass's collision rule, checked
+            // against every group now in the list. For OUR groups this is a
+            // no-op with one exception: a name kept raw at load because of a
+            // collision that has since gone away (the other group was renamed)
+            // is cleaned HERE — one launch early — and written with this save.
+            // Harmless: a group's identity is its id everywhere, never its name.
+            Self.cleanGroupNames(&merged)
             changed = true
         }
 
@@ -1748,7 +2717,7 @@ final class HostStore: ObservableObject {
         for host in recents where seen.insert(host.connectionKey).inserted {
             merged.append(host)
         }
-        for host in diskRecents {
+        for host in Self.cleanedRecents(diskRecents) {
             guard !deletedRecentKeys.contains(host.connectionKey) else { continue }
             if seen.insert(host.connectionKey).inserted { merged.append(host) }
         }
@@ -1821,6 +2790,13 @@ final class HostStore: ObservableObject {
         // entries share one id (colliding SwiftUI row identities).
         var entry = host
         entry.id = UUID()
+        // And NO heading. A recent is a connection, not a filing: nothing
+        // keeps this copy in step with the group's list, so a heading renamed
+        // or removed afterwards lived on in Recent — and ⌘K, which matches a
+        // host's heading, went on finding a section that is not there any
+        // more. The saved host keeps its own label; this copy has no business
+        // with it.
+        entry.section = nil
         // Connecting to it again is the user asking for it back.
         deletedRecentKeys.remove(entry.connectionKey)
         recents.removeAll { $0.sameConnection(as: entry) }
@@ -1855,6 +2831,28 @@ final class HostStore: ObservableObject {
         save()
     }
 
+    /// The group a Quick Connect "Save to group → New group…" names. It was
+    /// the one group-creating path that skipped `cleanGroupName`: the sheet
+    /// only trimmed, and `AppModel.saveSession` looked the name up raw and
+    /// appended it raw — so "Branch⟨U+2028⟩BKK" made a raw group, and after a
+    /// relaunch (whose load pass cleans it to "Branch BKK") the same text made
+    /// a SECOND one. Blank is the sheet's own fallback, "Quick Connect".
+    static func quickConnectGroupName(_ raw: String) -> String {
+        let cleaned = cleanGroupName(raw)
+        return cleaned.isEmpty ? "Quick Connect" : cleaned
+    }
+
+    /// Where a Quick Connect save lands: the group with EXACTLY that name
+    /// first (a group picked from the sheet's list, even a legacy one kept raw
+    /// for a collision), then the one with the cleaned name — the name a new
+    /// group would be created under. nil = create it. The lookup and the
+    /// stored name agree because both go through `quickConnectGroupName`.
+    func quickConnectGroupIndex(for raw: String) -> Int? {
+        if let exact = groups.firstIndex(where: { $0.name == raw }) { return exact }
+        let name = Self.quickConnectGroupName(raw)
+        return groups.firstIndex { $0.name == name }
+    }
+
     /// The one pass a group NAME gets, wherever one arrives — typed into New
     /// Group, renamed, or read out of a `.sheepterm` file. `sanitizedName`
     /// strips control characters and caps the length but does NOT trim, and
@@ -1866,8 +2864,7 @@ final class HostStore: ObservableObject {
         // neither control characters (so `sanitizedName` keeps them) nor
         // spaces, and a name that still ends in a line separator reads as a
         // different group from the one beside it.
-        ConfigurationHygiene.sanitizedName(name)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        ConfigurationHygiene.cleanedName(name)
     }
 
     /// Same duplicate-name rule as addGroup — renaming into an existing
@@ -2063,7 +3060,13 @@ final class HostStore: ObservableObject {
     /// Edit Host carries a literal `auto` — the same host, and a re-import
     /// must not raise Replace/Keep over the spelling.
     static func sameForImport(_ a: Host, _ b: Host) -> Bool {
-        a.name == b.name && a.kind == b.kind && a.address == b.address
+        // NAMES compared as the store would write them, on BOTH sides. An
+        // import cleans the incoming name (since round 10 that folds U+2028),
+        // but a name stored before that fix still carries the raw character —
+        // so re-importing your own export raised a Replace/Keep conflict
+        // whose diff read "name: sw 1 → sw 1".
+        ConfigurationHygiene.cleanedName(a.name) == ConfigurationHygiene.cleanedName(b.name)
+            && a.kind == b.kind && a.address == b.address
             && a.port == b.port && a.username == b.username
             && (a.cipherMode ?? .auto) == (b.cipherMode ?? .auto)
             && (a.agentForward ?? false) == (b.agentForward ?? false)
@@ -2101,10 +3104,13 @@ final class HostStore: ObservableObject {
             var group = incoming
             group.id = UUID()
             group.name = uniqueGroupName(base: Self.cleanGroupName(incoming.name))
-            // A new group has no headings of its own, so the batch is snapped
-            // against ITSELF: three spellings of one heading in a single
-            // import must not open three rows.
+            // The batch is snapped against ITSELF: three spellings of one
+            // heading in a single import must not open three rows. Then
+            // against the file's DECLARED list, which comes with the group —
+            // including headings no host is in (an empty section is a row the
+            // user made, and exporting a group has to bring it along).
             group.hosts = Self.freshIDs(BulkHostParser.snappedHostsWithinBatch(group.hosts))
+            _ = ConfigurationHygiene.sanitizeHeadings(&group)
             groups.append(group)
             stats.addedGroup = true
             stats.groupName = group.name
@@ -2120,8 +3126,11 @@ final class HostStore: ObservableObject {
                 var group = incoming
                 group.id = UUID()
                 group.name = uniqueGroupName(base: Self.cleanGroupName(incoming.name))
-                // Same pass as `.createNew` — this IS a new group.
+                // Same pass as `.createNew` — this IS a new group, so it
+                // brings the file's declared headings with it (cleaned) and
+                // declares whatever its rows carry.
                 group.hosts = Self.freshIDs(BulkHostParser.snappedHostsWithinBatch(group.hosts))
+                _ = ConfigurationHygiene.sanitizeHeadings(&group)
                 groups.append(group)
                 stats.addedGroup = true
                 stats.groupName = group.name
@@ -2134,7 +3143,21 @@ final class HostStore: ObservableObject {
             // into a 2,000-host group was 2,000 × 4,000 scans — measured at
             // 3.2 s. The heading list is maintained as labels are written, and
             // the pairing below is one pass with dictionaries.
+            // OURS first, in our order, then the file's headings we do not
+            // have: a merge must not reorder the sidebar the user arranged,
+            // and it must not drop an empty section the file carries.
             var headings = sections(in: groups[index].id)
+            // Keyed for the loop below: `normalizedHeading(existing:)` scans
+            // the list per row, so 2,000 rows into a group with 2,000 headings
+            // was four million comparisons.
+            var byKey: [String: String] = [:]
+            for name in headings { if let key = Self.headingKey(name) { byKey[key] = name } }
+            for name in incoming.sections {
+                let cleaned = ConfigurationHygiene.cleanedName(name)
+                guard let key = Self.headingKey(cleaned), byKey[key] == nil else { continue }
+                byKey[key] = cleaned
+                headings.append(cleaned)
+            }
             // ONE pairing, shared with the dialog (`conflictingHosts`), taken
             // over the PRE-merge array: which host each row is about was
             // decided when the user answered, and every row is about a
@@ -2162,7 +3185,9 @@ final class HostStore: ObservableObject {
                     // In place: the slot is claimed by this row alone, so no
                     // later row can read or overwrite what was just written.
                     groups[index].hosts[hostIndex] = merged
-                    if let label = merged.sectionName, !headings.contains(label) {
+                    if let label = merged.sectionName, let key = Self.headingKey(label),
+                       byKey[key] == nil {
+                        byKey[key] = label
                         headings.append(label)
                     }
                     // As `updateHost` does: the recent keyed by the old
@@ -2178,14 +3203,30 @@ final class HostStore: ObservableObject {
                     // three writers do the same through the same normaliser —
                     // `setSection` (re-filing), `moveHosts` (a drop) and
                     // `snappedHostsWithinBatch` (a brand-new group).
-                    added.section = Self.normalizedHeading(added.section, existing: headings)
-                    if let label = added.sectionName, !headings.contains(label) {
-                        headings.append(label)
+                    // Snapped through the dictionary rather than
+                    // `normalizedHeading(existing:)`, which scans: same
+                    // answer, one lookup.
+                    if let asked = added.sectionName,
+                       let key = Self.headingKey(ConfigurationHygiene.sanitizedName(asked)) {
+                        if let existing = byKey[key] {
+                            added.section = existing
+                        } else {
+                            let cleaned = ConfigurationHygiene.cleanedName(asked)
+                            added.section = cleaned
+                            byKey[key] = cleaned
+                            headings.append(cleaned)
+                        }
+                    } else {
+                        added.section = nil
                     }
                     groups[index].hosts.append(added)
                     stats.addedHosts += 1
                 }
             }
+            // `headings` grew as labels were written, and it started as the
+            // DISPLAYED order, so this both declares what the loop added and
+            // folds in any label an older build left on a host alone.
+            if groups[index].sections != headings { groups[index].sections = headings }
         }
         save()
         return stats
@@ -2252,10 +3293,15 @@ final class HostStore: ObservableObject {
     }
 
     func updateHost(_ host: Host) {
-        noteUserMutation()
         for groupIndex in groups.indices {
             if let hostIndex = groups[groupIndex].hosts.firstIndex(where: { $0.id == host.id }) {
                 let old = groups[groupIndex].hosts[hostIndex]
+                // AFTER the lookup, like every other mutator here: an update
+                // for a host that is no longer anywhere changes nothing, and
+                // `noteUserMutation` re-arms writing over a file that was
+                // quarantined at launch. This was the one door that re-armed
+                // them for a no-op.
+                noteUserMutation()
                 groups[groupIndex].hosts[hostIndex] = host
                 // Recents keyed by the old address+port+username follow
                 // the edit instead of pointing at a stale connection.
@@ -2384,20 +3430,175 @@ final class HostStore: ObservableObject {
 
     // MARK: Sections (sub-headings INSIDE a group)
 
-    /// Every section label used inside one group, in the order its first host
-    /// appears. Derived, never stored — a section exists exactly as long as a
-    /// host carries its label, so there is no list to keep in step and no
-    /// empty section to clean up.
+    /// The headings one group shows, in order — `HostGroup.displayedSections`
+    /// by id. THE one question, asked in one place: the group's declared list
+    /// first, then any label a host still carries that the list has not
+    /// caught up with.
     func sections(in groupID: UUID) -> [String] {
-        guard let group = groups.first(where: { $0.id == groupID }) else { return [] }
-        var seen = Set<String>()
-        var out: [String] = []
-        for host in group.hosts {
-            guard let name = host.sectionName, seen.insert(name).inserted else { continue }
-            out.append(name)
-        }
-        return out
+        groups.first { $0.id == groupID }?.displayedSections ?? []
     }
+
+    /// The headings to offer for a SELECTION of hosts: the union of the
+    /// headings of the groups those hosts are in, in first-appearance order.
+    ///
+    /// One pass, because the menu asks this for every selected row: the
+    /// submenu used to call `sections(in:)` per host, each with a linear
+    /// search for the host's group and a linear `contains` for the dedupe —
+    /// ⌘A then right-click on 2,000 hosts across 800 headings measured at
+    /// 3.8 s before the menu appeared.
+    func offeredSections(forHostIDs ids: Set<UUID>) -> [String] {
+        // Which groups the selection touches: ONE pass over the hosts, not a
+        // group lookup per selected host.
+        var wanted = Set<Int>()
+        for (groupIndex, group) in groups.enumerated()
+        where group.hosts.contains(where: { ids.contains($0.id) }) {
+            wanted.insert(groupIndex)
+        }
+        // In GROUP order, not selection order, so two right-clicks on the
+        // same selection cannot offer two orders. Deduped by folded key.
+        var offered: [String] = []
+        var seen = Set<String>()
+        for groupIndex in groups.indices where wanted.contains(groupIndex) {
+            for label in groups[groupIndex].displayedSections {
+                guard let key = Self.headingKey(label), seen.insert(key).inserted else { continue }
+                offered.append(label)
+            }
+        }
+        return offered
+    }
+
+    /// Creates a heading in a group with no hosts in it — the group's own
+    /// menu item, since a section belongs to the group.
+    ///
+    /// Returns the label that is now in the list: the existing spelling when
+    /// one reads the same ("Floor  2" joins "Floor 2"), the cleaned name when
+    /// it is new, and **nil when the name had nothing usable in it** or the
+    /// group is gone. A name that is already there is not a failure — the
+    /// caller gets the label back — but it writes nothing, so a quarantined
+    /// file stays quarantined (the same rule as `addGroup`/`renameGroup`).
+    @discardableResult
+    func declareSection(_ name: String, inGroup groupID: UUID) -> String? {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return nil }
+        // On a COPY: `groups[index].declareHeading(...)` would mutate through
+        // the subscript and fire the @Published didSet even when the heading
+        // was already there — a no-op that re-arms writes over a quarantined
+        // file is the one thing every store method here avoids.
+        var group = groups[index]
+        // The list is written from what the group DISPLAYS first, the way
+        // `moveSection` does it: on a group whose headings are only implied
+        // (a file from an older build, a merge from another machine)
+        // appending to an empty list would put the new heading ABOVE the rows
+        // already on screen. `materialiseHeadings` does this on load too; this
+        // is the belt to that brace.
+        group.sections = group.displayedSections
+        guard let label = Self.normalizedHeading(name, existing: group.sections) else { return nil }
+        guard group.declareHeading(label) else { return label }
+        noteUserMutation()
+        groups[index] = group
+        save()
+        return label
+    }
+
+    /// Moves a heading one place up or down in its group's list.
+    ///
+    /// Returns false when it cannot move (already at the end, or the group or
+    /// heading is gone) — which is also what the menu asks to decide whether
+    /// to disable the item. A heading a host carries but the list has not
+    /// caught up with is written into the list first: reordering is the write
+    /// that makes an implied heading an explicit one.
+    @discardableResult
+    func moveSection(in groupID: UUID, _ name: String, direction: SectionMove) -> Bool {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return false }
+        // The DISPLAYED order is what the user is looking at, so that is the
+        // order being rearranged; writing it back declares any label that was
+        // only ever on a host.
+        var order = groups[index].displayedSections
+        guard let at = order.firstIndex(where: { $0 == name || Self.sameHeading($0, name) })
+        else { return false }
+        let to = direction == .up ? at - 1 : at + 1
+        guard order.indices.contains(to) else { return false }
+        order.swapAt(at, to)
+        guard order != groups[index].sections else { return false }
+        noteUserMutation()
+        groups[index].sections = order
+        save()
+        return true
+    }
+
+    /// A heading as a drag carries it: its group and its DISPLAYED spelling
+    /// (the row's title, which is what `sections(in:)` returns).
+    struct SectionReference: Codable, Hashable {
+        let groupID: UUID
+        let name: String
+    }
+
+    /// Moves a heading — and, across groups, every host under it — as ONE
+    /// write. `index` is a pre-removal position in the destination's displayed
+    /// heading order (`SidebarLayout.headingSlot`).
+    ///
+    /// Returns the heading's spelling in the destination, or nil when there is
+    /// nothing to move (the source group or heading is gone). A same-group
+    /// drop that changes nothing returns the name WITHOUT writing: a no-op must
+    /// not re-arm writes over a quarantined file.
+    ///
+    /// Across groups, a destination heading that READS the same is the same
+    /// heading (the user's decision): the moved hosts take the destination's
+    /// spelling and JOIN it — no second row, no "Alpha (2)". The source heading
+    /// leaves the source list and is tombstoned, so a stale copy's file cannot
+    /// put it back.
+    @discardableResult
+    func moveSection(_ source: SectionReference, toGroupID destinationID: UUID,
+                     atIndex index: Int) -> String? {
+        guard let from = groups.firstIndex(where: { $0.id == source.groupID }),
+              let to = groups.firstIndex(where: { $0.id == destinationID }) else { return nil }
+        var updated = groups
+        let sourceOrder = updated[from].displayedSections
+        guard let sourceIndex = sourceOrder.firstIndex(of: source.name) else { return nil }
+        var order = updated[to].displayedSections
+        let insertion = max(0, min(index, order.count))
+        if from == to {
+            order.remove(at: sourceIndex)
+            order.insert(source.name, at: insertion - (sourceIndex < insertion ? 1 : 0))
+            if order == sourceOrder { return source.name }
+            updated[from].sections = order
+        } else {
+            // MERGE on a read-alike heading: the destination's own spelling
+            // wins, and that heading is MOVED to where the user dropped — the
+            // line was drawn there, so that is where the heading must land
+            // (the same principle as a host drop).
+            let existing = order.firstIndex { Self.sameHeading($0, source.name) }
+            let label = existing.map { order[$0] } ?? source.name
+            var moved = updated[from].hosts.filter { Self.sameHeading($0.sectionName, source.name) }
+            let movedIDs = Set(moved.map(\.id))
+            updated[from].hosts.removeAll { movedIDs.contains($0.id) }
+            updated[from].sections = sourceOrder.filter { $0 != source.name }
+            for i in moved.indices { moved[i].section = label }
+            updated[to].hosts.append(contentsOf: moved)
+            if let existing {
+                order.remove(at: existing)
+                let landing = insertion - (existing < insertion ? 1 : 0)
+                order.insert(label, at: max(0, min(landing, order.count)))
+            } else {
+                order.insert(label, at: insertion)
+            }
+            updated[to].sections = order
+            noteUserMutation()
+            groups = updated
+            if let key = Self.headingTombstone(group: source.groupID, label: source.name) {
+                deletedHeadingKeys.insert(key)
+            }
+            save()
+            return label
+        }
+        noteUserMutation()
+        groups = updated
+        save()
+        return source.name
+    }
+
+    /// Which way `moveSection` moves a heading. An enum rather than a Bool
+    /// because `moveSection(in:label, up: false)` reads like a refusal.
+    enum SectionMove { case up, down }
 
     /// Files the given hosts under `name` (nil = loose in their group).
     /// Returns how many hosts actually changed.
@@ -2439,45 +3640,89 @@ final class HostStore: ObservableObject {
         }
         guard !targets.isEmpty else { return 0 }
         noteUserMutation()
-        for target in targets { groups[target.group].hosts[target.host].section = target.label }
+        var touched = Set<Int>()
+        for target in targets {
+            groups[target.group].hosts[target.host].section = target.label
+            if target.label != nil { touched.insert(target.group) }
+        }
+        // ONCE per group, AFTER every label is written — not per host.
+        // `displayedSections` is the list plus whatever the hosts now carry,
+        // so one assignment both declares the new label and folds in any
+        // heading that was only implied; doing it inside the loop walked the
+        // whole group per host (2,000 hosts filed in one call measured at 1 s).
+        //
+        // Materialised rather than appended, as `declareSection` and
+        // `renameSection` do it: appending to a list that is still empty while
+        // the group's other headings are only implied put this one at the TOP
+        // — an ordinary drop reordered the sidebar.
+        for group in touched.sorted() {
+            groups[group].sections = groups[group].displayedSections
+        }
         save()
         return targets.count
     }
 
-    /// Renames a section inside one group. Case-sensitive, like group names.
-    /// Returns the number of hosts changed; **0 also means refused** — an
-    /// empty new name, or a name that is already another section in that
-    /// group (merging two headings silently is not this method's call to
-    /// make, exactly as `renameGroup` refuses a duplicate). The caller asks
-    /// `sections(in:)` to tell the two apart.
+    /// Renames a section inside one group, in place in the group's list.
+    /// Case-sensitive, like group names.
+    ///
+    /// Returns false when it was REFUSED: an empty new name, a heading that
+    /// is not in that group, or a name that already reads as another heading
+    /// there (merging two headings silently is not what "rename" means — the
+    /// same rule `renameGroup` has). The caller asks `sections(in:)` which of
+    /// those it was. An EMPTY heading renames like any other: it is a row of
+    /// the group's, not a property of its hosts.
     @discardableResult
-    func renameSection(in groupID: UUID, from old: String, to new: String) -> Int {
+    func renameSection(in groupID: UUID, from old: String, to new: String) -> Bool {
         // The SAME normaliser the write uses, so what the caller is told and
         // what lands in the file cannot differ (`normalizedHeading` is also
         // what the sidebar asks before it rekeys the fold state).
-        let cleaned = ConfigurationHygiene.sanitizedName(new)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = ConfigurationHygiene.cleanedName(new)
         let trimmed = cleaned
         guard !trimmed.isEmpty, trimmed != old,
-              let groupIndex = groups.firstIndex(where: { $0.id == groupID }),
-              // Inner whitespace included: "Floor 2" and "Floor  2" would be
-              // two headings nobody can tell apart in the sidebar. The hosts
-              // being RENAMED are not a collision with themselves, though —
-              // without that exclusion `floor 2` → `Floor 2` and `Floor  2`
-              // → `Floor 2` (tidying one heading's own spelling) were refused
-              // as "already used".
-              !groups[groupIndex].hosts.contains(where: {
-                  guard $0.sectionName != old else { return false }
-                  return $0.sectionName == trimmed || Self.sameHeading($0.sectionName, trimmed)
-              }) else { return 0 }
-        let indices = groups[groupIndex].hosts.indices.filter {
-            groups[groupIndex].hosts[$0].sectionName == old
+              let groupIndex = groups.firstIndex(where: { $0.id == groupID })
+        else { return false }
+        // On a materialised COPY, for the same two reasons `declareSection`
+        // works that way: a no-op must write nothing, and a group whose
+        // headings are only implied must keep its visible ORDER when one of
+        // them is renamed.
+        var group = groups[groupIndex]
+        group.sections = group.displayedSections
+        // The heading has to BE there — as a declared row or on a host.
+        guard group.sections.contains(where: { $0 == old }) else { return false }
+        // Inner whitespace included: "Floor 2" and "Floor  2" would be two
+        // headings nobody can tell apart in the sidebar. The heading being
+        // RENAMED is not a collision with itself, though — without that
+        // exclusion `floor 2` → `Floor 2` and `Floor  2` → `Floor 2` (tidying
+        // one heading's own spelling) were refused as "already used".
+        guard !group.sections.contains(where: {
+            guard $0 != old else { return false }
+            return $0 == trimmed || Self.sameHeading($0, trimmed)
+        }) else { return false }
+        // `sameHeading`, not `==`: a label written by an older build (or
+        // merged in from another machine) can read the same as the heading
+        // row and be spelled differently, and matching on the exact string
+        // renamed the row while leaving those hosts pointing at nothing.
+        for index in group.hosts.indices where Self.sameHeading(group.hosts[index].sectionName, old) {
+            group.hosts[index].section = trimmed
         }
-        guard !indices.isEmpty else { return 0 }
+        // In PLACE in the list: a rename is not a reorder, and a heading that
+        // jumped to the bottom of the group because its name changed would be
+        // a worse surprise than the name itself.
+        if let at = group.sections.firstIndex(where: { $0 == old }) {
+            group.sections[at] = trimmed
+        } else {
+            group.declareHeading(trimmed)
+        }
         noteUserMutation()
-        for index in indices { groups[groupIndex].hosts[index].section = trimmed }
+        groups[groupIndex] = group
+        // The OLD name is gone from this copy, so it must not come back from
+        // a disk written before the rename. (The new one is declared in
+        // memory, so `pruneHeadingTombstones` clears any tombstone it had.)
+        if let key = Self.headingTombstone(group: groupID, label: old) {
+            deletedHeadingKeys.insert(key)
+        }
         save()
-        return indices.count
+        return true
     }
 
     /// Takes a heading away: its hosts stay in the group, loose. Nothing is
@@ -2486,12 +3731,29 @@ final class HostStore: ObservableObject {
     @discardableResult
     func removeSection(in groupID: UUID, _ name: String) -> Int {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return 0 }
+        // `sameHeading`, not `==`: the sidebar folds two spellings that read
+        // the same into ONE row, so removing that row has to take every host
+        // under it — matching the exact string left some of them filed under
+        // a heading that is no longer there.
         let indices = groups[groupIndex].hosts.indices.filter {
-            groups[groupIndex].hosts[$0].sectionName == name
+            Self.sameHeading(groups[groupIndex].hosts[$0].sectionName, name)
+                || groups[groupIndex].hosts[$0].sectionName == name
         }
-        guard !indices.isEmpty else { return 0 }
+        // The heading itself leaves the group's list — an EMPTY heading is a
+        // real row now, so "Remove Section" on one has something to do even
+        // when no host carries the label.
+        let declared = groups[groupIndex].sections.firstIndex {
+            $0 == name || Self.sameHeading($0, name)
+        }
+        guard !indices.isEmpty || declared != nil else { return 0 }
         noteUserMutation()
         for index in indices { groups[groupIndex].hosts[index].section = nil }
+        if let declared { groups[groupIndex].sections.remove(at: declared) }
+        // Remembered for the life of the process: "on disk, not in memory" is
+        // what a heading we just removed looks like to the merge.
+        if let key = Self.headingTombstone(group: groupID, label: name) {
+            deletedHeadingKeys.insert(key)
+        }
         save()
         return indices.count
     }
@@ -2509,7 +3771,9 @@ final class HostStore: ObservableObject {
     /// How many of these hosts are filed under one heading — for the same
     /// reason: a filtered row knows only the hosts that matched.
     static func hostCount(inSection label: String, hosts: [Host]) -> Int {
-        hosts.filter { $0.sectionName == label }.count
+        // `sameHeading` as well: the row counts what is UNDER it, and the
+        // sidebar puts every label that reads the same under one row.
+        hosts.filter { $0.sectionName == label || sameHeading($0.sectionName, label) }.count
     }
 
     /// The heading actually WRITTEN for a label the user typed: hygiene
@@ -2523,8 +3787,7 @@ final class HostStore: ObservableObject {
     /// about the raw string.
     static func normalizedHeading(_ label: String?, existing: [String]) -> String? {
         guard let label else { return nil }
-        let cleaned = ConfigurationHygiene.sanitizedName(label)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = ConfigurationHygiene.cleanedName(label)
         guard !cleaned.isEmpty else { return nil }
         return snappedHeading(cleaned, existing: existing)
     }
@@ -2545,13 +3808,26 @@ final class HostStore: ObservableObject {
     /// sidebar cannot show "Floor 2" and "Floor  2" as two different rows in
     /// any way a person can act on.
     static func sameHeading(_ a: String?, _ b: String?) -> Bool {
-        func key(_ text: String?) -> String? {
-            guard let text else { return nil }
-            let parts = text.lowercased().split(whereSeparator: \.isWhitespace)
-            return parts.isEmpty ? nil : parts.joined(separator: " ")
-        }
-        guard let left = key(a), let right = key(b) else { return false }
+        guard let left = headingKey(a), let right = headingKey(b) else { return false }
         return left == right
+    }
+
+    /// The FOLDED form of a heading — lowercased, every run of whitespace
+    /// squeezed to one space — or nil when nothing is left. Two headings read
+    /// the same exactly when their keys are equal, and `sameHeading` is
+    /// defined as that, so there is one rule and not two.
+    ///
+    /// Exposed because every list operation needs the key, not the comparison:
+    /// folding a string costs a lowercase and a split, and asking
+    /// `sameHeading` inside a loop over the headings made `displayedSections`,
+    /// `SidebarLayout.rows`, `declareHeading` and `sanitizeHeadings` all
+    /// quadratic — 800 headings over 2,000 hosts measured at ~2 s per sidebar
+    /// rebuild (and every drag-over does one), and a hand-written 10,000-name
+    /// list took 49 s to open. With a `Set` of keys they are linear.
+    static func headingKey(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let parts = text.lowercased().split(whereSeparator: \.isWhitespace)
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     /// What the "Set Credential for Group" picker is showing. THREE states,
@@ -2612,19 +3888,25 @@ final class HostStore: ObservableObject {
     /// the insertion line.
     ///
     /// Pure, and taken from the row below on purpose. The row above was the
-    /// obvious choice and it is wrong whenever a heading is not contiguous:
-    /// with the array `[A(sec1), B, C(sec1), X]` the sidebar shows
-    /// `sec1[A, C] / B / X`, so the gap above B has the sec1 HEADING above
-    /// it, and "just after the heading's last host" is index 3 — where X
-    /// already was. The drop did nothing. The row below the line is the one
-    /// the user is pointing at, and its own index is always the answer.
+    /// obvious choice and it is wrong as soon as a heading's hosts are not
+    /// contiguous in the array: with `[A(F1), B]` the sidebar shows `B` (loose,
+    /// first) then the `F1` heading with A under it, so the gap below B has a
+    /// HEADING below it, and "just after the row above" would be index 1 —
+    /// where B already sits. The row below the line is the one the user is
+    /// pointing at.
     ///
-    /// `childFirstHostIDs` is, for each display child of the group (or of a
-    /// heading), the id of its FIRST host: a loose row is its own host, a
-    /// heading row is the first host under it.
-    static func dropIndex(in hosts: [Host], childFirstHostIDs ids: [UUID], childIndex index: Int) -> Int {
-        guard index >= 0, index < ids.count else { return hosts.count }
-        return hosts.firstIndex { $0.id == ids[index] } ?? hosts.count
+    /// `childFirstHostIDs` is one entry per display child, and **nil for any
+    /// child that is not a loose host**: an empty heading has no host at all,
+    /// and a heading row's first host can sit ANYWHERE in the array now that
+    /// loose hosts come first — reading its id here put a drop below the last
+    /// loose host at that host's index inside the heading, which is usually 0.
+    /// nil means "no host to point at", and that is the end of the group.
+    static func dropIndex(in hosts: [Host], childFirstHostIDs ids: [UUID?], childIndex index: Int) -> Int {
+        // The end of the group for every case that names no host: past the
+        // last child, or a child that is a heading. Under the loose rows IS
+        // the end of the loose rows, which is where the headings start.
+        guard index >= 0, index < ids.count, let id = ids[index] else { return hosts.count }
+        return hosts.firstIndex { $0.id == id } ?? hosts.count
     }
 
     /// The hosts of one group, in array order — what the sidebar displays and
@@ -2802,7 +4084,13 @@ final class HostStore: ObservableObject {
                    keepHeadingWhenStaying: Bool = false) -> Int {
         guard let destGroup = groups.firstIndex(where: { $0.id == groupID }) else { return 0 }
         let wanted = Set(ids)
-        // Sidebar order = groups in order, hosts in order.
+        // The moved hosts keep their ARRAY order — `groups.flatMap(\.hosts)`,
+        // i.e. group order then each group's own order. That is NOT the
+        // sidebar's row order any more: the sidebar puts a group's loose hosts
+        // above its headings (`SidebarLayout.rows`), so a multi-row drag that
+        // spans a heading boundary lands its hosts in array order, not in the
+        // order the rows appeared. Array order is the one that survives the
+        // labels being rewritten by this very call.
         // The heading travels through the same normaliser as every other
         // write: dropping hosts on "floor  2" in a group that already has
         // "Floor 2" files them under the existing one.
@@ -2832,6 +4120,17 @@ final class HostStore: ObservableObject {
         }
         let destination = max(0, min(clamped - removedBefore, updated[destGroup].hosts.count))
         updated[destGroup].hosts.insert(contentsOf: moving, at: destination)
+        // The destination group owns the heading the hosts just landed in —
+        // materialised first, for the same reason `setSection` does it: a drop
+        // into "Bravo" must not lift Bravo above Alpha because neither was in
+        // the list yet.
+        // ONE assignment: the hosts already carry the label, so
+        // `displayedSections` is the declared list plus it, in the right
+        // place. (`declareHeading` afterwards would be a second walk for
+        // nothing.)
+        if sectionValue != nil {
+            updated[destGroup].sections = updated[destGroup].displayedSections
+        }
         guard updated != groups else { return 0 }
         noteUserMutation()
         groups = updated
@@ -2873,8 +4172,18 @@ final class HostStore: ObservableObject {
         }
         if let index = groups.firstIndex(where: { $0.name == name }) {
             groups[index].hosts.append(host)
+            // The group owns its heading list, so a host arriving WITH a label
+            // declares it. (Quick Connect's host carries none by construction;
+            // a future caller's might.)
+            if host.sectionName != nil {
+                groups[index].sections = groups[index].displayedSections
+            }
         } else {
-            groups.append(HostGroup(name: name, hosts: [host]))
+            // Same rule for a group being created here: the label the host
+            // carries IS the group's first heading, or the next load would
+            // treat it as an undeclared leftover.
+            groups.append(HostGroup(name: name, hosts: [host],
+                                    sections: host.sectionName.map { [$0] } ?? []))
         }
         save()
     }
@@ -2906,6 +4215,186 @@ struct GroupImportStats {
     /// silently shrinks between the dialog and the sidebar is the kind of
     /// difference someone finds a week later.
     var repeatedRows = 0
+}
+
+/// The sidebar's row order INSIDE one group, worked out away from AppKit so
+/// it can be tested. `SidebarOutline` walks this and builds rows from it; it
+/// decides nothing about order itself.
+///
+/// **The rule**: loose hosts first, in the group's array order, then the
+/// headings in the group's declared order (`displayedSections`), each with its
+/// own hosts in array order. An empty heading is a row with no hosts.
+///
+/// Loose first, and not "a heading where its first host sits", because the
+/// group now owns the heading ORDER: with the heading rows floating to
+/// wherever their first host happened to be, Move Up / Move Down had nothing
+/// to move and a newly created empty heading had nowhere to appear. Putting
+/// the loose hosts above the headings is the only arrangement where the list
+/// order the user sets is the order they see — and it matches how anyone
+/// writes such a list by hand: the odd ones at the top, then the labelled
+/// blocks.
+enum SidebarLayout {
+    enum Row: Equatable {
+        case host(Host)
+        case heading(String, hosts: [Host])
+    }
+
+    /// What `HostStore.dropIndex` needs for a drop between a GROUP's children:
+    /// one entry per display row, **nil for anything that is not a loose
+    /// host**. Here rather than in the outline so the drop arithmetic can be
+    /// tested against the real row list.
+    ///
+    /// A heading contributes nil even when it has hosts: loose rows come first
+    /// now, so a heading's first host can sit anywhere in the array, and
+    /// pointing the insertion line at it sent a drop below the last loose row
+    /// to that host's index — usually 0, i.e. the top of the group.
+    static func childFirstHostIDs(for group: HostGroup) -> [UUID?] {
+        rows(for: group).map { row in
+            if case .host(let host) = row { return host.id }
+            return nil
+        }
+    }
+
+    /// The INVERSE of `HostStore.dropIndex` for a GROUP row: which child row
+    /// the insertion line belongs above, for a store index the drop resolved
+    /// to. `validateDrop` needs it to draw the line where the host will
+    /// actually appear.
+    ///
+    /// The two must agree, which is why they live beside each other:
+    /// `dropIndex` reads "the row below the line names the host at that store
+    /// index", so the inverse is "the first row whose host sits at or after
+    /// that index". A row with no host (a heading, empty or not) names none,
+    /// so the answer for anything past the loose rows is the END of the loose
+    /// rows — which is where the headings begin. The old version read a
+    /// heading's FIRST host instead and fell back to "after every child", so
+    /// with loose hosts first the line was drawn under the headings for a drop
+    /// that was going to land above them.
+    static func childRow(forStoreIndex index: Int, in group: HostGroup) -> Int {
+        let ids = childFirstHostIDs(for: group)
+        // Position in the group's array, by id, once.
+        var position: [UUID: Int] = [:]
+        for (at, host) in group.hosts.enumerated() { position[host.id] = at }
+        if let row = ids.firstIndex(where: { id in
+            guard let id, let at = position[id] else { return false }
+            return at >= index
+        }) {
+            return row
+        }
+        return ids.prefix { $0 != nil }.count
+    }
+
+    /// The spelling of the heading ROW a label belongs under — the group's
+    /// displayed spelling when one reads the same, the label itself otherwise.
+    ///
+    /// A row's id is built from its displayed label (`sectionRowID`), but a
+    /// drop ON a host takes that host's own label, which can be spelled
+    /// differently ("floor  2" under the "Floor 2" row). Looking the row up by
+    /// the host's spelling found nothing, and `validateDrop` refused the drop.
+    static func headingRowLabel(for label: String, in group: HostGroup) -> String {
+        guard let key = HostStore.headingKey(label) else { return label }
+        return group.displayedSections.first { HostStore.headingKey($0) == key } ?? label
+    }
+
+    /// What is under the pointer when a HEADING is dragged, in plain terms —
+    /// the view's only job is to translate AppKit's (item, childIndex) into
+    /// one of these, so the rules live here where they can be tested.
+    enum HeadingDropTarget: Equatable {
+        /// Between rows at the group level (item = the group, a child index).
+        case betweenGroupRows(Int)
+        /// ON the group's header row.
+        case onGroupHeader
+        /// ON a loose host (a host with no heading).
+        case onLooseHost
+        /// ON a heading row.
+        case onHeading(String)
+        /// Among a heading's hosts: ON one of them, or the heading row with a
+        /// child index between its hosts.
+        case amongHeadingHosts(String)
+        /// The root gap under the last group.
+        case rootGap
+    }
+
+    /// Where a dragged heading lands: `slot` is its insertion position among
+    /// the destination group's headings (pre-removal, in `displayedSections`
+    /// order — what `HostStore.moveSection` takes), and `lineChildIndex` is
+    /// where the insertion line is drawn, at the group level. Headings follow
+    /// the loose hosts (`rows(for:)`), so the line is always at
+    /// `looseCount + slot`: it can never be drawn among the loose hosts, where
+    /// a heading cannot go.
+    ///
+    /// The rules:
+    /// - between group rows: the headings before that index (a point among the
+    ///   loose rows is slot 0, drawn just after them);
+    /// - ON the group header, or the root gap: the END;
+    /// - ON a loose host: slot 0, the first heading position — not the end,
+    ///   which drew the line at the bottom of the group while the pointer was
+    ///   at the top;
+    /// - ON a heading row: BEFORE it;
+    /// - among a heading's hosts: AFTER it — resolving to "before" drew the
+    ///   line above a heading the user had dragged down onto.
+    static func headingSlot(in group: HostGroup,
+                            target: HeadingDropTarget) -> (slot: Int, lineChildIndex: Int) {
+        let headings = group.displayedSections
+        // The SAME test `rows(for:)` uses to decide a host is loose — one
+        // definition, so the line cannot be drawn among the wrong rows.
+        let looseCount = group.hosts.filter { HostStore.headingKey($0.sectionName) == nil }.count
+        func position(_ label: String) -> Int? {
+            guard let key = HostStore.headingKey(label) else { return nil }
+            return headings.firstIndex { HostStore.headingKey($0) == key }
+        }
+        let slot: Int
+        switch target {
+        case .betweenGroupRows(let index):
+            slot = min(max(0, index - looseCount), headings.count)
+        case .onGroupHeader, .rootGap:
+            slot = headings.count
+        case .onLooseHost:
+            slot = 0
+        case .onHeading(let label):
+            slot = position(label) ?? headings.count
+        case .amongHeadingHosts(let label):
+            slot = position(label).map { $0 + 1 } ?? headings.count
+        }
+        return (slot, looseCount + slot)
+    }
+
+    /// Which group a ROOT-level drop line belongs to — the gap between two
+    /// groups, above the first, or under the last. The last group ABOVE the
+    /// line owns it (`aboveEveryGroup == false`); when the line is above every
+    /// group, the FIRST group owns it and the drop goes to its TOP.
+    /// `groupOrdinal` counts groups only. Shared by host and heading drags so
+    /// they agree: a heading dropped above the first group used to land at the
+    /// END of that group while a host dropped in the same gap went to its top.
+    static func rootGapOwner(rootIsGroup: [Bool], index: Int) -> (groupOrdinal: Int, aboveEveryGroup: Bool)? {
+        let groupPositions = rootIsGroup.indices.filter { rootIsGroup[$0] }
+        guard !groupPositions.isEmpty else { return nil }
+        let stop = min(max(index, 0), rootIsGroup.count)
+        if let above = groupPositions.lastIndex(where: { $0 < stop }) { return (above, false) }
+        return (0, true)
+    }
+
+    static func rows(for group: HostGroup) -> [Row] {
+        // ONE pass over the hosts, bucketed by folded key: filtering the
+        // whole array per heading was 800 × 2,000 comparisons — measured at
+        // ~2 s, paid on every rebuild and every drag-over.
+        var rows: [Row] = []
+        var buckets: [String: [Host]] = [:]
+        for host in group.hosts {
+            guard let key = HostStore.headingKey(host.sectionName) else {
+                rows.append(.host(host))          // loose hosts FIRST, in array order
+                continue
+            }
+            buckets[key, default: []].append(host)
+        }
+        for label in group.displayedSections {
+            // By the label the hosts actually carry: `displayedSections` has
+            // already snapped spellings, and a host whose label only READS the
+            // same still belongs under that row.
+            let key = HostStore.headingKey(label)
+            rows.append(.heading(label, hosts: key.flatMap { buckets[$0] } ?? []))
+        }
+        return rows
+    }
 }
 
 extension String {

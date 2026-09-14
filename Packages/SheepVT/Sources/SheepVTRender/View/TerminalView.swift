@@ -1021,7 +1021,11 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         bar.isHidden = false
         if hasSelection {
             let text = selectedText
-            if !text.isEmpty, !text.contains("\n") { bar.searchText = text }
+            // `isNewline`, not `contains("\n")`: CRLF is ONE Character and
+            // equals neither "\n" nor "\r", so a selection copied out of a
+            // Windows-formatted screen seeded the find bar with a multi-line
+            // string (which matches nothing).
+            if !text.isEmpty, !text.contains(where: { $0.isNewline }) { bar.searchText = text }
         } else if bar.searchText != search.term {
             bar.searchText = search.term
         }

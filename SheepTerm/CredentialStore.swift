@@ -181,7 +181,14 @@ final class CredentialStore: ObservableObject {
 
     @discardableResult
     func add(name: String, username: String, password: String) -> Credential {
-        let credential = Credential(name: name, username: username)
+        // The NAME goes through the store's own name pass (the one door every
+        // caller shares — there is no rename for a credential). A name with an
+        // inner tab or newline only had its ENDS trimmed, and once it was
+        // picked into the Add Hosts Credential cell it read as a block paste
+        // and spread into the next column. The username is left exactly as
+        // given: it is a login, and changing it would change who logs in.
+        let cleaned = ConfigurationHygiene.cleanedName(name)
+        let credential = Credential(name: cleaned.isEmpty ? name : cleaned, username: username)
         noteUserMutation()
         credentials.append(credential)
         uiTrace("CredentialStore.add appended \(credential.name) → \(credentials.count) entries")

@@ -77,8 +77,11 @@ struct SidebarOutline: NSViewRepresentable {
     /// screen. Everything else a section can do is a store call and stays in
     /// the coordinator, next to the moves.
     let onRenameHostSection: (HostGroup, String) -> Void
-    /// The hosts to file under a brand-new heading. Each keeps its own group.
-    let onNewHostSection: (Set<UUID>) -> Void
+    /// A heading for a GROUP, with no hosts in it yet — the group owns its
+    /// sections, so creating one is the group's menu item. (There is no
+    /// host-side "New Section…" any more: a host points at one of its group's
+    /// headings, it does not invent one.)
+    let onNewGroupSection: (HostGroup) -> Void
 
     func makeCoordinator() -> SidebarOutlineCoordinator {
         SidebarOutlineCoordinator(self)
@@ -330,6 +333,14 @@ final class SidebarLabelCell: NSView {
         title.textColor = quiet ? .secondaryLabelColor : .labelColor
         count.stringValue = number.map(String.init) ?? ""
         count.isHidden = number == nil
+        // The count is a bare number beside a name, which VoiceOver reads as
+        // "Lab 13" — a row of a list, or thirteen of something? Said out loud
+        // once, here, for group rows and heading rows alike.
+        if let number {
+            setAccessibilityLabel("\(text), \(number) host\(number == 1 ? "" : "s")")
+        } else {
+            setAccessibilityLabel(text)
+        }
         needsLayout = true
     }
 
@@ -445,7 +456,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // The matching hosts keep their own section label (they are copies
             // of the hosts themselves), so a hit is still shown under its
             // heading instead of appearing to have moved out of it.
-            return hosts.isEmpty ? nil : HostGroup(id: group.id, name: group.name, hosts: hosts)
+            // The declared heading list travels with the copy so the headings
+            // that DO have a hit keep the group's own order. Empty ones are
+            // dropped when the rows are built — a search shows what matched.
+            return hosts.isEmpty ? nil : HostGroup(id: group.id, name: group.name,
+                                                   hosts: hosts, sections: group.sections)
         }
     }
 
@@ -497,34 +512,39 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
         fixedSectionCount = result.count
 
-        // Groups are flat again — `groups` order, nothing above them. Inside
-        // one, hosts that carry a section label are gathered under a heading
-        // row placed where the FIRST of them sits; the rest stay loose, in
-        // array order. The file holds a flat array of hosts either way: this
-        // is the only place a label becomes a row (see ARCHITECTURE §3).
+        // Groups are flat — `groups` order, nothing above them. The order
+        // INSIDE one is `SidebarLayout.rows(for:)` and nothing else: loose
+        // hosts first in array order, then the group's headings in its own
+        // declared order (see that function for why). This is the only place a
+        // heading becomes a row (see ARCHITECTURE §3).
+        let searching = !parent.searchText.isEmpty
         for group in filteredGroups {
             let node = item(id: "group-\(group.id.uuidString)", kind: .group)
             node.group = group
             node.title = group.name
             var children: [SidebarItem] = []
-            var sectionRows: [String: SidebarItem] = [:]
-            for host in group.hosts {
-                let row = item(id: "host-\(host.id.uuidString)", kind: .host)
-                row.host = host
-                row.group = group
-                guard let label = host.sectionName else {
-                    children.append(row)
-                    continue
-                }
-                if let heading = sectionRows[label] {
-                    heading.children.append(row)
-                } else {
+            for row in SidebarLayout.rows(for: group) {
+                switch row {
+                case .host(let host):
+                    let item = item(id: "host-\(host.id.uuidString)", kind: .host)
+                    item.host = host
+                    item.group = group
+                    children.append(item)
+                case .heading(let label, let hosts):
+                    // A search shows what MATCHED: an empty heading matched
+                    // nothing, and a row that is always there whatever is
+                    // typed reads as a result.
+                    if searching, hosts.isEmpty { continue }
                     let heading = item(id: Self.sectionRowID(group: group.id, label: label),
                                        kind: .hostSection)
                     heading.title = label
                     heading.group = group
-                    heading.children = [row]
-                    sectionRows[label] = heading
+                    heading.children = hosts.map { host in
+                        let item = item(id: "host-\(host.id.uuidString)", kind: .host)
+                        item.host = host
+                        item.group = group
+                        return item
+                    }
                     children.append(heading)
                 }
             }
@@ -564,6 +584,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             default: drawn = node.children.count
             }
             parts.append(node.host?.sectionName ?? "")
+            // The group's DECLARED list: reordering headings or creating an
+            // empty one changes no host and no count, so without this the
+            // outline kept showing the old arrangement.
+            if node.kind == .group { parts.append((node.group?.sections ?? []).joined(separator: "\u{1}")) }
             parts.append("\(depth)|" + node.id + "|" + (node.host?.name ?? node.title)
                          + "|" + (node.host?.address ?? "") + "|" + (node.host?.kind.badge ?? "")
                          + "|" + String(drawn))
@@ -692,7 +716,16 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             outline.selectRowIndexes(rows, byExtendingSelection: false)
         }
         restoringSelection = false
-        selectedIDs = wanted
+        // With rows found, the ids are kept whole: a row folded away inside a
+        // collapsed group is off screen, not gone, and its highlight must come
+        // back when the group reopens (see `outlineViewSelectionDidChange`).
+        //
+        // With NONE found, keep only the ids the cache still knows. An id that
+        // no longer exists anywhere would sit here forever — and a heading's
+        // id is its group and label, so "Floor 2" removed and made again gets
+        // the SAME id and would come back selected for no reason the user can
+        // see. (A host's id is a UUID, so this only ever bites headings.)
+        selectedIDs = rows.isEmpty ? wanted.filter { cache[$0] != nil } : wanted
     }
 
     // MARK: Data source
@@ -1064,36 +1097,44 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         return outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) as? SidebarItem }
     }
 
-    /// The "Section ▸" submenu for one or more HOSTS: the headings that exist
-    /// in their group (ticked when every one of them is already there), a
-    /// prompt for a new one, and loose. A selection spanning two groups is
-    /// offered the union of their headings and the label is applied per host
-    /// in its own group — the label is just a string, so that is well defined.
+    /// The "Section ▸" submenu for one or more HOSTS: the headings their group
+    /// has (ticked when every one of them is already there) and "No Section".
+    /// A selection spanning two groups is offered the union of their headings
+    /// and the label is applied per host in its own group — the label is just
+    /// a string, so that is well defined.
+    ///
+    /// No "New Section…" here: **the group owns its sections**, so creating one
+    /// is the group's menu item. Filing a host under a heading that does not
+    /// exist yet was the one action that let a host invent a row in its group.
     private func sectionSubmenu(for hosts: [Host]) -> NSMenuItem {
         let ids = Set(hosts.map(\.id))
         let item = NSMenuItem(title: "Section", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
-        var offered: [String] = []
-        for host in hosts {
-            guard let groupID = parent.store.groups.first(where: { group in
-                group.hosts.contains { $0.id == host.id }
-            })?.id else { continue }
-            for label in parent.store.sections(in: groupID) where !offered.contains(label) {
-                offered.append(label)
-            }
-        }
+        // ONE pass in the store, not a group search plus a linear dedupe per
+        // selected host: ⌘A then right-click over 2,000 hosts and 800 headings
+        // took 3.8 s to put this menu on screen.
+        let offered = parent.store.offeredSections(forHostIDs: ids)
         // The nils are KEPT: `compactMap` threw the loose hosts away, so a
         // selection of one filed host and one loose one ticked the heading as
         // though both were under it.
-        let current = Set(hosts.map(\.sectionName))
+        // FOLDED keys, so a selection spanning two groups whose headings
+        // differ only in case or spacing is one heading here too. The nils are
+        // KEPT (`map`, not `compactMap`): a selection of one filed host and
+        // one loose one ticked the heading as though both were under it.
+        let current = Set(hosts.map { HostStore.headingKey($0.sectionName) })
         for label in offered {
             add(submenu, label) { [weak self] in
                 self?.parent.store.setSection(label, forHostIDs: ids)
             }
-            if current == [label] { submenu.items.last?.state = .on }
+            // `sameHeading`, not `==`: a selection spanning two groups whose
+            // headings differ only in case or spacing is under ONE heading as
+            // far as the sidebar is concerned, so the offered entry is ticked.
+            if current.count == 1, let only = current.first, only != nil,
+               only == HostStore.headingKey(label) {
+                submenu.items.last?.state = .on
+            }
         }
         if !offered.isEmpty { submenu.addItem(.separator()) }
-        add(submenu, "New Section…") { [weak self] in self?.parent.onNewHostSection(ids) }
         add(submenu, "No Section") { [weak self] in
             guard let self else { return }
             let filed = self.parent.store.filedCount(ofHostIDs: ids)
@@ -1104,6 +1145,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             else { return }
             self.parent.store.setSection(nil, forHostIDs: ids)
         }
+        // Every selected host loose: `nil` is the one key that means that.
         if current == [nil] { submenu.items.last?.state = .on }
         item.submenu = submenu
         return item
@@ -1148,13 +1190,46 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 alert.informativeText = "\(count) host\(count == 1 ? "" : "s") stay in “\(group.name)”."
                 alert.addButton(withTitle: "Cancel")   // default, so Return cancels
                 alert.addButton(withTitle: "Remove Section")
-                guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
+                // An EMPTY heading is removed without asking: there is
+                // nothing to lose track of, and a confirmation for "take away
+                // a row with nothing in it" is noise.
+                if count > 0 {
+                    guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
+                }
                 self.parent.store.removeSection(in: group.id, label)
             }
+            // Not while a search is on: the rows on screen are the ones that
+            // matched, so "up" and "down" would move a heading past rows the
+            // user cannot see. (Reordering is disabled for groups mid-search
+            // for the same reason — a drag cannot start with text in the
+            // field.)
+            guard parent.searchText.isEmpty else { return menu }
+            menu.addItem(.separator())
+            // The group owns the ORDER, so the heading can be moved in it.
+            // Disabled at the ends rather than hidden: a menu whose items come
+            // and go is harder to learn than one with a greyed item.
+            let order = parent.store.sections(in: group.id)
+            let at = order.firstIndex { $0 == label || HostStore.sameHeading($0, label) }
+            menu.autoenablesItems = false
+            add(menu, "Move Up") { [weak self] in
+                self?.parent.store.moveSection(in: group.id, label, direction: .up)
+            }
+            menu.items.last?.isEnabled = (at ?? 0) > 0
+            add(menu, "Move Down") { [weak self] in
+                self?.parent.store.moveSection(in: group.id, label, direction: .down)
+            }
+            menu.items.last?.isEnabled = at.map { $0 < order.count - 1 } ?? false
         case .group:
             guard let group = node.group else { return nil }
             add(menu, "Export Group…") { [weak self] in self?.parent.onExportGroup(group) }
             add(menu, "Add Hosts…") { [weak self] in self?.parent.onAddHosts(group) }
+            // Not while a search is on: `buildRoots` hides a heading with no
+            // matching hosts, so a heading created mid-search would never
+            // appear — a menu item that silently does nothing. (Same reason
+            // Move Up / Move Down are left out then.)
+            if parent.searchText.isEmpty {
+                add(menu, "New Section…") { [weak self] in self?.parent.onNewGroupSection(group) }
+            }
             add(menu, "Set Credential for Group…") { [weak self] in self?.parent.onSetGroupCredential(group) }
             menu.addItem(.separator())
             add(menu, "Rename Group…") { [weak self] in self?.parent.onRenameGroup(group) }
@@ -1334,6 +1409,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         case .group:
             guard parent.searchText.isEmpty, let id = node.group?.id else { return nil }
             return "group:\(id.uuidString)" as NSString
+        case .hostSection:
+            guard parent.searchText.isEmpty, let groupID = node.group?.id,
+                  let data = try? JSONEncoder().encode(HostStore.SectionReference(groupID: groupID, name: node.title)),
+                  let json = String(data: data, encoding: .utf8) else { return nil }
+            return "section:\(json)" as NSString
         case .host:
             guard parent.searchText.isEmpty, let id = node.host?.id else { return nil }
             return "host:\(id.uuidString)" as NSString
@@ -1350,6 +1430,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     private enum Payload {
         case groups([UUID])
         case hosts([UUID])
+        case section(HostStore.SectionReference)
     }
 
     private func payload(_ info: NSDraggingInfo) -> Payload? {
@@ -1361,10 +1442,20 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             : strings
         var groups: [UUID] = []
         var hosts: [UUID] = []
+        var sections: [HostStore.SectionReference] = []
         for text in texts {
+            if text.hasPrefix("section:"),
+               let section = try? JSONDecoder().decode(HostStore.SectionReference.self,
+                                                       from: Data(text.dropFirst(8).utf8)) {
+                sections.append(section)
+                continue
+            }
             let parts = text.split(separator: ":", maxSplits: 1)
             guard parts.count == 2, let id = UUID(uuidString: String(parts[1])) else { continue }
             if parts[0] == "group" { groups.append(id) } else if parts[0] == "host" { hosts.append(id) }
+        }
+        if !sections.isEmpty {
+            return sections.count == 1 && groups.isEmpty && hosts.isEmpty ? .section(sections[0]) : nil
         }
         if !groups.isEmpty, hosts.isEmpty { return .groups(groups) }
         if !hosts.isEmpty, groups.isEmpty { return .hosts(hosts) }
@@ -1389,16 +1480,19 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // For each display row, the id of its FIRST host: a loose row is its
         // own host, a heading row is the first host under it. That id is what
         // turns a child index into a store index (`HostStore.dropIndex`).
-        func firstHostIDs(_ children: [SidebarItem]) -> [UUID] {
-            children.compactMap { child in
-                child.kind == .hostSection ? child.children.first?.host?.id : child.host?.id
-            }
+        /// A HEADING's own rows, which are all hosts. The group's children go
+        /// through `SidebarLayout.childFirstHostIDs` instead — that list has
+        /// rows with no host in it (a heading, empty or not) and the rule for
+        /// them lives with the layout.
+        func firstHostIDs(_ children: [SidebarItem]) -> [UUID?] {
+            children.map { child in child.host?.id }
         }
 
         if let node = item as? SidebarItem {
             switch node.kind {
             case .group:
-                guard let groupID = node.group?.id else { return nil }
+                guard let group = node.group else { return nil }
+                let groupID = group.id
                 // ON the header — including a collapsed one — means "the end,
                 // loose". Between its children means the position of the row
                 // BELOW the line, loose: the group's own children are its
@@ -1406,9 +1500,14 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 guard index != NSOutlineViewDropOnItemIndex else {
                     return (groupID, parent.store.hosts(inGroup: groupID).count, nil)
                 }
-                let at = HostStore.dropIndex(in: parent.store.hosts(inGroup: groupID),
-                                             childFirstHostIDs: firstHostIDs(node.children),
-                                             childIndex: index)
+                // From the LAYOUT, not from the rows AppKit is holding: the
+                // rule (a heading names no host) belongs with the order it
+                // comes from, where it can be tested.
+                let at = HostStore.dropIndex(
+                    in: parent.store.hosts(inGroup: groupID),
+                    childFirstHostIDs: SidebarLayout.childFirstHostIDs(for: group),
+                    childIndex: index
+                )
                 return (groupID, at, nil)
             case .hostSection:
                 guard let groupID = node.group?.id else { return nil }
@@ -1421,7 +1520,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                     return (groupID, after ?? hosts.count, label)
                 }
                 // Between its hosts: the same "row below the line" rule, over
-                // that heading's own rows.
+                // that heading's own rows (all of which ARE hosts, so
+                // `firstHostIDs` names every one of them here).
                 let at = HostStore.dropIndex(in: hosts,
                                              childFirstHostIDs: firstHostIDs(node.children),
                                              childIndex: index)
@@ -1442,14 +1542,70 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // use the group the line is drawn against — the one above it, or the
         // first group when the line sits above them all. No gap may refuse
         // the drop; that dead band is what the retargeting exists to remove.
-        let stop = min(max(index == NSOutlineViewDropOnItemIndex ? roots.count : index, 0), roots.count)
-        if let above = roots[..<stop].last(where: { $0.kind == .group }), let groupID = above.group?.id {
-            return (groupID, parent.store.hosts(inGroup: groupID).count, nil)
+        // The owner of the gap is `SidebarLayout.rootGapOwner` — pure, tested,
+        // and shared with the heading drag so the two cannot disagree.
+        guard let gap = rootGap(index) else { return nil }
+        return (gap.groupID, gap.aboveEveryGroup ? 0 : parent.store.hosts(inGroup: gap.groupID).count, nil)
+    }
+
+    /// The group a ROOT-level drop line belongs to, and whether the line is
+    /// above every group — `SidebarLayout.rootGapOwner` over the root rows.
+    private func rootGap(_ index: Int) -> (groupID: UUID, node: SidebarItem, aboveEveryGroup: Bool)? {
+        let stop = index == NSOutlineViewDropOnItemIndex ? roots.count : index
+        guard let gap = SidebarLayout.rootGapOwner(rootIsGroup: roots.map { $0.kind == .group }, index: stop)
+        else { return nil }
+        let groupNodes = roots.filter { $0.kind == .group }
+        guard groupNodes.indices.contains(gap.groupOrdinal),
+              let groupID = groupNodes[gap.groupOrdinal].group?.id else { return nil }
+        return (groupID, groupNodes[gap.groupOrdinal], gap.aboveEveryGroup)
+    }
+
+    /// Where a dragged HEADING lands. This only TRANSLATES AppKit's
+    /// (item, childIndex) into a `SidebarLayout.HeadingDropTarget`; the rules
+    /// — which heading slot, and where the line is drawn — are
+    /// `SidebarLayout.headingSlot`, pure and tested. `validateDrop` and
+    /// `acceptDrop` both come through here with the same inputs, so the line
+    /// and the landing cannot disagree.
+    private func sectionDrop(item: Any?, childIndex index: Int)
+        -> (group: UUID, slot: Int, node: SidebarItem, childIndex: Int)? {
+        let owner: SidebarItem
+        let target: SidebarLayout.HeadingDropTarget
+        if let node = item as? SidebarItem {
+            guard let group = groupNode(containing: node) else { return nil }
+            owner = group
+            let droppedOn = index == NSOutlineViewDropOnItemIndex
+            switch node.kind {
+            case .group:
+                target = droppedOn ? .onGroupHeader : .betweenGroupRows(index)
+            case .hostSection:
+                target = droppedOn ? .onHeading(node.title) : .amongHeadingHosts(node.title)
+            case .host:
+                if let label = node.host?.sectionName {
+                    target = .amongHeadingHosts(label)
+                } else {
+                    target = .onLooseHost
+                }
+            default:
+                return nil
+            }
+        } else {
+            // A ROOT-level gap, owned the way a host drop owns it: below a
+            // group = that group's END; above every group = the first group's
+            // TOP (slot 0). It used to be the end in both cases, so a heading
+            // dropped above the first group landed at its bottom while a host
+            // dropped in the same gap went to its top.
+            guard item == nil, let gap = rootGap(index) else { return nil }
+            owner = gap.node
+            target = gap.aboveEveryGroup ? .betweenGroupRows(0) : .rootGap
         }
-        if let first = roots.first(where: { $0.kind == .group }), let groupID = first.group?.id {
-            return (groupID, 0, nil)
-        }
-        return nil
+        // The REAL group, not the row's copy: no search is running (a heading
+        // drag cannot start with text in the field), so they agree — but the
+        // store is the one the move will read.
+        guard let groupID = owner.group?.id,
+              let group = parent.store.groups.first(where: { $0.id == groupID }) else { return nil }
+        let landing = SidebarLayout.headingSlot(in: group, target: target)
+        return (groupID, landing.slot, owner,
+                min(max(0, landing.lineChildIndex), owner.children.count))
     }
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo,
@@ -1466,6 +1622,14 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // another window (or any app, `.string` is registered) still arrives.
         guard parent.searchText.isEmpty, let payload = payload(info) else { return [] }
         switch payload {
+        case .section(let source):
+            // An exact match is right here: the payload carries the ROW's
+            // title, and `sections(in:)` is `displayedSections` — the very
+            // spellings the rows are drawn from.
+            guard parent.store.sections(in: source.groupID).contains(source.name),
+                  let drop = sectionDrop(item: item, childIndex: index) else { return [] }
+            outlineView.setDropItem(drop.node, dropChildIndex: drop.childIndex)
+            return .move
         case .groups(let ids):
             // The dragged rows can be deleted in another window while the drag
             // is in flight; lighting up an insertion line for a move that
@@ -1500,29 +1664,35 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             guard let drop = hostDrop(item: item, childIndex: index) else { return [] }
             let parentNode: SidebarItem?
             let childIndex: Int
+            // The INVERSE of `hostDrop`: which row the insertion line goes
+            // above, for the store index the drop resolved to. Both halves are
+            // pure functions beside each other (`HostStore.dropIndex` and
+            // `SidebarLayout.childRow`) because they have to agree — drawing
+            // the line somewhere other than where the host lands is the one
+            // way a correct drop still looks broken.
+            guard let group = parent.store.groups.first(where: { $0.id == drop.group })
+            else { return [] }
             if let section = drop.section {
-                parentNode = cache[Self.sectionRowID(group: drop.group, label: section)]
-                // Draw the line among the heading's own rows: its hosts in
-                // display order, so the index is the position within them.
-                let hosts = parent.store.hosts(inGroup: drop.group)
-                    .filter { $0.sectionName == section }
-                let at = hosts.firstIndex { parent.store.hostIndex(of: $0.id, inGroup: drop.group) ?? 0 >= drop.index }
-                childIndex = at ?? hosts.count
+                // By the ROW's spelling, not the dropped-on host's: a host
+                // labelled "floor  2" sits under the "Floor 2" row, and the
+                // exact-label lookup found no row and refused the drop.
+                let rowLabel = SidebarLayout.headingRowLabel(for: section, in: group)
+                parentNode = cache[Self.sectionRowID(group: drop.group, label: rowLabel)]
+                // The heading's own rows, taken from the LAYOUT: by folded key,
+                // so a host spelled "floor  2" under the "Floor 2" row is one
+                // of them (`==` left it out and the line jumped to the end).
+                let members = SidebarLayout.rows(for: group).compactMap { row -> [Host]? in
+                    guard case .heading(let label, let hosts) = row,
+                          HostStore.sameHeading(label, section) || label == section else { return nil }
+                    return hosts
+                }.first ?? []
+                var position: [UUID: Int] = [:]
+                for (at, host) in group.hosts.enumerated() { position[host.id] = at }
+                let at = members.firstIndex { (position[$0.id] ?? 0) >= drop.index }
+                childIndex = at ?? members.count
             } else {
                 parentNode = cache["group-\(drop.group.uuidString)"]
-                // Among the group's own children (loose rows and headings).
-                if let node = parentNode {
-                    var landed = node.children.count
-                    for (position, child) in node.children.enumerated() {
-                        let firstID = child.kind == .hostSection ? child.children.first?.host?.id : child.host?.id
-                        guard let firstID,
-                              let at = parent.store.hostIndex(of: firstID, inGroup: drop.group) else { continue }
-                        if at >= drop.index { landed = position; break }
-                    }
-                    childIndex = landed
-                } else {
-                    childIndex = 0
-                }
+                childIndex = SidebarLayout.childRow(forStoreIndex: drop.index, in: group)
             }
             guard let parentNode else { return [] }
             outlineView.setDropItem(parentNode,
@@ -1549,6 +1719,31 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // with the row apparently back where it started and no explanation.
         guard parent.searchText.isEmpty, let payload = payload(info) else { return false }
         switch payload {
+        case .section(let source):
+            guard let drop = sectionDrop(item: item, childIndex: index) else { return false }
+            let oldKey = "\(source.groupID.uuidString)/\(source.name)"
+            let wasCollapsed = parent.collapsedHostSections.contains(oldKey)
+            let crossGroup = drop.group != source.groupID
+            // Asked BEFORE the move: a heading that reads the same already in
+            // the destination means the move MERGES into it.
+            let merging = crossGroup && parent.store.sections(in: drop.group)
+                .contains { HostStore.sameHeading($0, source.name) }
+            let revision = parent.store.revision
+            guard let label = parent.store.moveSection(source, toGroupID: drop.group,
+                                                       atIndex: drop.slot) else { return false }
+            // A drop that changed nothing is not a drop: `false` lets AppKit
+            // animate the row back, which is what the user sees happen anyway
+            // (the store wrote nothing, so no revision was bumped).
+            guard parent.store.revision != revision else { return false }
+            if crossGroup {
+                // The source's key goes either way — that row no longer exists
+                // there. Its fold state travels only to a heading this move
+                // CREATED; a merged-into heading keeps its own.
+                parent.collapsedHostSections.remove(oldKey)
+                if wasCollapsed, !merging {
+                    parent.collapsedHostSections.insert("\(drop.group.uuidString)/\(label)")
+                }
+            }
         case .groups(let ids):
             let live = ids.filter { parent.store.location(ofGroup: $0) != nil }
             guard !live.isEmpty, index >= 0 else { return false }

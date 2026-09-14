@@ -189,7 +189,11 @@ struct HostEditSheet: View {
     // a name with one in it draws as a two-line sidebar row while a username
     // with one fails authentication looking identical to a good one.
     private var trimmedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The STORE's pass, not just a trim (ARCHITECTURE said Edit Host went
+        // through `sanitizedName`; it did not): a pasted U+2028 is not
+        // whitespace to `trimmingCharacters`, and a single-line row draws it
+        // as a line break — the host showed as its first line only.
+        ConfigurationHygiene.cleanedName(name)
     }
 
     private var trimmedAddress: String {

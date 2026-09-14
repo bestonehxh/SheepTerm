@@ -410,6 +410,37 @@ private func privateBoard(_ name: String) -> NSPasteboard {
         #expect(view.findBar?.searchText == "is")
     }
 
+    @Test func showFindDoesNotSeedATermThatSpansLines() {
+        // ⌘F over a selection seeds the term from it — unless the selection
+        // spans lines, because such a term matches nothing. The test is
+        // `isNewline`, not `contains("\n")`: CRLF is ONE Character and equals
+        // neither "\n" nor "\r", and so are the separators a device can print
+        // into a cell (U+2028, U+0085, VT, FF).
+        //
+        // (⌘E / `useSelectionForFind` is the other path and takes the
+        // selection as given — see `useSelectionForFindSeedsTheTerm`.)
+        let view = makeView()
+        view.feed("alpha\u{2028}beta")
+        let line = view.terminal.buffer.lineNumber(ofScreenRow: 0)
+        view.selection.begin(at: Position(line: line, col: 0))
+        view.selection.extend(to: Position(line: line, col: 9))
+        let selected = view.selectedText
+        #expect(selected.contains { $0.isNewline })
+        #expect(!selected.contains("\n"))        // what the old test asked
+        view.showFind()
+        #expect(view.findBar?.isHidden == false)  // the bar opens…
+        #expect(view.findBar?.searchText == "")   // …with no term seeded
+        // …and an ordinary two-row selection is still refused (plain LF).
+        let view2 = makeView()
+        view2.feed("first line\r\nsecond line")
+        let top = view2.terminal.buffer.lineNumber(ofScreenRow: 0)
+        view2.selection.begin(at: Position(line: top, col: 0))
+        view2.selection.extend(to: Position(line: top + 1, col: 5))
+        #expect(view2.selectedText.contains { $0.isNewline })
+        view2.showFind()
+        #expect(view2.findBar?.searchText == "")
+    }
+
     @Test func scrollingMovesTheViewportAndTellsTheHost() {
         let view = makeView(width: 400, height: 120)
         let delegate = RecordingDelegate()

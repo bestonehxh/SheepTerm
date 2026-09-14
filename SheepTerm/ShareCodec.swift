@@ -8,7 +8,10 @@ import Foundation
 /// sections or of multi-group files. A multi-group export fills `groups` with
 /// every group and `group` with the FIRST of them, so an older build importing
 /// it gets one real group instead of an error. (Sections are not a level of
-/// the file at all — a section is a LABEL on a host, `Host.section`.)
+/// the file: a group carries its own heading LIST in `HostGroup.sections` —
+/// empty headings included — and each host a pointer into it in
+/// `Host.section`. A build that predates the list drops the key and shows the
+/// headings its hosts imply, which is what `sanitizeHeadings` puts back.)
 struct SharePayload: Codable {
     var version = 1
     var sender: String
@@ -36,11 +39,12 @@ enum ShareCodec {
     }
 
     /// One file for several groups. **Nothing in the UI writes one today** —
-    /// sections live on HOSTS now (`Host.section`, carried inside a group's
-    /// own hosts), so a group export already brings its headings with it and
-    /// there is no "export a section" any more. The multi-group path is kept
-    /// because reading one costs nothing and a file from elsewhere (or a
-    /// future export of several groups at once) must not be refused.
+    /// a section belongs to its GROUP (`HostGroup.sections`, plus each host's
+    /// pointer into that list), so a group export already brings its headings
+    /// with it — empty ones included — and there is no "export a section".
+    /// The multi-group path is kept because reading one costs nothing and a
+    /// file from elsewhere (or a future export of several groups at once) must
+    /// not be refused.
     static func encode(_ groups: [HostGroup], sender: String) throws -> Data {
         let sanitized = groups.map(stripCredentials)
         // A single group is written exactly as before — same shape, same

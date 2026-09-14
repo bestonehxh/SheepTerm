@@ -325,11 +325,12 @@ struct QuickConnectSheet: View {
     private var targetGroup: String? {
         guard kind == .ssh, saveSession else { return nil }
         if groupSelection == Self.newGroupTag {
-            // whitespacesAndNewlines, not whitespaces: a name pasted from a
-            // spreadsheet cell carries the newline, which .whitespaces keeps
-            // and the sidebar then draws as a two-line row.
-            let trimmed = newGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? Self.defaultGroup : trimmed
+            // The store's group-name pass, not just a trim: a pasted U+2028
+            // survived `trimmingCharacters` and made a raw group, and a
+            // relaunch then turned the same text into a SECOND group. One
+            // decision, shared with `AppModel.saveSession` (blank falls back to
+            // "Quick Connect", as before).
+            return HostStore.quickConnectGroupName(newGroupName)
         }
         return groupSelection
     }
@@ -347,7 +348,10 @@ struct QuickConnectSheet: View {
     /// hosts.json.
     private func connect() {
         var host: Host
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The store's pass (see `ConfigurationHygiene.cleanedName`), not just
+        // a trim: a pasted soft line break in the session name otherwise
+        // reaches the sidebar row and the tab title intact.
+        let trimmedName = ConfigurationHygiene.cleanedName(name)
         if kind == .ssh {
             var hostUsername = effectiveUsername
             var credentialID = credentialSelection

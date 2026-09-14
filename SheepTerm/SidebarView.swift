@@ -39,11 +39,12 @@ struct SidebarView: View {
     /// A section prompt needs an identity for `.sheet(item:)` — plus the
     /// group it is inside (for a rename) or the hosts it is about (for a new
     /// heading out of a host's menu).
+    /// Either "rename this heading in this group" or "make a heading in this
+    /// group". A section is the GROUP's, so both carry a group and no hosts.
     struct SectionPrompt: Identifiable {
         let id = UUID()
         var name: String = ""
         var group: HostGroup?
-        var hostIDs: Set<UUID> = []
     }
 
     /// Shared confirmation for the sidebar's destructive actions. Defaults to
@@ -77,14 +78,83 @@ struct SidebarView: View {
     /// or renaming onto a name that is taken looked like the sheet had simply
     /// been ignored. Deferred a turn: the prompt sheet is still on screen when
     /// its commit closure runs, and an alert stacked on a sheet is a mess.
-    private func reportNameTaken(_ name: String, noun: String = "group") {
+    /// Renames a heading inside its group, and says WHY when the store
+    /// refuses. Split out of the sheet's closure: inline, the whole thing was
+    /// one expression the type checker gave up on (measured).
+    private func renameSection(_ prompt: SectionPrompt, to rawName: String) {
+        guard let group = prompt.group else { return }
+        // The store trims before it compares, so this has to as well: renaming
+        // "Floor 2" to "Floor 2 " was reported as a name that is already used.
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The name the STORE will write, not the raw string: hygiene and the
+        // snap happen in there, and the fold state and the "already used"
+        // message have to talk about the same spelling the file gets.
+        let others = store.sections(in: group.id).filter { $0 != prompt.name }
+        guard let written = HostStore.normalizedHeading(name, existing: others) else {
+            reportRenameProblem("The name has no usable characters.")
+            return
+        }
+        guard store.renameSection(in: group.id, from: prompt.name, to: name) else {
+            // Says WHY it was refused. Inner whitespace too: "Floor 2" and
+            // "Floor  2" are two rows the eye cannot tell apart.
+            if others.contains(where: { $0 == written || HostStore.sameHeading($0, written) }) {
+                reportNameTaken(written, noun: "section")
+            } else if !store.sections(in: group.id).contains(prompt.name) {
+                // It was removed or renamed in the meantime.
+                reportRenameProblem("That heading is no longer in “\(group.name)”.")
+            }
+            return
+        }
+        // A folded heading stays folded under its new name — the key carries
+        // the label, so it is rekeyed rather than dropped.
+        let oldKey = "\(group.id.uuidString)/\(prompt.name)"
+        if collapsedHostSections.contains(oldKey) {
+            collapsedHostSections.remove(oldKey)
+            collapsedHostSections.insert("\(group.id.uuidString)/\(written)")
+        }
+    }
+
+    /// Creates an EMPTY heading in a group — the group owns its sections, so
+    /// nothing is filed here; the user drops hosts in or picks it from a
+    /// host's Section ▸.
+    private func createSection(in group: HostGroup?, named name: String) {
+        guard let group else { return }
+        let existing = store.sections(in: group.id)
+        guard let written = HostStore.normalizedHeading(name, existing: existing) else {
+            reportRenameProblem("The name has no usable characters.",
+                                title: "The section was not created.")
+            return
+        }
+        // A name that READS like a heading already there is a refusal, exactly
+        // as it is for a rename: two rows nobody can tell apart is the outcome
+        // worth preventing.
+        if existing.contains(where: { $0 == written || HostStore.sameHeading($0, written) }) {
+            // Create wording, not the rename's: "The name is already used"
+            // over a New Section sheet left it unclear whether anything was
+            // created at all.
+            reportNameTaken(written, noun: "section", title: "The section was not created.")
+            return
+        }
+        guard store.declareSection(name, inGroup: group.id) != nil else {
+            reportRenameProblem("That group is no longer there.",
+                                title: "The section was not created.")
+            return
+        }
+    }
+
+    private func reportNameTaken(_ name: String, noun: String = "group",
+                                 title: String? = nil) {
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "The name “\(name)” is already used."
-            alert.informativeText = noun == "section"
+            // The default says what is wrong with the NAME; a caller that
+            // knows what failed can say that instead and put the name in the
+            // line below, which is how every other refusal here reads.
+            alert.messageText = title ?? "The name “\(name)” is already used."
+            let clash = noun == "section"
                 ? "Two headings here cannot share a name."
                 : "Two groups cannot share a name."
+            alert.informativeText = title == nil ? clash : "“\(name)” is already used here."
             alert.addButton(withTitle: "OK")
             alert.sheepStyled().runModal()
         }
@@ -122,9 +192,9 @@ struct SidebarView: View {
         if pruned != collapsedGroups {
             collapsedGroups = pruned
         }
-        // Same for section headings: one exists only as long as a host in
-        // that group carries its label, so a renamed, emptied or deleted one
-        // must not sit in UserDefaults forever keeping a row folded that
+        // Same for section headings: one exists as long as its GROUP declares
+        // it (emptying it leaves the row), so a renamed or REMOVED one must
+        // not sit in UserDefaults forever keeping a row folded that
         // nobody can see any more.
         let liveSections = Set(store.groups.flatMap { group in
             store.sections(in: group.id).map { "\(group.id.uuidString)/\($0)" }
@@ -207,14 +277,23 @@ struct SidebarView: View {
             onRenameHostSection: { group, label in
                 renameSectionTarget = SectionPrompt(name: label, group: group)
             },
-            onNewHostSection: { newSectionTarget = SectionPrompt(hostIDs: $0) }
+            onNewGroupSection: { newSectionTarget = SectionPrompt(group: $0) }
         )
-        // Not only on appear: a heading whose last host moves out (or a
-        // Remove Section) leaves its key behind, and re-creating a heading
-        // with the same name brought it back FOLDED. Idempotent, and it goes
+        // Not only on appear: a Remove Section (or a rename) leaves its key
+        // behind, and making a heading with that name again brought it back
+        // FOLDED. Idempotent, and it goes
         // through the same one writer, so running it on every store change
         // costs a set comparison.
         .onChange(of: store.revision) { _, _ in pruneCollapsedGroups() }
+        // A restore wrote the fold keys into UserDefaults, but these two are
+        // @State seeded ONCE at init: without this the restored folds never
+        // appeared, and the prune above (fired by the reload's revision bump)
+        // wrote the pre-restore set straight back over them. Posted before the
+        // stores reload, so this runs first.
+        .onReceive(NotificationCenter.default.publisher(for: .sheepTermConfigurationRestored)) { _ in
+            collapsedGroups = Self.loadCollapsedGroups()
+            collapsedHostSections = Self.loadCollapsedSections()
+        }
         .onChange(of: collapsedGroups) { _, _ in persistCollapsed() }
         .onChange(of: collapsedHostSections) { _, _ in persistCollapsedSections() }
         .onAppear {
@@ -279,76 +358,13 @@ struct SidebarView: View {
             }
         }
         .sheet(item: $renameSectionTarget) { prompt in
-            NamePromptSheet(title: "Rename Section", initialName: prompt.name) { rawName in
-                guard let group = prompt.group else { return }
-                // The store trims before it compares, so this has to as well:
-                // renaming "Floor 2" to "Floor 2 " was reported as a name
-                // that is already used.
-                let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-                // Refused when that group already has a heading by this name —
-                // merging two headings silently is not what "rename" means
-                // (the same rule Rename Group has).
-                // The name the STORE will write, not the raw string: hygiene
-                // and the snap happen in there, and the fold state and the
-                // "already used" message have to talk about the same spelling
-                // the file gets.
-                let others = store.sections(in: group.id).filter { $0 != prompt.name }
-                // What the STORE will write. nil = the name had nothing
-                // usable left in it after hygiene, which is a refusal with a
-                // reason, not a no-op.
-                guard let written = HostStore.normalizedHeading(name, existing: others) else {
-                    reportRenameProblem("The name has no usable characters.")
-                    return
-                }
-                guard store.renameSection(in: group.id, from: prompt.name, to: name) > 0 else {
-                    // Says WHY it was refused. Inner whitespace too: "Floor 2"
-                    // and "Floor  2" are two rows the eye cannot tell apart.
-                    let collides = others.contains {
-                        $0 == written || HostStore.sameHeading($0, written)
-                    }
-                    if collides {
-                        reportNameTaken(written, noun: "section")
-                    } else if !store.sections(in: group.id).contains(prompt.name) {
-                        // It was renamed or emptied in the meantime.
-                        reportRenameProblem("That heading is no longer in “\(group.name)”.")
-                    }
-                    return
-                }
-                // A folded heading stays folded under its new name.
-                let oldKey = "\(group.id.uuidString)/\(prompt.name)"
-                if collapsedHostSections.contains(oldKey) {
-                    collapsedHostSections.remove(oldKey)
-                    collapsedHostSections.insert("\(group.id.uuidString)/\(written)")
-                }
+            NamePromptSheet(title: "Rename Section", initialName: prompt.name) { name in
+                renameSection(prompt, to: name)
             }
         }
         .sheet(item: $newSectionTarget) { prompt in
             NamePromptSheet(title: "New Section", confirmLabel: "Create") { name in
-                // Per host, in its own group: the label is a string, so a
-                // selection spanning two groups files each side under the
-                // same heading inside its own group.
-                // The return value is the number of hosts filed. Zero has
-                // two causes worth telling apart, and both used to close the
-                // sheet as though the section had been created: a name
-                // hygiene empties ("\u{1}"), and hosts that are no longer
-                // there (deleted while the prompt was open).
-                let filed = store.setSection(name, forHostIDs: prompt.hostIDs)
-                guard filed == 0 else { return }
-                if HostStore.normalizedHeading(name, existing: []) == nil {
-                    reportRenameProblem("The name has no usable characters.",
-                                        title: "The section was not created.")
-                    return
-                }
-                // Zero with a usable name has a harmless cause too — every
-                // selected host already reads as being under that heading —
-                // so only the vanished-hosts case says anything.
-                let live = store.groups.contains { group in
-                    group.hosts.contains { prompt.hostIDs.contains($0.id) }
-                }
-                if !live {
-                    reportRenameProblem("Those hosts are no longer there.",
-                                        title: "The section was not created.")
-                }
+                createSection(in: prompt.group, named: name)
             }
         }
         .sheet(item: $editTarget) { host in

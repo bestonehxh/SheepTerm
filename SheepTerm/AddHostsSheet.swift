@@ -82,6 +82,20 @@ struct AddHostsSheet: View {
         /// the group. Per ROW — two rows of one paste can name two
         /// headings — and a name that does not exist yet creates it.
         var sectionText = ""
+        /// The credential chosen from the cell's MENU, by id. Names are not
+        /// unique, so the text alone cannot say which "core" was meant; the
+        /// pick can.
+        ///
+        /// Cleared in ONE case only: a BLOCK paste (a tab or a second line)
+        /// that WRITES this row's Credential cell (`spreadIfPasted`'s loop) —
+        /// never merely because a paste started in the cell. Otherwise it
+        /// is governed by the resolver's rule alone: it counts exactly while
+        /// the cell holds that credential's name
+        /// (`BulkHostParser.resolveCredential(_:picked:in:)`). Clearing it on
+        /// every keystroke lost it on the way through intermediate text — type
+        /// "x" and delete it, or ⌘X ⌘V, or ⌘Z, and the cell read "core" again
+        /// with the pick gone, saving the host with the OTHER "core".
+        var pickedCredentialID: UUID?
 
         /// Nothing typed or pasted into it yet — the rows a paste fills first.
         var isBlank: Bool {
@@ -347,10 +361,19 @@ struct AddHostsSheet: View {
     /// A fixed column: its field, then its list. The chevron's space is kept
     /// even when there is no list to show, so the fields of every row stay on
     /// the same two verticals whether or not anything is saved yet.
-    private func fixedCell<Field: View>(menu: [String],
+    /// One entry of a fixed column's menu. The id is what `ForEach` keys on
+    /// and what `pick` receives — for a credential that is its UUID, because
+    /// two credentials can share a name AND a username, and keying the menu on
+    /// its label made the second of such a pair unreachable.
+    struct MenuEntry: Identifiable, Hashable {
+        let id: String
+        let label: String
+    }
+
+    private func fixedCell<Field: View>(menu: [MenuEntry],
                                         menuLabel: String,
                                         help: String,
-                                        pick: @escaping (String) -> Void,
+                                        pick: @escaping (MenuEntry) -> Void,
                                         @ViewBuilder field: () -> Field) -> some View {
         HStack(spacing: Self.chevronGap) {
             field()
@@ -363,8 +386,8 @@ struct AddHostsSheet: View {
                     Color.clear.frame(width: 1, height: 1)
                 } else {
                     Menu {
-                        ForEach(menu, id: \.self) { entry in
-                            Button(entry) { pick(entry) }
+                        ForEach(menu) { entry in
+                            Button(entry.label) { pick(entry) }
                         }
                     } label: {
                         Image(systemName: "chevron.down")
@@ -393,7 +416,7 @@ struct AddHostsSheet: View {
 
     private func gridRow(_ row: Binding<DraftHost>, number: Int) -> some View {
         let id = row.wrappedValue.id
-        let meaning = meaning(of: row.wrappedValue.credentialText)
+        let meaning = meaning(of: row.wrappedValue)
         return gridLine {
             // No placeholder text in any cell: an example in every empty cell
             // reads as content, and forty of them read as a filled table.
@@ -401,16 +424,16 @@ struct AddHostsSheet: View {
                 .accessibilityLabel("Name, row \(number)")
                 .focused($focus, equals: .name(id))
                 .onSubmit { submit(from: id) }
-                .onChange(of: row.wrappedValue.name) { _, typed in
-                    spreadIfPasted(typed, anchorRow: id, column: .name)
+                .onChange(of: row.wrappedValue.name) { previous, typed in
+                    spreadIfPasted(typed, previous: previous, anchorRow: id, column: .name)
                 }
         } address: {
             TextField("", text: row.address)
                 .accessibilityLabel("Host / IP, row \(number)")
                 .focused($focus, equals: .address(id))
                 .onSubmit { submit(from: id) }
-                .onChange(of: row.wrappedValue.address) { _, typed in
-                    spreadIfPasted(typed, anchorRow: id, column: .address)
+                .onChange(of: row.wrappedValue.address) { previous, typed in
+                    spreadIfPasted(typed, previous: previous, anchorRow: id, column: .address)
                 }
                 // Orange when the `user@` here is the login this row will
                 // use — i.e. the Default credential above does NOT apply to
@@ -421,21 +444,36 @@ struct AddHostsSheet: View {
                 .help(addressWarning(row.wrappedValue)
                       ?? "10.0.0.1, admin@host:2222 — a port and a user may be written here.")
         } credential: {
-            fixedCell(menu: credentialStore.credentials.map { "\($0.name) (\($0.username))" },
+            fixedCell(menu: BulkHostParser.credentialMenuLabels(credentialTriples)
+                        .map { MenuEntry(id: $0.id.uuidString, label: $0.label) },
                       menuLabel: "Credential list",
                       help: "Pick a saved credential — it writes its name into the cell",
                       pick: { entry in
-                          // The menu shows "name (username)"; the cell holds the NAME.
-                          let picked = credentialStore.credentials
-                              .first { "\($0.name) (\($0.username))" == entry }?.name
-                          row.credentialText.wrappedValue = picked ?? entry
+                          // By ID: the menu shows "name (username)" and the
+                          // cell holds only the NAME, which two credentials
+                          // can share — so the pick is remembered beside it.
+                          guard let uuid = UUID(uuidString: entry.id),
+                                let picked = credentialStore.credential(for: uuid) else { return }
+                          // CLEANED, defensively: names are cleaned on the way
+                          // into the store now, but a credentials.json from an
+                          // older build (or a hand edit) can carry a tab or a
+                          // newline, and writing that into a cell reads as a
+                          // block paste and spreads into the next column. The
+                          // resolver compares the cleaned name too, so the
+                          // pick still holds for such a name.
+                          row.credentialText.wrappedValue = ConfigurationHygiene.cleanedName(picked.name)
+                          row.pickedCredentialID.wrappedValue = picked.id
                       }) {
                 TextField("", text: row.credentialText)
                     .accessibilityLabel("Credential, row \(number)")
                     .focused($focus, equals: .credential(id))
                     .onSubmit { submit(from: id) }
-                    .onChange(of: row.wrappedValue.credentialText) { _, typed in
-                        spreadIfPasted(typed, anchorRow: id, column: .credential)
+                    .onChange(of: row.wrappedValue.credentialText) { previous, typed in
+                        // No clearing of the pick here: the resolver already
+                        // ignores a pick whose name is not the text, so a
+                        // kept pick can never describe different text — and
+                        // clearing it lost it through intermediate edits.
+                        spreadIfPasted(typed, previous: previous, anchorRow: id, column: .credential)
                     }
                     // What the text MEANS, without a column of its own: the
                     // caption needed ~52 pt that the grid does not have to
@@ -447,16 +485,29 @@ struct AddHostsSheet: View {
                     .help(meaning.map { "\($0) — \(Self.credentialRules)" } ?? Self.credentialRules)
             }
         } section: {
-            fixedCell(menu: sectionsInChosenGroup,
+            fixedCell(menu: sectionsInChosenGroup.map { MenuEntry(id: $0, label: $0) },
                       menuLabel: "Section list",
                       help: "Pick a section you already have",
-                      pick: { row.sectionText.wrappedValue = $0 }) {
+                      pick: { row.sectionText.wrappedValue = $0.label }) {
                 TextField("", text: row.sectionText)
                     .accessibilityLabel("Section, row \(number)")
                     .focused($focus, equals: .section(id))
                     .onSubmit { submit(from: id) }
-                    .onChange(of: row.wrappedValue.sectionText) { _, typed in
-                        spreadIfPasted(typed, anchorRow: id, column: .section)
+                    .onChange(of: row.wrappedValue.sectionText) { previous, typed in
+                        // A BLOCK goes to the spread WHOLE — `write` caps each
+                        // value it lands. Capping here first truncated the
+                        // block itself and lost its last rows. One long value
+                        // is shortened in place, so the cell cannot show one
+                        // spelling and file another. The rule is
+                        // `BulkHostParser.sectionCellEdit`, where it is tested.
+                        switch BulkHostParser.sectionCellEdit(typed) {
+                        case .spread:
+                            spreadIfPasted(typed, previous: previous, anchorRow: id, column: .section)
+                        case .cap(let cleaned):
+                            row.sectionText.wrappedValue = cleaned
+                        case .keep:
+                            break
+                        }
                     }
                     .help(Self.sectionRules)
             }
@@ -557,15 +608,17 @@ struct AddHostsSheet: View {
         }
     }
 
+
     private func write(_ value: String, into row: inout DraftHost, column: BulkHostParser.Column) {
         // Every separator out, not just the ends: what makes the paste
         // detection safe is that a value in a cell can never carry one, and
         // this is the single place values are written. A tab in the middle of
         // a pasted field (a quoted TSV cell) would otherwise look like a
         // fresh block paste the next time the row was touched.
-        let trimmed = value
-            .components(separatedBy: CharacterSet(charactersIn: "\t\r\n")).joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // `storedCellValue` — the ONE definition of what a cell holds, which
+        // the status line's filled/cleared counts read too. (Section gets the
+        // store's name pass on top; see below.)
+        let trimmed = BulkHostParser.storedCellValue(value, column: .name)
         switch column {
         case .name:
             row.name = trimmed
@@ -576,8 +629,18 @@ struct AddHostsSheet: View {
             // between a credential and a username before the user has seen
             // either, and the cell's caption says which it is anyway.
             row.credentialText = trimmed
+            // The pick is NOT cleared here: the resolver decides whether it
+            // still describes the text. Clearing it made a single-cell paste
+            // of "core\n" behave differently from typing "core".
         case .section:
-            row.sectionText = trimmed
+            // The STORE's pass, not `prefix(64)`: it strips control characters
+            // and then caps, and doing it the other way round left the cell
+            // one character shorter than the heading the store keeps — two
+            // `headingKey`s for one heading, two rows in the sidebar.
+            // Re-trimmed after the cap for the same reason `sectionCellEdit`
+            // trims its payload: the cap can land on a space, and the store
+            // trims one away — the cell has to hold the stored spelling.
+            row.sectionText = BulkHostParser.storedCellValue(value, column: .section)
         }
     }
 
@@ -612,7 +675,13 @@ struct AddHostsSheet: View {
     ///
     /// Re-entrant by nature and safe by the same test: every cell this writes
     /// fires its own `onChange`, and none of those values carries a separator.
-    private func spreadIfPasted(_ pasted: String, anchorRow: UUID, column: BulkHostParser.Column) {
+    /// `previous` is the cell's text BEFORE the paste (`onChange`'s old
+    /// value): the binding already holds the pasted block by the time this
+    /// runs, so it is the only place the anchor's old value still exists —
+    /// the cell gets it back when the block does not write it, and
+    /// "M cells cleared" counts it when the block writes it empty.
+    private func spreadIfPasted(_ pasted: String, previous: String = "", anchorRow: UUID,
+                                column: BulkHostParser.Column) {
         guard BulkHostParser.carriesBlockSeparators(pasted) else { return }
         guard let anchor = rows.firstIndex(where: { $0.id == anchorRow }) else { return }
         // One line and no tab: a single cell out of a spreadsheet, which
@@ -622,29 +691,92 @@ struct AddHostsSheet: View {
             write(value, into: &rows[anchor], column: column)
             return
         }
-        let block = BulkHostParser.block(from: pasted)
+        let block = BulkHostParser.block(from: pasted, preservingEmptyRows: true)
         if let refused = block.rejectedHeader {
-            // The anchor cell still holds the raw block at this point.
-            write("", into: &rows[anchor], column: column)
+            // The anchor cell still holds the raw block at this point. It gets
+            // its PREVIOUS text back, not "": nothing was pasted, so nothing
+            // may be lost — a refused header in a Credential cell used to wipe
+            // "netops" while the status said nothing was pasted.
+            write(previous, into: &rows[anchor], column: column)
             refuseHeader(refused)
             return
         }
         // The raw block must never be left sitting in the cell it was dropped
-        // in, even when it parsed to nothing (a paste of tabs and blank lines).
-        write("", into: &rows[anchor], column: column)
+        // in — a block with tabs and newlines in a single-line cell is what
+        // must not happen. The cell gets its PREVIOUS text back, not "": a
+        // block that does not write this cell (a header naming other columns,
+        // a header-only paste) must leave it as it was. Writing "" here wiped
+        // the name when "Host⇥Section" was pasted with the cursor in Name, and
+        // wiped "netops" when a Host column was pasted in Credential — the
+        // host then saved with the Default credential. A block that DOES write
+        // this cell overwrites it below, as any cell it covers. (The pick is
+        // left alone for the same reason: the spread clears it for every
+        // Credential cell it actually writes.)
+        write(previous, into: &rows[anchor], column: column)
         let (limited, note) = capped(block, anchor: anchor)
         let cells = BulkHostParser.spread(block: limited.rows, from: column, columns: limited.columns)
         guard !cells.isEmpty else {
-            status = "Nothing in that paste looked like a row."
+            // The note is the REASON when there is one: at the grid's cap
+            // `capped` returns no rows and " · grid is full (2000 rows)",
+            // and reporting "nothing looked like a row" for a paste that was
+            // perfectly good told the user the wrong thing. `pasteBlock` says
+            // it the same way. (The anchor already has its previous text back,
+            // so "Nothing was pasted" is literally true.)
+            status = note.isEmpty ? "Nothing in that paste looked like a row." : "Nothing was pasted" + note
             return
         }
-        for cell in cells {
+        // Worked out from the grid AS IT IS, before anything is written: which
+        // cells are written at all (an empty value past the bottom of the grid
+        // is not — it would append a row just to hold nothing), and what the
+        // status line may honestly claim.
+        let outcome = BulkHostParser.spreadOutcome(cells: cells, anchor: anchor,
+                                                   anchorColumn: column, anchorPrevious: previous,
+                                                   rowCount: rows.count) { row, column in
+            cellText(rows[row], column)
+        }
+        for index in outcome.writes {
+            let cell = cells[index]
             let target = anchor + cell.row
             while rows.count <= target { rows.append(DraftHost()) }
             write(cell.value, into: &rows[target], column: cell.column)
+            // A BLOCK paste — anything with a tab or a second line, ONE row
+            // with a tab included — that writes the Credential column ends
+            // the pick of every row it writes. Kept, a row whose pick named
+            // the same text saved netops while the other rows of the very
+            // same paste said "core" and saved admin — visible only in a
+            // tooltip. (A single plain value, resolved above through
+            // `singleValue(ifPlain:)`, keeps the pick the same as typing it;
+            // and `place`, for a paste with no cell focused, writes FRESH
+            // rows, so it has no pick to end.)
+            if cell.column == .credential { rows[target].pickedCredentialID = nil }
         }
-        status = "Pasted \(limited.rows.count) row\(limited.rows.count == 1 ? "" : "s")"
-            + note + headerHint(limited)
+        // Honest counts (`spreadOutcome`): FILLED = got a value; CLEARED = an
+        // empty value replaced text that was there. An empty value over an
+        // empty cell is neither, and says nothing.
+        // "cleared" counts CELLS (a row that got a name while its old address
+        // was emptied reports both), so the wording says cells.
+        let filled = outcome.filled, cleared = outcome.cleared
+        let clearedCells = "\(cleared) cell\(cleared == 1 ? "" : "s") cleared"
+        let pasted: String
+        if filled > 0 {
+            pasted = "Pasted \(filled) row\(filled == 1 ? "" : "s")" + (cleared > 0 ? " · " + clearedCells : "")
+        } else if cleared > 0 {
+            pasted = "Cleared \(cleared) cell\(cleared == 1 ? "" : "s")"
+        } else {
+            pasted = "Nothing changed"
+        }
+        status = pasted + note + headerHint(limited)
+    }
+
+    /// The text a row holds in one column — what `spreadOutcome` asks, to
+    /// tell a real clear from an empty value over an empty cell.
+    private func cellText(_ row: DraftHost, _ column: BulkHostParser.Column) -> String {
+        switch column {
+        case .name: return row.name
+        case .address: return row.address
+        case .credential: return row.credentialText
+        case .section: return row.sectionText
+        }
     }
 
     /// What a block turned into, so the caller can say it.
@@ -705,10 +837,11 @@ struct AddHostsSheet: View {
     /// row it holds, so this is about the sheet staying usable, not about the
     /// source: a 40,000-line paste is as bad as a 40,000-line file.
     private func capped(_ block: BulkHostParser.Block,
-                        anchor: Int = 0) -> (block: BulkHostParser.Block, note: String) {
+                        anchor: Int? = nil) -> (block: BulkHostParser.Block, note: String) {
         // The budget is what the GRID has left, not what this block holds:
         // two 2,000-row pastes must not make a 4,000-row grid.
         let budget = BulkHostParser.rowBudget(anchor: anchor, existing: rows.count,
+                                              blankRows: rows.filter(\.isBlank).count,
                                               cap: Self.importRowCap)
         guard block.rows.count > budget else { return (block, "") }
         var trimmed = block
@@ -789,16 +922,21 @@ struct AddHostsSheet: View {
     /// A block pasted with no cell focused: blank rows first, then the end —
     /// what a paste into the sheet rather than into a cell means.
     private func pasteBlock(_ text: String) {
-        // One plain line and no tab is ONE value, comma and all — the same
-        // rule the in-cell paste applies (`singleValue(ifPlain:)`). Without
-        // it a name like "Core, floor 3" pasted into the sheet was split at
-        // the comma into two columns.
-        if let value = BulkHostParser.singleValue(ifPlain: text) {
+        // One plain line and no tab is ONE value, comma and all. Without it a
+        // name like "Core, floor 3" pasted into the sheet was split at the
+        // comma into two columns. `skippingBlankLines`: this paste has no
+        // cell to keep coordinates for, so the blank lines Excel puts round a
+        // single cell ("Core, floor 3\n\n") do not turn it into a block.
+        if let value = BulkHostParser.singleValue(ifPlain: text, skippingBlankLines: true) {
             let column = BulkHostParser.guessColumn(forSingleColumn: [value])
             var row = DraftHost()
             write(value, into: &row, column: column)
-            place(row)
-            status = "Pasted 1 \(columnLabel(column)) value"
+            if place(row) {
+                status = "Pasted 1 \(columnLabel(column)) value"
+            } else {
+                status = "Nothing was pasted" + BulkHostParser.capNote(placed: 0,
+                                                                         cap: Self.importRowCap)
+            }
             return
         }
         let block = BulkHostParser.block(from: text)
@@ -858,13 +996,14 @@ struct AddHostsSheet: View {
             + note + headerHint(limited)
     }
 
-    /// UTF-8, then Latin-1. A .csv saved by Excel is often neither UTF-8 nor
-    /// anything else we can name, and Latin-1 decodes ANY byte sequence — so
-    /// this fails only when the file cannot be read at all, which is the one
-    /// case worth reporting.
+    /// The file's bytes as text — `BulkHostParser.decodeImport` decides the
+    /// encoding: UTF-16 by its byte-order mark first (Excel's "UTF-16 Unicode
+    /// Text", Numbers' UTF-16 CSV), then UTF-8, then Latin-1 as the last
+    /// resort. Latin-1 decodes ANY byte sequence, so this fails only when the
+    /// file cannot be read at all, which is the one case worth reporting.
     private static func readText(at url: URL) -> String? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        return BulkHostParser.decodeImport(data)
     }
 
     // MARK: Add
@@ -879,6 +1018,8 @@ struct AddHostsSheet: View {
 
     /// The headings that already exist in the group this batch is going to —
     /// the chevron offers those, and typing anything else makes a new one.
+    /// `sections(in:)` is `HostGroup.displayedSections`, so an EMPTY heading
+    /// the user made in that group is offered here like any other.
     private var sectionsInChosenGroup: [String] {
         switch groupChoice {
         case .existing(let id): return model.store.sections(in: id)
@@ -905,7 +1046,10 @@ struct AddHostsSheet: View {
     /// back to the default, it is a different login.
     private func resolved(_ row: DraftHost) -> (credential: Credential?, username: String) {
         let text = row.credentialText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matched = BulkHostParser.resolveCredential(text, in: credentialTriples)
+        // The PICK first (by id, while it still describes the cell), then the
+        // text rules — one pure function, tested in the harness.
+        let matched = BulkHostParser.resolveCredential(text, picked: row.pickedCredentialID,
+                                                       in: credentialTriples)
             .flatMap { credentialStore.credential(for: $0)?.id }
         let typedUsername = matched == nil ? text : ""
         let fallback = credentialStore.credential(for: defaultCredentialID)
@@ -941,7 +1085,8 @@ struct AddHostsSheet: View {
     private func credentialBeatsAddressUser(_ row: DraftHost) -> Bool {
         let text = row.credentialText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty,
-              let id = BulkHostParser.resolveCredential(text, in: credentialTriples),
+              let id = BulkHostParser.resolveCredential(text, picked: row.pickedCredentialID,
+                                                        in: credentialTriples),
               let credential = credentialStore.credential(for: id) else { return false }
         let user = BulkHostParser.addressUser(row.address)
         return !user.isEmpty && user != credential.username
@@ -962,10 +1107,11 @@ struct AddHostsSheet: View {
     /// text names one of ours, the word "username" when it does not, and
     /// nothing at all when the cell is empty (the Default row above already
     /// says what empty means).
-    private func meaning(of text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func meaning(of row: DraftHost) -> String? {
+        let trimmed = row.credentialText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard let id = BulkHostParser.resolveCredential(trimmed, in: credentialTriples),
+        guard let id = BulkHostParser.resolveCredential(trimmed, picked: row.pickedCredentialID,
+                                                        in: credentialTriples),
               let credential = credentialStore.credential(for: id) else { return "username" }
         return credential.username.isEmpty ? "credential" : credential.username
     }
@@ -1001,9 +1147,11 @@ struct AddHostsSheet: View {
         }
 
         // The same pass an import or a restore gets: a name is shortened, a
-        // control character is stripped, nothing is dropped — and what
-        // changed is counted so the dialog can say it.
-        let hygiene = ConfigurationHygiene.sanitize(&hosts)
+        // control character is stripped, nothing is dropped. What changed is
+        // REPORTED only for the rows that are written (see below) — the raw
+        // rows are kept for that.
+        let rawRows = hosts
+        _ = ConfigurationHygiene.sanitize(&hosts)
         // Two rows for the same connection are one host — counted AFTER
         // hygiene, because that is when two rows can BECOME the same
         // connection (a stripped control character in an address). Doing it
@@ -1020,7 +1168,15 @@ struct AddHostsSheet: View {
         case .existing(let id): existing = model.store.hosts(inGroup: id)
         case .new: existing = []
         }
-        let filed = BulkHostParser.filedSummary(hosts: hosts, existing: existing)
+        // `declared` as well: an EMPTY heading in the target group is a real
+        // heading, and a row typed as "floor  2" joins it exactly as it will
+        // when the store writes it.
+        let filed = BulkHostParser.filedSummary(hosts: hosts, existing: existing,
+                                                declared: sectionsInChosenGroup)
+        // Only the rows that land: a correction to a row whose target was
+        // already in the group never reached anything, and saying it did was
+        // a report about data that was not written.
+        let hygiene = BulkHostParser.hygieneReport(forRows: rawRows, landingIn: existing)
 
         let stats: GroupImportStats
         let groupName: String

@@ -4,6 +4,14 @@ import SheepVTRender
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension Notification.Name {
+    /// A `.sheeptermbackup` has just been applied: every piece of state that
+    /// is seeded from UserDefaults ONCE — the sidebar's fold state is the only
+    /// one today — has to read itself again, before the stores reload and the
+    /// one-writer persists start writing back over the restored keys.
+    static let sheepTermConfigurationRestored = Notification.Name("SheepTermConfigurationRestored")
+}
+
 @MainActor
 final class SessionTab: ObservableObject, Identifiable {
     enum Content {
@@ -287,6 +295,15 @@ final class AppModel: ObservableObject {
     /// stays put and open sessions keep running — only the configuration
     /// changes underneath them.
     func reloadAfterRestore() {
+        // Posted FIRST, before the stores reload. Fold state (collapsedGroups
+        // / collapsedHostSections) lives in `SidebarView`'s @State, seeded
+        // once from UserDefaults at init — so a restore that wrote those keys
+        // changed nothing on screen, and worse: `store.reloadFromDisk()` below
+        // bumps `revision`, the sidebar's prune then intersects its PRE-restore
+        // set with the restored groups, and the one-writer persist wrote that
+        // back over what the restore had just put in the file. The view
+        // re-seeds itself from the defaults on this notification.
+        NotificationCenter.default.post(name: .sheepTermConfigurationRestored, object: nil)
         let defaults = UserDefaults.standard
         sessionLogging = defaults.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
@@ -560,8 +577,9 @@ final class AppModel: ObservableObject {
     /// double-click): nothing is imported without an explicit accept, and
     /// duplicates are resolved by the user — never silently (spec 0.4).
     /// A file normally holds ONE group — nothing in this app writes a
-    /// multi-group file any more (sections live on hosts and travel inside
-    /// their group). One that arrives from elsewhere is still read: each
+    /// multi-group file any more (a group carries its own heading list and its
+    /// hosts' pointers into it, so exporting a group brings its sections with
+    /// it). One that arrives from elsewhere is still read: each
     /// group gets its own dialog, in file order, and Cancel on one skips THAT
     /// group only rather than throwing away the rest.
     ///
@@ -620,7 +638,13 @@ final class AppModel: ObservableObject {
             // runs long is laid out with the icon on the LEFT (see
             // `NSAlert.sheepStyled`). `corrections` is the exception — it
             // names changes made to the user's own data and is allowed to.
-            alert.messageText = "Import “\(group.name)” (\(group.hosts.count) hosts)?"
+            // A group can be all headings and no hosts (someone exported a
+            // group they had only set up): "0 hosts" alone reads like an empty
+            // file, so the sections are named instead of left unsaid.
+            let sections = group.displayedSections.count
+            alert.messageText = group.hosts.isEmpty && sections > 0
+                ? "Import “\(group.name)” (\(sections) section\(sections == 1 ? "" : "s"))?"
+                : "Import “\(group.name)” (\(group.hosts.count) hosts)?"
             alert.informativeText = "From \(sender). Passwords are not included.\(corrections)"
             alert.addButton(withTitle: "Import")
             alert.addButton(withTitle: "Cancel")
@@ -632,11 +656,20 @@ final class AppModel: ObservableObject {
 
         // 0.4 (ก): duplicate group — three choices, both host counts shown.
         let alert = NSAlert()
-        alert.messageText = "“\(existing.name)” already exists"
+        // Through `sanitizedForDialog` like the incoming side: a stored name
+        // can still hold what the dialog should not print raw.
+        alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” already exists"
         // The three buttons say what the choices do; this line only has to
         // say what is on each side of it.
+        // Same shape as the new-group dialog above: a headings-only file said
+        // "The file from Mac: 0.", which reads as an empty file rather than as
+        // the sections it is bringing.
+        let incomingSections = group.displayedSections.count
+        let theirs = group.hosts.isEmpty && incomingSections > 0
+            ? "\(incomingSections) section\(incomingSections == 1 ? "" : "s")"
+            : "\(group.hosts.count)"
         alert.informativeText = "Yours: \(existing.hosts.count) hosts. "
-            + "The file from \(sender): \(group.hosts.count).\(corrections)"
+            + "The file from \(sender): \(theirs).\(corrections)"
         alert.addButton(withTitle: "Merge into Existing")
         alert.addButton(withTitle: "Create New Group")
         alert.addButton(withTitle: "Cancel")
@@ -699,7 +732,10 @@ final class AppModel: ObservableObject {
     /// 0.4 (ข): shows exactly which fields differ between the two entries.
     private static func importDiffDescription(incoming: Host, existing: Host) -> String {
         var diffs: [String] = []
-        if incoming.name != existing.name {
+        // CLEANED names, as `HostStore.sameForImport` compares them: a conflict
+        // raised by another field used to carry a "name: sw 1 → sw 1" line
+        // too, for a stored name that still held a raw U+2028.
+        if ConfigurationHygiene.cleanedName(incoming.name) != ConfigurationHygiene.cleanedName(existing.name) {
             diffs.append("name: \(sanitizedForDialog(existing.name)) → \(sanitizedForDialog(incoming.name))")
         }
         if incoming.address != existing.address {
@@ -1016,15 +1052,31 @@ final class AppModel: ObservableObject {
         // reaches into `groups` directly and used to skip that, which
         // under post-corrupt suppression meant the new group appeared in
         // the sidebar and was never written to disk.
-        guard let index = store.groups.firstIndex(where: { $0.name == groupName }) else {
+        // The host appended below carries NO section by construction — Quick
+        // Connect builds it from an address and a credential, and there is
+        // nowhere in that sheet to put a heading. If a future caller ever
+        // hands this path a labelled host, the label has to be DECLARED in the
+        // group it lands in (`group.sections = group.displayedSections`, the
+        // way `HostStore.move(host:toGroupNamed:)` does it) or the next load
+        // will treat it as an undeclared leftover.
+        // Found, and named, through ONE decision (`HostStore
+        // .quickConnectGroupName` / `quickConnectGroupIndex`): a raw lookup and
+        // a raw append made a "Branch⟨U+2028⟩BKK" group that the next launch
+        // cleaned to "Branch BKK" — and the same text then made a second one.
+        guard let index = store.quickConnectGroupIndex(for: groupName) else {
             store.noteExplicitUserMutation()
-            store.groups.append(HostGroup(name: groupName, hosts: [host]))
+            store.groups.append(HostGroup(name: HostStore.quickConnectGroupName(groupName),
+                                          hosts: [host],
+                                          sections: host.sectionName.map { [$0] } ?? []))
             store.save()
             return
         }
         guard let existing = store.groups[index].hosts.first(where: { $0.sameConnection(as: host) }) else {
             store.noteExplicitUserMutation()
             store.groups[index].hosts.append(host)
+            if host.sectionName != nil {
+                store.groups[index].sections = store.groups[index].displayedSections
+            }
             store.save()
             return
         }
@@ -1077,7 +1129,8 @@ final class AppModel: ObservableObject {
     /// for the rest of its life.
     private static func savedHostChanges(from existing: Host, to incoming: Host) -> [String] {
         var changes: [String] = []
-        if incoming.name != existing.name {
+        // Cleaned on both sides, for the same reason as `importDiffDescription`.
+        if ConfigurationHygiene.cleanedName(incoming.name) != ConfigurationHygiene.cleanedName(existing.name) {
             changes.append("name: \(sanitizedForDialog(existing.name)) → \(sanitizedForDialog(incoming.name))")
         }
         if incoming.credentialID != existing.credentialID {
