@@ -112,9 +112,6 @@ SheepTerm is one of six small native macOS apps that share the same sheep icon s
 
 - [libssh](https://www.libssh.org) (LGPL-2.1) — SSH transport, bundled as a dynamic library
 - [OpenSSL](https://www.openssl.org) (Apache-2.0) — `libcrypto`, bundled as a dynamic library for libssh
-- [xterm.js](https://github.com/xtermjs/xterm.js) (MIT) — its escape-sequence test fixtures are
-  replayed against SheepTerm's emulator; they are included with their licence in
-  `Packages/SheepVT/Tests/Fixtures/xtermjs`
 
 ## License
 
