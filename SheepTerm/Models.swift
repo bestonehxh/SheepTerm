@@ -1097,9 +1097,11 @@ enum BulkHostParser {
         return cells
     }
 
-    /// True when text could only have arrived in a single-line field by being
-    /// pasted: Tab moves focus and Return submits, so neither character can be
-    /// typed into one.
+    /// True when text did not arrive in a single-line field by plain typing:
+    /// Tab moves focus and Return submits. A paste carries them — and so does
+    /// any separator keystroke (⌥Return, ⌥Enter, ⌥Tab, ⌃O, ⌃⌥Return, a
+    /// ⌃Q-quoted Tab/Return), which this cannot tell from a paste; `cellPaste`
+    /// does, and ignores such a keystroke, keeping the cell's text exactly.
     ///
     /// `isNewline`, not `== "\n" || == "\r"`: **CRLF is ONE Swift Character**,
     /// and it equals neither of those, so a Windows-origin paste with no tab
@@ -1112,6 +1114,149 @@ enum BulkHostParser {
     /// It also admits U+2028/U+0085, which those two already treat as lines.
     static func carriesBlockSeparators(_ text: String) -> Bool {
         text.contains { $0 == "\t" || $0.isNewline }
+    }
+
+    /// What an edit of an Add Hosts cell WAS, out of the field's whole new
+    /// value — the one decision `AddHostsSheet.spreadIfPasted` acts on.
+    ///
+    /// ⌘V into a non-empty cell inserts the pasted text at the caret (or over
+    /// the selection) and the field hands `onChange` its whole value.
+    ///
+    /// - `.block(text)` — a BLOCK, spread from the anchor with the anchor
+    ///   REPLACED by its first value, like a spreadsheet range paste. Only the
+    ///   pasted text: spreading the field's whole value made the text after
+    ///   the caret one more row, which silently overwrote the cell below the
+    ///   block ("Flo|or 9" + "Floor 1\nFloor 2\n" filed "or 9" on row 3).
+    /// - `.single(cell)` — ONE value (`singleValue(ifPlain:)`: a spreadsheet
+    ///   cell or an editor's line copy, closed by one newline). It keeps
+    ///   INSERTION semantics, like typing it, and `cell` is the cell's final
+    ///   text: "admin@" + "10.0.0.1\n" is "admin@10.0.0.1". Replacing the cell
+    ///   for that closing newline lost "admin@" while the same text without
+    ///   the newline was inserted.
+    /// - `.unchanged(previous)` — not a paste. A separator CAN be typed into a
+    ///   single-line field: ⌥Return, ⌥Enter, ⌥Tab, ⌃O, ⌃⌥Return and a
+    ///   ⌃Q-quoted Tab/Return all insert one (⌥Return/⌥Tab are AppKit's
+    ///   insertNewlineIgnoringFieldEditor: / insertTabIgnoringFieldEditor:).
+    ///   Read as a paste, "\n" is a blank row and cleared the cell ("sw1" +
+    ///   ⌥Tab cleared Name AND Host). An inserted text made only of separators
+    ///   that the clipboard does not account for is such a keystroke, and the
+    ///   payload is `previous` EXACTLY — not trimmed or cleaned: the view
+    ///   assigns it raw, because "core " + ⌥Return written back through
+    ///   `write` lost its space and the next "sw" made "coresw". (⌘V of a
+    ///   copied EMPTY cell — "\n" on the clipboard — is matched by the
+    ///   clipboard and still clears, as decided.)
+    ///
+    /// What was inserted (`insertion`) is found in Unicode SCALARS, not
+    /// Characters: a pasted combining mark (or a regional indicator) fuses
+    /// with the character before the caret into one Character, and then the
+    /// clipboard is not a Character substring of the field and a Character
+    /// diff keeps the fused letter in the block.
+    enum CellPaste: Equatable {
+        case single(String)
+        case block(String)
+        case unchanged(String)
+    }
+
+    static func cellPaste(previous: String, typed: String, clipboard: String?) -> CellPaste {
+        let edit = insertion(previous: previous, typed: typed, clipboard: clipboard)
+        if !edit.fromClipboard, edit.pasted.allSatisfy({ $0 == "\t" || $0.isNewline }) { return .unchanged(previous) }
+        if singleValue(ifPlain: edit.pasted) != nil {
+            // The value AS PASTED, less the BOM and the one closing newline
+            // `singleValue` drops — untrimmed, since it lands between other
+            // text the way typing it would. `write` trims the cell's ends.
+            var value = edit.pasted
+            if value.hasPrefix("\u{FEFF}") { value.removeFirst() }
+            if value.last?.isNewline == true { value.removeLast() }
+            return .single(edit.prefix + edit.lead + value + edit.trail + edit.suffix)
+        }
+        return .block(edit.pasted)
+    }
+
+    /// The text the field inserted, and what it sits between.
+    private struct Insertion {
+        var prefix = "", lead = "", pasted: String, trail = "", suffix = ""
+        /// True when the clipboard accounts for `pasted` — a real ⌘V.
+        var fromClipboard = false
+    }
+
+    /// 1. The CLIPBOARD, when it carries a separator and sits in `typed`
+    ///    between a prefix and a suffix of `previous` that do not overlap (an
+    ///    insertion, or a replacement of the selection between them). It is
+    ///    the only thing that can tell "Floor 9" with the caret at the start
+    ///    from "Floor " + "1\nFloor 2\nFloor " — the same field text. Tried
+    ///    bare, then with the one space NeXT smart paste adds on either side
+    ///    or both: a copy made by double-click-drag in a Cocoa text view or
+    ///    WebKit carries that flavour, the field editor (smart insert on)
+    ///    inserts clip + " ", and the bare clipboard then missed and the diff
+    ///    below ate into the block ("Floor 1\nFloor 2 Floor 9" → "1" /
+    ///    "Floor 2 Floor"). The padding is kept apart from the pasted text.
+    /// 2. Otherwise (a drag, or a clipboard that changed) a DIFF: the longest
+    ///    common prefix, then the longest common suffix that does not overlap
+    ///    it; what lies between in `typed` was inserted. When that is a pure
+    ///    insertion that could equally sit further left (its edges repeat the
+    ///    text beside it), the placement that ENDS with a line break is taken
+    ///    — the shape of a spreadsheet clipboard — and otherwise the caret is
+    ///    taken to be after the common prefix. Limits, both needing the
+    ///    clipboard to resolve: a field text two different pastes produce
+    ///    ("A" + "\nBA", or "A\nB" + "A"); and a replaced selection whose ends
+    ///    match the pasted text's ends ("cd" of "abcdef" replaced by
+    ///    "cX\nYd" reads as "X\nY" inserted between "abc" and "def" — the
+    ///    smaller edit).
+    /// 3. An empty `previous` falls out of step 2 as the whole value.
+    private static func insertion(previous: String, typed: String, clipboard: String?) -> Insertion {
+        let old = Array(previous.unicodeScalars), new = Array(typed.unicodeScalars)
+        func text(_ scalars: ArraySlice<Unicode.Scalar>) -> String {
+            var view = String.UnicodeScalarView()
+            view.append(contentsOf: scalars)
+            return String(view)
+        }
+        // Common prefix / suffix lengths, unbounded — both steps use them.
+        var lcp = 0
+        while lcp < old.count, lcp < new.count, old[lcp] == new[lcp] { lcp += 1 }
+        var lcs = 0
+        while lcs < old.count, lcs < new.count, old[old.count - 1 - lcs] == new[new.count - 1 - lcs] { lcs += 1 }
+
+        // 1. With `prefix = new[..<i]` and the suffix after the candidate,
+        //    "prefix of previous" is i <= lcp and "suffix of previous" is
+        //    (new.count - candidate.count - i) <= lcs; the two must not
+        //    overlap inside `previous`. Only those i are compared, so this
+        //    stays cheap even for a 2,000-row block.
+        if let clipboard, carriesBlockSeparators(clipboard) {
+            let clip = Array(clipboard.unicodeScalars)
+            for (lead, trail) in [("", ""), (" ", ""), ("", " "), (" ", " ")] {
+                let candidate = Array(lead.unicodeScalars) + clip + Array(trail.unicodeScalars)
+                let outside = new.count - candidate.count
+                guard outside >= 0, outside <= old.count else { continue }
+                let first = max(0, outside - lcs), last = min(lcp, outside)
+                guard first <= last else { continue }
+                for i in first...last where new[i..<(i + candidate.count)].elementsEqual(candidate) {
+                    return Insertion(prefix: text(new[..<i]), lead: lead, pasted: clipboard, trail: trail,
+                                     suffix: text(new[(i + candidate.count)...]), fromClipboard: true)
+                }
+            }
+        }
+
+        // 2. The diff. The suffix is bounded so it never overlaps the prefix.
+        let p = lcp
+        let s = min(lcs, min(old.count, new.count) - p)
+        var start = p, end = new.count - s
+        guard start < end else { return Insertion(pasted: typed) }
+        func endsWithLineBreak(_ index: Int) -> Bool { Character(new[index - 1]).isNewline }
+        if p + s == old.count, !endsWithLineBreak(end) {
+            // A pure insertion may slide left while the character before it
+            // equals its own last character; take the first placement that
+            // ends with a line break, if any does.
+            var shift = 1
+            while shift <= p, new[p - shift] == new[end - shift] {
+                if endsWithLineBreak(end - shift) { start = p - shift; end -= shift; break }
+                shift += 1
+            }
+        }
+        let inserted = text(new[start..<end])
+        // No separator in what was inserted: `previous` itself carried one,
+        // and the whole value is all there is to go on.
+        guard carriesBlockSeparators(inserted) else { return Insertion(pasted: typed) }
+        return Insertion(prefix: text(new[..<start]), pasted: inserted, suffix: text(new[end...]))
     }
 
     /// The hygiene report for the rows that will actually be WRITTEN.

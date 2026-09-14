@@ -664,9 +664,12 @@ struct AddHostsSheet: View {
     /// spreads down and to the right from the cell it was pasted into.
     ///
     /// There is no paste EVENT to hook — the field is SwiftUI's — so the VALUE
-    /// is the signal. A single-line `TextField` cannot be given a tab or a
-    /// newline by typing (Tab moves focus, Return submits), so a bound value
-    /// carrying one arrived by paste. Measured in the running app: ⌘V of a
+    /// is the signal. Plain Tab moves focus and Return submits, so a bound
+    /// value carrying a tab or a newline arrived by paste — or by a separator
+    /// keystroke (⌥Return, ⌥Enter, ⌥Tab, ⌃O, ⌃⌥Return, a ⌃Q-quoted
+    /// Tab/Return), which DOES put one in the field. `BulkHostParser.cellPaste`
+    /// tells the two apart and such a keystroke is ignored: the cell keeps its
+    /// text exactly, untrimmed. Measured in the running app: ⌘V of a
     /// spreadsheet block delivers the whole thing, tabs and newlines included,
     /// into the one cell's binding — which is what makes this work without an
     /// AppKit field of our own. (A local `NSEvent` monitor was tried first and
@@ -676,22 +679,56 @@ struct AddHostsSheet: View {
     /// Re-entrant by nature and safe by the same test: every cell this writes
     /// fires its own `onChange`, and none of those values carries a separator.
     /// `previous` is the cell's text BEFORE the paste (`onChange`'s old
-    /// value): the binding already holds the pasted block by the time this
+    /// value): the binding already holds the edited text by the time this
     /// runs, so it is the only place the anchor's old value still exists —
-    /// the cell gets it back when the block does not write it, and
-    /// "M cells cleared" counts it when the block writes it empty.
-    private func spreadIfPasted(_ pasted: String, previous: String = "", anchorRow: UUID,
+    /// the cell gets it back when a block does not write it (or the edit was
+    /// a keystroke), and "M cells cleared" counts it when a block writes it
+    /// empty.
+    private func spreadIfPasted(_ typed: String, previous: String = "", anchorRow: UUID,
                                 column: BulkHostParser.Column) {
-        guard BulkHostParser.carriesBlockSeparators(pasted) else { return }
+        guard BulkHostParser.carriesBlockSeparators(typed) else { return }
         guard let anchor = rows.firstIndex(where: { $0.id == anchorRow }) else { return }
-        // One line and no tab: a single cell out of a spreadsheet, which
-        // carries a trailing newline and is otherwise just a value — the
-        // comma in "Core, floor 3" is part of the name, not a delimiter.
-        if let value = BulkHostParser.singleValue(ifPlain: pasted) {
-            write(value, into: &rows[anchor], column: column)
+        // What the edit WAS — the field's whole value is not the paste. The
+        // clipboard is read here only as evidence of what was inserted; the
+        // decision is `BulkHostParser.cellPaste`, where it is tested.
+        let text: String
+        switch BulkHostParser.cellPaste(previous: previous, typed: typed,
+                                        clipboard: NSPasteboard.general.string(forType: .string)) {
+        case .unchanged(let text):
+            // A separator TYPED, not pasted — ⌥Return, ⌥Enter, ⌥Tab, ⌃O,
+            // ⌃⌥Return, a ⌃Q-quoted Tab/Return. Read as a paste it was a blank
+            // row that cleared the cell (and ⌥Tab the Host beside it); instead
+            // the cell gets its text back EXACTLY. Assigned RAW, not through
+            // `write`: `write` trims and (for Section) cleans, so "core " +
+            // ⌥Return then "sw" became "coresw". Safe raw because `text` is
+            // `previous`, the cell's own last value, which never holds a
+            // separator (every separator-carrying value comes through here
+            // and leaves without one) — so the `onChange` this assignment
+            // fires stops at the guard above.
+            switch column {
+            case .name: rows[anchor].name = text
+            case .address: rows[anchor].address = text
+            case .credential: rows[anchor].credentialText = text
+            case .section: rows[anchor].sectionText = text
+            }
             return
+        case .single(let cell):
+            // One value — a spreadsheet cell or a line copy, closed by one
+            // newline; the comma in "Core, floor 3" is part of the name, not a
+            // delimiter. INSERTED where the field put it, like typing it:
+            // "admin@" + "10.0.0.1\n" is "admin@10.0.0.1". `write` strips the
+            // newline's kin and gives Section the store's name pass.
+            write(cell, into: &rows[anchor], column: column)
+            return
+        case .block(let pasted):
+            // Only the PASTED text spreads, from the anchor, which it replaces
+            // with its first value like a spreadsheet range paste. Spreading
+            // the field's whole value made the text after the caret one more
+            // row that silently overwrote the cell below the block
+            // ("Flo|or 9" + "Floor 1\nFloor 2\n" filed "or 9" on row 3).
+            text = pasted
         }
-        let block = BulkHostParser.block(from: pasted, preservingEmptyRows: true)
+        let block = BulkHostParser.block(from: text, preservingEmptyRows: true)
         if let refused = block.rejectedHeader {
             // The anchor cell still holds the raw block at this point. It gets
             // its PREVIOUS text back, not "": nothing was pasted, so nothing
@@ -744,8 +781,8 @@ struct AddHostsSheet: View {
             // the pick of every row it writes. Kept, a row whose pick named
             // the same text saved netops while the other rows of the very
             // same paste said "core" and saved admin — visible only in a
-            // tooltip. (A single plain value, resolved above through
-            // `singleValue(ifPlain:)`, keeps the pick the same as typing it;
+            // tooltip. (A single plain value — `cellPaste`'s `.single`,
+            // handled above — keeps the pick the same as typing it;
             // and `place`, for a paste with no cell focused, writes FRESH
             // rows, so it has no pick to end.)
             if cell.column == .credential { rows[target].pickedCredentialID = nil }
