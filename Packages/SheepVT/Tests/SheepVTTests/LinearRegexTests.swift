@@ -254,10 +254,11 @@ struct LinearRegexSubsetTests {
     }
 
     /// Swift's `\w` drops an ASCII digit or `_` that sits immediately before a
-    /// scalar of three or more UTF-8 bytes (Swift 6.3.3). It is the only place
-    /// the differential fuzz had to be narrowed, so the evidence lives here
-    /// with the answer this engine gives — which is the one every other engine
-    /// gives, and the one the find bar needs for `eth_0` next to Thai text.
+    /// scalar of three or more UTF-8 bytes (Swift 6.3.3). It was the first
+    /// place the differential fuzz had to be narrowed (the second is
+    /// `theStdlibQuantifiedLiteralBug`), so the evidence lives here with the answer
+    /// this engine gives — which is the one every other engine gives, and the
+    /// one the find bar needs for `eth_0` next to Thai text.
     @Test func theStdlibWordShorthandBug() {
         #expect(ours("\\w+", "b__z")! == [[0, 4]])
         #expect(ours("\\w+", "b__ก")! == [[0, 4]])
@@ -269,6 +270,40 @@ struct LinearRegexSubsetTests {
         // expectation below flips and the fuzz's text filter can come out.
         let rx = try! Regex("\\w+").matchingSemantics(.unicodeScalar)
         #expect(oracle(rx, "b__ก") != [[0, 4]], "Regex's \\w bug appears to be fixed")
+    }
+
+    /// Swift's `Regex` (6.4) fails to backtrack out of a quantified literal
+    /// letter when the text there is that letter and the atom after it would
+    /// have matched it instead — with an alternation around it to make the
+    /// miss visible. The fuzz found it twice on 2026-09-24 (seeds
+    /// 0xb6fd2a04a9d73d2c and 0x51b8ed7c00608bd8, the first and last
+    /// patterns below); the case-sensitive run of the first pattern finds
+    /// the match, and a case-insensitive one can never find less. The
+    /// generator no longer quantifies bare literals (`makePiece`); the
+    /// answers below are ours, and every other engine's.
+    @Test func theStdlibQuantifiedLiteralBug() {
+        #expect(ours("[\\dab](?:\\-b*?\\d[^a-c]?|a{2}|.B??ba?)2+?", " 🙂1ab2\t", ignoresCase: true)! == [[2, 6]])
+        #expect(ours("1(?:x*|a{2}|.B??b)2", "1ab2", ignoresCase: true)! == [[0, 4]])
+        #expect(ours("1(?:x*|a{2}|.B?b)2", "1ab2", ignoresCase: true)! == [[0, 4]])
+        #expect(ours("1(?:x*|a{2}|.b??B)2", "1aB2", ignoresCase: true)! == [[0, 4]])
+        #expect(ours("1(?:x*|a{2}|.B??b)2", "1AB2", ignoresCase: true)! == [[0, 4]])
+        // Exact matching of the same pattern is untouched, on both engines:
+        // `B??` takes nothing and the literal `b` does the work.
+        #expect(ours("1(?:x*|a{2}|.B??b)2", "1ab2")! == [[0, 4]])
+        #expect(ours("1(?:x*|a{2}|.B??b)2", "1aB2")! == [])
+        #expect(oracle(oracleRegex("1(?:x*|a{2}|.B??b)2", ignoresCase: false)!, "1ab2") == [[0, 4]])
+        // The exact-case shape: `A{0,3}?` must give the `A` up to `[^\d]`.
+        #expect(ours("A[^\\d]\\w((A{0,3}?-*)(_.?|[^\\d]))", "A_BA2")! == [[0, 4]])
+        #expect(ours("A[^\\d]\\w((A{0,3}?)(_.?|[^\\d]))", "A_BA2")! == [[0, 4]])
+        #expect(ours("[\\dab]+|A[^\\d]\\w((A{0,3}?-*)(_.?|[^\\d])(a|a){0,2}|\\W\\S{0,2}A{2})", "bA_BA2_A")!
+                == [[0, 1], [1, 5], [5, 6]])
+
+        // The oracle really does disagree — if a future Swift fixes this, the
+        // expectations below flip and the fuzz can quantify literals again.
+        #expect(oracle(oracleRegex("1(?:x*|a{2}|.B??b)2", ignoresCase: true)!, "1ab2") != [[0, 4]],
+                "Regex's quantified-literal bug appears to be fixed (ignoresCase shape)")
+        #expect(oracle(oracleRegex("A[^\\d]\\w((A{0,3}?-*)(_.?|[^\\d]))", ignoresCase: false)!, "A_BA2") != [[0, 4]],
+                "Regex's quantified-literal bug appears to be fixed (exact shape)")
     }
 
     @Test func limitCapsTheList() {
@@ -565,6 +600,9 @@ struct LinearRegexFuzzTests {
         /// never quantified again, which is what keeps the backtracking oracle
         /// out of the exponential cases.
         var quantified: Bool
+        /// A single literal scalar (`a`, `B`, `\-`…). Never quantified — see
+        /// `makePiece`.
+        var literal = false
     }
 
     private static func makeAtom(_ rng: inout RegexRNG, depth: Int) -> Generated {
@@ -579,7 +617,7 @@ struct LinearRegexFuzzTests {
                                                 "[abc1 ]", "[\\dab]", "[^\\d]", "[ก-ฮ]"]),
                              quantified: false)
         case 3:
-            return Generated(pattern: rng.pick(["\\.", "\\-", "\\_", "\\ "]), quantified: false)
+            return Generated(pattern: rng.pick(["\\.", "\\-", "\\_", "\\ "]), quantified: false, literal: true)
         case 8, 9:
             // A group: its own little alternation, one level down.
             let inner = makeAlternation(&rng, depth: depth + 1)
@@ -590,7 +628,7 @@ struct LinearRegexFuzzTests {
             // A literal space or tab reads badly in a failure message and adds
             // nothing the class cases do not cover.
             let safe = (c == " " || c == "\t") ? "a" : c
-            return Generated(pattern: String(safe), quantified: false)
+            return Generated(pattern: String(safe), quantified: false, literal: true)
         }
     }
 
@@ -607,7 +645,25 @@ struct LinearRegexFuzzTests {
         var atom = makeAtom(&rng, depth: depth)
         // Never a quantifier on something already quantified: that is the
         // nesting that makes the oracle hang.
-        guard !atom.quantified, rng.below(2) == 0 else { return atom }
+        //
+        // And never on a bare literal — the second and last narrowing. Swift's
+        // `Regex` (6.4) fails to backtrack out of a quantified literal letter
+        // when the text there is that very letter and what follows would
+        // have matched it instead, given an alternation around it to make
+        // the miss visible:
+        //
+        //     /1(?:x*|a{2}|.B??b)2/  ignoresCase  on "1ab2"   ->  nothing
+        //     /1(?:x*|a{2}|.b??b)2/  ignoresCase  on "1ab2"   ->  "1ab2"
+        //     /A[^\d]\w((A{0,3}?-*)(_.?|[^\d]))/  on "A_BA2"  ->  nothing
+        //     /A[^\d]\w((A{0,3}?)(_.?|[^\d]))/    on "A_BA2"  ->  "A_BA"
+        //
+        // Lazy or greedy, `?`/`*`/`{m,n}`, upper or lower case: the shape is
+        // the literal under the quantifier. A quantified class, escape, dot
+        // or group is fine, and `[a]{2}` says the same thing as `a{2}` to
+        // both engines, so nothing about quantifiers goes untested — only
+        // the one spelling the oracle gets wrong. `theStdlibQuantifiedLiteralBug`
+        // holds the evidence and our (correct) answers.
+        guard !atom.quantified, !atom.literal, rng.below(2) == 0 else { return atom }
         let q = rng.pick(["*", "+", "?", "{0,2}", "{1,2}", "{2}", "{1,}", "{0,3}", "{2,3}"])
         atom.pattern += q
         if rng.below(3) == 0 { atom.pattern += "?" }   // lazy

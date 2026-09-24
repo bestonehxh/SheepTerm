@@ -114,6 +114,56 @@ import SheepVT
         view.removeFromSuperview()
     }
 
+    /// AppKit's own display pass — a `needsDisplay` from anywhere: an
+    /// appearance change, a hosting view's layout, a window coming back —
+    /// used to replace the surface on the layer with a backing store of the
+    /// view's own (empty) drawing. The view still believed its picture was
+    /// current, so a tab switched back to sat blank until the next byte
+    /// arrived and the user pressed Return to "wake it up". The layer's
+    /// contents are ours: `layerContentsRedrawPolicy = .never` keeps AppKit's
+    /// hands off them.
+    @Test func appKitsDisplayPassLeavesThePictureAlone() {
+        guard canPresent else { return }
+        _ = NSApplication.shared
+        let view = makeView()
+        view.feed("hello")
+        let window = NSWindow(contentRect: view.bounds, styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(view)
+        #expect(view.layer?.contents is IOSurface)
+
+        view.needsDisplay = true
+        view.displayIfNeeded()
+        #expect(view.layer?.contents is IOSurface)
+        view.removeFromSuperview()
+    }
+
+    /// And should the picture ever go missing from the layer while the view
+    /// is on screen — whatever dropped it — the next tick notices and paints
+    /// again, instead of comparing counters, seeing nothing new and leaving
+    /// the terminal blank.
+    @Test func aPictureDroppedFromTheLayerIsPaintedAgainAtTheNextTick() {
+        guard canPresent else { return }
+        _ = NSApplication.shared
+        let view = makeView()
+        view.feed("hello")
+        let window = NSWindow(contentRect: view.bounds, styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(view)
+        let t = CACurrentMediaTime()
+        view.frameTick(now: t)
+        #expect(!view.needsFrame)
+        let shown = view.presentedFrames
+
+        view.layer?.contents = nil                  // the picture is gone, the bookkeeping says "current"
+        view.frameTick(now: t + 0.02)
+        #expect(view.presentedFrames == shown + 1)
+        #expect(view.layer?.contents is IOSurface)
+        view.removeFromSuperview()
+    }
+
     /// The other half of the deal: a repaint that is owed keeps the tick alive,
     /// but a renderer that never recovers must not be retried for ever. Half a
     /// second of one attempt per tick, then the link stops and waits for the

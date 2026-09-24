@@ -20,6 +20,7 @@
 //     shell answers the window-size change with a fresh prompt.
 
 import AppKit
+import IOSurface
 import Metal
 import QuartzCore
 
@@ -221,7 +222,18 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
 
     private func configure() {
         wantsLayer = true
-        layerContentsRedrawPolicy = .duringViewResize
+        // AppKit must never draw this view itself. Its display pass — run for
+        // any `needsDisplay`, from an appearance change to a hosting view's
+        // layout to a window coming back — replaces the layer's `contents`
+        // with a backing store of the view's own (empty) drawing, without
+        // going through `updateLayer`. The surface the last frame was
+        // presented on is gone, the tab shows the background colour, and
+        // nothing re-arms a frame because the view still believes its picture
+        // is current: a terminal switched back to sat blank until the next
+        // byte arrived. `.never` is the policy for a layer whose contents are
+        // managed by hand; the frame after a resize is drawn by `updateGrid`
+        // inside the same transaction, not by AppKit.
+        layerContentsRedrawPolicy = .never
         terminal.delegate = self
         pushHostColors()
 
@@ -250,6 +262,18 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
 
     public override var isFlipped: Bool { true }
     public override var wantsUpdateLayer: Bool { true }
+    /// AppKit's own display path is switched off (`layerContentsRedrawPolicy`
+    /// above). Should it ever run anyway, the picture is ours to put back.
+    public override func updateLayer() {
+        if pictureMissing { presentSynchronously() }
+    }
+
+    /// The surface layer is on screen but shows no surface: whatever dropped
+    /// or replaced the contents, the bookkeeping does not know, so the tick
+    /// checks the layer itself.
+    private var pictureMissing: Bool {
+        window != nil && metalLayer == nil && !(layer?.contents is IOSurface)
+    }
     public override var acceptsFirstResponder: Bool { true }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -725,7 +749,7 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
     private func paintIfNeeded(now: CFTimeInterval) -> Bool {
         if now < syncHoldUntil { return false }
 
-        var changed = needsFrame
+        var changed = needsFrame || pictureMissing
         if terminal.changeCounter != lastChangeCounter {
             let viewportMoved = terminal.buffer.ydisp != lastViewport
             // Nothing visible was printed — the device erased something (a
