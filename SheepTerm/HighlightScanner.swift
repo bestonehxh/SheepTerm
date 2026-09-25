@@ -689,7 +689,10 @@ nonisolated extension HighlightScanner {
                                "reachable", "authorized", "full"]
         static let badCore = ["down", "shutdown", "fail", "failed", "failure", "unreachable",
                               "invalid", "error", "err", "critical", "crit", "emergency",
-                              "alert", "suspended", "half", "disabled", "disable"]
+                              "alert", "suspended", "half", "disabled", "disable",
+                              // `service status all` on ClearPass: `… is stopped`
+                              // beside `… is running` (which goodCore already colours).
+                              "stopped"]
         /// Filter/ACL verdicts. On a switch these ARE the health signal; on a
         /// firewall they are the configured policy and colouring them red or
         /// green says nothing, so the firewall packs leave them out.
