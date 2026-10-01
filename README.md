@@ -26,7 +26,7 @@ config pasting.
 
 ## The Sheep family 🐑
 
-SheepTerm is one of eight small native macOS apps that share the same sheep icon set:
+SheepTerm is one of a few small native macOS apps for network engineers:
 
 |  | App | What it does |
 |---|---|---|
@@ -35,9 +35,7 @@ SheepTerm is one of eight small native macOS apps that share the same sheep icon
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepTap/main/.github/icon.png?v=3" width="44" alt=""> | [SheepTap](https://github.com/bestonehxh/SheepTap) | Menu-bar viewer for your Mac's network interfaces with click-to-copy |
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepPing/main/.github/icon.png?v=3" width="44" alt=""> | [SheepPing](https://github.com/bestonehxh/SheepPing) | Continuous multi-host ping monitor with per-host logs and CSV export |
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepText/main/.github/icon.png?v=3" width="44" alt=""> | [SheepText](https://github.com/bestonehxh/SheepText) | Fast text editor with tree-sitter highlighting and a JavaScript plugin system |
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepArt/main/.github/icon.png?v=3" width="44" alt=""> | [SheepArt](https://github.com/bestonehxh/SheepArt) | Screenshot annotation — draw, crop, layers, one-key background removal |
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepRadius/main/.github/icon.png?v=4" width="44" alt=""> | [SheepRadius](https://github.com/bestonehxh/SheepRadius) | RADIUS + LDAP lab for 802.1X, device logins and NAC — with a joinable Samba AD |
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepKey/main/.github/icon.png?v=3" width="44" alt=""> | [SheepKey](https://github.com/bestonehxh/SheepKey) | Mac shortcuts (⌘ as Ctrl) inside AnyDesk, TeamViewer and RustDesk |
+| <img src="https://raw.githubusercontent.com/bestonehxh/LabDC/main/.github/icon.png" width="44" alt=""> | [LabDC](https://github.com/bestonehxh/LabDC) | Active Directory–compatible domain controller with RADIUS for 802.1X and a lab CA |
 
 ## Features
 
