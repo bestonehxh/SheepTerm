@@ -29,14 +29,13 @@ config pasting.
 
 SheepTerm is one of a few small native macOS apps for network engineers:
 
-|  | App | What it does |
-|---|---|---|
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepDrop/main/.github/icon.png?v=3" width="44" alt=""> | [SheepDrop](https://github.com/bestonehxh/SheepDrop) | SFTP / SCP / FTP / TFTP file transfer — client and built-in server |
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTerm/main/.github/icon.png?v=3" width="44" alt=""> | [SheepTerm](https://github.com/bestonehxh/SheepTerm) | SSH / Serial / local-shell terminal for network engineers |
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTap/main/.github/icon.png?v=3" width="44" alt=""> | [SheepTap](https://github.com/bestonehxh/SheepTap) | Menu-bar viewer for your Mac's network interfaces with click-to-copy |
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepPing/main/.github/icon.png?v=3" width="44" alt=""> | [SheepPing](https://github.com/bestonehxh/SheepPing) | Continuous multi-host ping monitor with per-host logs and CSV export |
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepText/main/.github/icon.png?v=3" width="44" alt=""> | [SheepText](https://github.com/bestonehxh/SheepText) | Fast text editor with tree-sitter highlighting and a JavaScript plugin system |
-| <img src="https://raw.githubusercontent.com/bestonehxh/LabDC/main/.github/icon.png" width="44" alt=""> | [LabDC](https://github.com/bestonehxh/LabDC) | Active Directory–compatible domain controller with RADIUS for 802.1X and a lab CA |
+|  | App | What it does | Download |
+|---|---|---|---|
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTerm/main/.github/icon.png?v=3" width="44" alt=""> | [SheepTerm](https://github.com/bestonehxh/SheepTerm) | SSH / Serial / local-shell terminal for network engineers | [Latest release](https://github.com/bestonehxh/SheepTerm/releases/latest) |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepText/main/.github/icon.png?v=3" width="44" alt=""> | [SheepText](https://github.com/bestonehxh/SheepText) | Fast text editor with tree-sitter highlighting and a JavaScript plugin system | [Latest release](https://github.com/bestonehxh/SheepText/releases/latest) |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepDrop/main/.github/icon.png?v=3" width="44" alt=""> | [SheepDrop](https://github.com/bestonehxh/SheepDrop) | SFTP / SCP / FTP / TFTP file transfer — client and built-in server | [Latest release](https://github.com/bestonehxh/SheepDrop/releases/latest) |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTap/main/.github/icon.png?v=3" width="44" alt=""> | [SheepTap](https://github.com/bestonehxh/SheepTap) | Menu-bar viewer for your Mac's network interfaces with click-to-copy | [Latest release](https://github.com/bestonehxh/SheepTap/releases/latest) |
+| <img src="https://raw.githubusercontent.com/bestonehxh/LabDC/main/.github/icon.png" width="44" alt=""> | [LabDC](https://github.com/bestonehxh/LabDC) | Active Directory–compatible domain controller with RADIUS for 802.1X and a lab CA | [Latest release](https://github.com/bestonehxh/LabDC/releases/latest) |
 
 ## Features
 
