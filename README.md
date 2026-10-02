@@ -7,8 +7,7 @@
 **A native macOS terminal client built for network engineers — SSH, Serial, and local shell in one window.**
 
 SheepTerm is written in SwiftUI + AppKit (Swift 6) with its own terminal emulator and its own
-SSH implementation — no third-party libraries — and is
-designed around the daily workflow of configuring switches, routers, firewalls, and access
+SSH implementation, and is designed around the daily workflow of configuring switches, routers, firewalls, and access
 points: legacy-cipher SSH to old gear, serial consoles over USB adapters, device output
 highlighted per vendor, hundreds of hosts organised by site and floor, and safe multi-line
 config pasting.
@@ -51,6 +50,8 @@ SheepTerm is one of a few small native macOS apps for network engineers:
   or search your saved hosts by name, address, or section
 - **Saved credentials** — pick a username + password once and reuse it on any number of hosts;
   set one credential for a whole group in one step
+- **Tabs** — drag a tab to reorder it, or move the current one with ⌃⌘← / ⌃⌘→; a new local
+  tab starts in your home folder
 - Ask-before-quit when live SSH/serial sessions would be lost (local shells don't nag)
 
 ### Host management
@@ -93,16 +94,23 @@ SheepTerm is one of a few small native macOS apps for network engineers:
 ### Security
 - Passwords are stored **only in the macOS Keychain** — never in config files,
   backups, or exports
+- **First connection asks first** — a new host shows its key type and SHA256 fingerprint, and
+  nothing is saved or sent until you choose Trust & Connect
 - Host keys are pinned in `~/.ssh/known_hosts` (shared with OpenSSH); a changed key, a key of a
-  different type or a revoked one is refused, and the message names the line to delete
-- **No third-party libraries in the app.** SSH (SheepSSH) and the terminal emulator (SheepVT) are
-  written in-house; cryptography comes from macOS itself — CryptoKit, CommonCrypto and
-  Security — and is updated with the system
+  different type or a revoked one is refused, and SheepTerm offers to open Known Hosts for that device
+- **Known Hosts (File → Known Hosts…)** — search, inspect and remove saved host keys, including
+  hashed entries; a backup is written before every change
+- **Clipboard stays yours** — a remote program cannot set the Mac clipboard unless you allow it
+  (Settings → Clipboard), and when allowed, pasting text it put there always asks first
+- Imported `.sheepterm` files cannot turn on agent forwarding or change a host's cipher settings;
+  session logs never keep terminal control codes
+- SSH (SheepSSH) and the terminal emulator (SheepVT) are written in-house; cryptography comes
+  from macOS itself — CryptoKit, CommonCrypto and Security — and is updated with the system
 
 ## Requirements
 
 - macOS 26.4 (Tahoe) or later, Apple Silicon
-- To build: Xcode 26+ (nothing else — no Homebrew)
+- To build: Xcode 26+
 
 ## Building
 
@@ -113,17 +121,6 @@ xcodebuild -project SheepTerm.xcodeproj -scheme SheepTerm -configuration Release
 The app is built at
 `~/Library/Developer/Xcode/DerivedData/SheepTerm-*/Build/Products/Release/SheepTerm.app`.
 It links only Apple's frameworks and the two local packages in `Packages/` (SheepVT, SheepSSH).
-
-## Acknowledgements
-
-SheepTerm links and bundles no third-party library. One data table is derived from another
-project:
-
-- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, Miguel de Icaza) — the East Asian
-  wide-character ranges in SheepVT's `UnicodeWidthData.swift`
-
-Earlier releases (up to 4.1 (6)) bundled [libssh](https://www.libssh.org) (LGPL-2.1) and
-[OpenSSL](https://www.openssl.org)'s libcrypto (Apache-2.0); SheepSSH replaced both.
 
 ## License
 
