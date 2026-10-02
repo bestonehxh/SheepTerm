@@ -312,7 +312,7 @@ enum BackupManager {
         stamp.calendar = Calendar(identifier: .gregorian)
         stamp.dateStyle = .medium
         stamp.timeStyle = .short
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.messageText = "Restore this backup?"
         alert.informativeText = """
             \(payload.app) · \(payload.device) · \(stamp.string(from: payload.created))
@@ -361,7 +361,7 @@ enum BackupManager {
         }
         AppModel.shared.reloadAfterRestore()
 
-        let done = NSAlert()
+        let done = SheepAlert()
         done.messageText = "Configuration restored"
         let snapshotNote = safety.map {
             "Your previous configuration is in \($0.lastPathComponent) inside SheepTerm's Application Support "
@@ -647,7 +647,7 @@ enum BackupManager {
     }
 
     private static func report(_ title: String, _ detail: String, style: NSAlert.Style) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.messageText = title
         alert.informativeText = detail
         alert.alertStyle = style

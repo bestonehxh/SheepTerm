@@ -50,7 +50,7 @@ struct SidebarView: View {
     /// Shared confirmation for the sidebar's destructive actions. Defaults to
     /// Cancel so Return does not delete anything.
     private func confirmDelete(message: String, detail: String) -> Bool {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = message
         alert.informativeText = detail
@@ -65,7 +65,7 @@ struct SidebarView: View {
     private func reportRenameProblem(_ detail: String,
                                      title: String = "The section was not renamed.") {
         DispatchQueue.main.async {
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = title
             alert.informativeText = detail
@@ -145,7 +145,7 @@ struct SidebarView: View {
     private func reportNameTaken(_ name: String, noun: String = "group",
                                  title: String? = nil) {
         DispatchQueue.main.async {
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             // The default says what is wrong with the NAME; a caller that
             // knows what failed can say that instead and put the name in the

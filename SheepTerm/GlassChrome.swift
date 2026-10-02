@@ -99,32 +99,9 @@ extension View {
     }
 }
 
-extension NSAlert {
-    /// Every alert in the app goes through here, and what it is for is the
-    /// RULE written below — there is nothing to set.
-    ///
-    /// **Layout.** NSAlert picks the wide layout (icon on the left) as soon
-    /// as the text block needs more than about three rendered lines; the
-    /// compact one (icon centred above the text) is what we want. Measured
-    /// with a throwaway alert at the real width: a one-line `messageText`
-    /// (≈30 characters) with an `informativeText` of ≈45 stays compact, and
-    /// 66 characters of informative text flips it. So counts go on the
-    /// message line and the detail stays one short line. Two places cannot
-    /// be short and are deliberately left wide: an import's hygiene report
-    /// (it names changes to the user's own data) and the Replace/Keep dialog
-    /// (accessory checkbox plus a diff).
-    ///
-    /// **Appearance.** Nothing to do: the app sets `NSApp.appearance` to
-    /// `.darkAqua` once at launch (4.0 (5)) and an alert's own window
-    /// inherits it. An explicit assignment here was a no-op with a comment
-    /// claiming otherwise, which is worse than no code at all.
-    ///
-    /// It stays a function so there is ONE place to change if either of those
-    /// ever stops being true, and so every `runModal()` in the app reads the
-    /// same.
-    @discardableResult
-    func sheepStyled() -> NSAlert { self }
-}
+// Alerts: see SheepAlert.swift. The NSAlert extension that lived here
+// (`sheepStyled()`, and the rule "keep every message short enough for
+// NSAlert's centred compact layout") went with NSAlert itself in 4.1 (38).
 
 struct VisualEffectBackground: NSViewRepresentable {
     let material: NSVisualEffectView.Material

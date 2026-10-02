@@ -247,6 +247,9 @@ struct DetailPane: View {
         .sheet(isPresented: $model.showCredentials) {
             CredentialsSheet()
         }
+        .sheet(item: $model.knownHostsRequest) { request in
+            KnownHostsSheet(initialSearch: request.search)
+        }
         // Here and not on SidebarView: the sidebar is removed from the
         // hierarchy when hidden, and View → Reorder Groups… then set a flag
         // nobody was presenting — nothing happened, and the sheet popped up

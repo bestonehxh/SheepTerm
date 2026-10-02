@@ -9,6 +9,8 @@ final class SSHTerminalController: NSObject {
     let terminalHost = SessionTerminalHost(safePaste: true)
     var terminalView: TerminalView { terminalHost.terminalView }
     private(set) var host: Host
+    /// Set by `stop()` (tab closed): no prompt may appear for a tab that is gone.
+    private var stopped = false
 
     var onTitleChange: ((String) -> Void)?
     var onStatus: ((String) -> Void)?
@@ -228,6 +230,12 @@ final class SSHTerminalController: NSObject {
                     status = "disconnected"
                 }
                 self.onStatus?(status)
+                // A pinned key that no longer matches (or a revoked one):
+                // offer the way out — File → Known Hosts…, pre-filtered.
+                // Nothing is deleted here; the user decides in the sheet.
+                if let conflict = SSHWorker.knownHostsConflict(message) {
+                    self.offerKnownHosts(conflict)
+                }
                 // The log is NOT closed here. Auto-reconnect hands this
                 // logger to the successor 2–10 s from now, and a logger closed
                 // in between dropped every byte of the reconnected session
@@ -367,7 +375,42 @@ final class SSHTerminalController: NSObject {
         return QuitLogFlush(session: host.name, logger: logger, closingOn: logQueue, gate: logGate)
     }
 
+    /// After a host-key refusal that a known_hosts line decided: say so and
+    /// offer the Known Hosts sheet filtered to this host. Cancel is the
+    /// default (Return/Escape) — removing a pin is never one keystroke away.
+    private func offerKnownHosts(_ conflict: SSHWorker.KnownHostsConflict) {
+        guard !stopped else { return }
+        let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = host.port == 22 ? address
+            : address.contains(":") ? "[\(address)]:\(host.port)" : "\(address):\(host.port)"
+        let alert = SheepAlert()
+        alert.alertStyle = .warning
+        switch conflict {
+        case .changed:
+            alert.messageText = "The host key for \(target) has changed"
+            alert.informativeText = "The connection was refused — this can mean a man-in-the-middle. "
+                + "Only if you know the device was reinstalled or its key replaced, remove the old key in Known Hosts and connect again."
+        case .revoked:
+            alert.messageText = "The host key for \(target) is revoked"
+            alert.informativeText = "known_hosts marks this key @revoked, so the connection was refused. "
+                + "Known Hosts shows the entry."
+        }
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Open Known Hosts…")
+        let handle: (NSApplication.ModalResponse) -> Void = { response in
+            if response == .alertSecondButtonReturn {
+                AppModel.shared.openKnownHosts(search: target)
+            }
+        }
+        if let window = terminalView.window, window.attachedSheet == nil {
+            alert.beginSheetModal(for: window, completionHandler: handle)
+        } else {
+            handle(alert.runModal())
+        }
+    }
+
     func stop() {
+        stopped = true
         terminalHost.cancelSafePaste(reason: .sessionEnded)
         worker.stop()
         // Nothing will drain these once the tab is gone, so stop gating: a

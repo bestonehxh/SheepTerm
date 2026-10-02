@@ -1184,7 +1184,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 // during a search holds only the hosts that matched.
                 let count = HostStore.hostCount(inSection: label,
                                                 hosts: self.parent.store.hosts(inGroup: group.id))
-                let alert = NSAlert()
+                let alert = SheepAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "Remove the heading “\(label)”?"
                 alert.informativeText = "\(count) host\(count == 1 ? "" : "s") stay in “\(group.name)”."
@@ -1268,7 +1268,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             menu.addItem(.separator())
             add(menu, "Remove Host") { [weak self] in
                 guard let self else { return }
-                let alert = NSAlert()
+                let alert = SheepAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "Remove “\(host.name)”?"
                 alert.informativeText = "This cannot be undone."
@@ -1306,7 +1306,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                                             in: parent.store.groups)
         add(menu, "Delete \(groups.count) Groups") { [weak self] in
             guard let self else { return }
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = "Delete \(groups.count) groups?"
             alert.informativeText = "\(hostCount) host\(hostCount == 1 ? "" : "s") go with them. "
@@ -1361,7 +1361,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         menu.addItem(.separator())
         add(menu, "Delete \(hosts.count) Hosts") { [weak self] in
             guard let self else { return }
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = "Remove \(hosts.count) hosts?"
             // Two names and a count, not a list: the list pushed this alert
@@ -1385,7 +1385,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// Return cancels.
     private func confirmUnfiling(count: Int, message: String) -> Bool {
         guard count > 1 else { return true }
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = message
         // Short on purpose: past ~3 rendered lines the alert flips to the

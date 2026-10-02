@@ -259,7 +259,7 @@ final class SessionTerminalHost {
     }
 
     private func presentSafePasteConfirmation(plan: SafePastePlan, originalText: String) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .informational
         alert.messageText = "Safe Multi-line Paste"
         alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending."
@@ -373,7 +373,7 @@ final class SessionTerminalHost {
     /// bookkeeping (`pastePromptPresented`, `pasteGeneration`,
     /// `pastePromptWindow`), so `cancelSafePaste` tears this one down too.
     private func presentPlantedPasteConfirmation(_ text: String) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = "Paste text a session put on the clipboard?"
         alert.informativeText = "Set by a device or program (OSC 52), not by a copy."
@@ -386,9 +386,9 @@ final class SessionTerminalHost {
         preview.isSelectable = false
         preview.maximumNumberOfLines = 6
         preview.lineBreakMode = .byCharWrapping
-        preview.preferredMaxLayoutWidth = 300
-        preview.frame = NSRect(x: 0, y: 0, width: 300, height: 0)
-        preview.setFrameSize(NSSize(width: 300, height: preview.fittingSize.height))
+        preview.preferredMaxLayoutWidth = 280
+        preview.frame = NSRect(x: 0, y: 0, width: 280, height: 0)
+        preview.setFrameSize(NSSize(width: 280, height: preview.fittingSize.height))
         alert.accessoryView = preview
 
         pastePromptPresented = true
@@ -459,7 +459,7 @@ final class SessionTerminalHost {
     }
 
     private func reportPasteInterrupted(sent: Int, total: Int, reason: SafePastePacer.EndReason) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = "Paste stopped part-way"
         let cause = reason == .inputDiscarded
@@ -487,7 +487,7 @@ final class SessionTerminalHost {
     }
 
     private func showPasteLimitAlert(_ detail: String) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = "Safe Paste Limit"
         alert.informativeText = detail + " Split it into smaller sections before sending."

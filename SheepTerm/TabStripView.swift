@@ -9,17 +9,23 @@ struct TabStripView: View {
     /// there put the chips 1pt BELOW the icons beside them.
     var compensateWindowBorder = true
 
-    /// The tab being dragged and where the pointer is, in the strip's own
-    /// coordinate space. Reordering follows the sidebar's lesson
-    /// (ARCHITECTURE §11): no `.onDrag` (its snap-back cannot be switched
-    /// off), neighbours do NOT shuffle live — only the dragged chip follows
-    /// the pointer and an insertion bar marks the gap — and the move is
-    /// committed once, on release, without animation.
-    /// GestureState, not State: a drag the system cancels (the chip vanishes
-    /// mid-drag, the window loses the mouse) resets itself instead of leaving
-    /// a chip parked off its slot.
-    @GestureState private var drag: TabDrag?
+    /// Drag state, the way SheepText's tab bar does it (4.2 (1)): the real
+    /// tab order stays put while dragging; the dragged chip follows the
+    /// pointer with no animation, its neighbours slide aside (`.snappy`)
+    /// once it crosses their midpoint, and the order is committed once, on
+    /// release, without animation. Offsets only — never a live reorder of
+    /// `model.tabs` (the sidebar's lesson, ARCHITECTURE §11), and never
+    /// `.onDrag` (snap-back). Frames are captured when the drag begins, so a
+    /// chip's own offset can never feed back into the geometry.
+    @State private var dragID: UUID?
+    @State private var dragTranslation: CGFloat = 0
+    @State private var dragStartFrames: [UUID: CGRect] = [:]
+    @State private var dragStartOrder: [UUID] = []
+    @State private var dragSourceIndex: Int?
+    @State private var dragTargetIndex: Int?
     @State private var chipFrames: [UUID: CGRect] = [:]
+
+    private static let chipSpacing: CGFloat = 4
 
     private static let space = "tabstrip"
 
@@ -38,7 +44,7 @@ struct TabStripView: View {
             // window's own border, so centring in the FRAME lands one point
             // above the row the eye actually reads — the one the traffic
             // lights sit on. Measured against them, not against the frame.
-            HStack(spacing: 4) {
+            HStack(spacing: Self.chipSpacing) {
                 ForEach(model.tabs) { tab in
                     // Chips get plain values/closures — observing the whole
                     // AppModel per chip would re-render every chip on any
@@ -57,23 +63,25 @@ struct TabStripView: View {
                         Color.clear.preference(key: TabChipFrames.self,
                                                value: [tab.id: proxy.frame(in: .named(Self.space))])
                     })
-                    .offset(x: drag?.id == tab.id ? drag?.translation ?? 0 : 0)
-                    .zIndex(drag?.id == tab.id ? 1 : 0)
-                    .opacity(drag?.id == tab.id ? 0.85 : 1)
+                    .offset(x: dragOffset(for: tab.id))
+                    .zIndex(dragID == tab.id ? 10 : 0)
+                    // The dragged chip tracks the pointer exactly; only the
+                    // neighbours' slide is animated (updateDragTarget).
+                    .transaction { t in if dragID == tab.id { t.animation = nil } }
                     // minimumDistance keeps a click a click: the chip's tap
                     // gesture still selects, the × button still closes.
                     .gesture(
-                        DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.space))
-                            .updating($drag) { value, state, _ in
-                                state = TabDrag(id: tab.id, translation: value.translation.width,
-                                                pointerX: value.location.x)
-                            }
-                            .onEnded { value in commitDrag(tab.id, pointerX: value.location.x) }
+                        DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
+                            .onChanged { value in handleDrag(tab.id, value) }
+                            .onEnded { _ in finishDrag() }
                     )
                     .id(tab.id)
                 }
             }
-            .overlay(alignment: .topLeading) { insertionBar }
+            // Pointer over the chips = the window is not movable, or the
+            // window server turns a chip drag into a window drag (see
+            // NonWindowDraggingArea).
+            .background(NonWindowDraggingArea())
             .coordinateSpace(name: Self.space)
             .onPreferenceChange(TabChipFrames.self) { chipFrames = $0 }
             .frame(maxHeight: .infinity)
@@ -84,59 +92,107 @@ struct TabStripView: View {
         // a box that is shorter than the bar.
         .frame(maxHeight: .infinity)
         .onChange(of: model.selectedID) { _, id in
-            guard let id else { return }
+            guard dragID == nil, let id else { return }
             withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
         }
         }
     }
 
-    /// The gap the pointer is over, counted before the dragged tab is
-    /// removed (`TabOrder`'s convention). Only the OTHER chips are measured:
-    /// the dragged chip's reported frame travels with its offset, so it would
-    /// count itself depending on which side of the pointer its centre is.
-    private func dropGap(dragging id: UUID, pointerX: CGFloat) -> Int {
-        let tabs = model.tabs
-        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return 0 }
-        let othersLeft = tabs.filter { tab in
-            guard tab.id != id, let frame = chipFrames[tab.id] else { return false }
-            return frame.midX < pointerX
-        }.count
-        return TabOrder.dragGap(othersLeftOfPointer: othersLeft, from: from)
+    /// The dragged chip: the pointer's travel. A neighbour between the
+    /// source and the target slot: one chip-width (plus the gap) towards the
+    /// hole the dragged chip left. Everything else: where it is.
+    private func dragOffset(for id: UUID) -> CGFloat {
+        guard let dragID, let source = dragSourceIndex, let target = dragTargetIndex else { return 0 }
+        if id == dragID { return dragTranslation }
+        guard let index = dragStartOrder.firstIndex(of: id),
+              let width = dragStartFrames[dragID]?.width else { return 0 }
+        let step = width + Self.chipSpacing
+        if target > source, index > source, index <= target { return -step }
+        if target < source, index >= target, index < source { return step }
+        return 0
     }
 
-    /// Accent bar in the gap the tab will land in — hidden while the drop
-    /// would leave it where it is.
-    @ViewBuilder private var insertionBar: some View {
-        if let drag, let from = model.tabs.firstIndex(where: { $0.id == drag.id }),
-           case let gap = dropGap(dragging: drag.id, pointerX: drag.pointerX),
-           TabOrder.destination(from: from, toGap: gap, count: model.tabs.count) != nil {
-            let tabs = model.tabs
-            let x: CGFloat? = gap < tabs.count
-                ? chipFrames[tabs[gap].id].map { $0.minX - 3 }
-                : chipFrames[tabs[tabs.count - 1].id].map { $0.maxX + 1 }
-            if let x, let reference = chipFrames[drag.id] {
-                Capsule()
-                    .fill(Theme.accent)
-                    .frame(width: 2, height: reference.height)
-                    .offset(x: x, y: reference.minY)
-                    .allowsHitTesting(false)
-            }
+    private func handleDrag(_ id: UUID, _ value: DragGesture.Value) {
+        if dragID == nil {
+            dragID = id
+            dragStartFrames = chipFrames
+            dragStartOrder = model.tabs.map(\.id)
+            dragSourceIndex = dragStartOrder.firstIndex(of: id)
+            dragTargetIndex = dragSourceIndex
         }
+        dragTranslation = value.translation.width
+        guard let target = TabOrder.dragTarget(order: dragStartOrder, frames: dragStartFrames,
+                                               dragged: id, translation: dragTranslation),
+              target != dragTargetIndex else { return }
+        withAnimation(.snappy(duration: 0.14)) { dragTargetIndex = target }
     }
 
-    private func commitDrag(_ id: UUID, pointerX: CGFloat) {
+    private func finishDrag() {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            model.moveTab(id: id, toGap: dropGap(dragging: id, pointerX: pointerX))
+            if let id = dragID, let source = dragSourceIndex, let target = dragTargetIndex {
+                model.moveTab(id: id, toGap: TabOrder.gap(forFinalIndex: target, from: source))
+            }
+            dragID = nil
+            dragTranslation = 0
+            dragStartFrames = [:]
+            dragStartOrder = []
+            dragSourceIndex = nil
+            dragTargetIndex = nil
         }
     }
 }
 
-private struct TabDrag {
-    let id: UUID
-    let translation: CGFloat
-    let pointerX: CGFloat
+/// Keeps the window from moving while the pointer is over the tab strip.
+///
+/// The strip sits in the window's titlebar row, and there the WINDOW SERVER
+/// starts a window drag on mouse-down before the app sees the event — so
+/// pressing a chip and moving dragged the whole window and the reorder
+/// gesture never began (4.1 (37); only real HID events show it — events
+/// posted straight to the app skip the window server and "worked"). Measured
+/// with real drags, none of these stopped it: an AppKit view with
+/// `mouseDownCanMoveWindow == false` under the chips, the same as an
+/// NSControl, with or without taking hit-tests, nor removing the bar's
+/// `WindowDragGesture`. What the window server does honour is
+/// `NSWindow.isMovable`, so it is switched off while the pointer is over the
+/// strip (a tracking area — no hit-testing, the chips keep every click) and
+/// back on when it leaves; the empty bar around the strip still drags the
+/// window.
+private struct NonWindowDraggingArea: NSViewRepresentable {
+    final class View: NSView {
+        private weak var trackedWindow: NSWindow?
+        private var tracking: NSTrackingArea?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(rect: .zero,
+                                      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                      owner: self, userInfo: nil)
+            addTrackingArea(area)
+            tracking = area
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            window?.isMovable = false
+            trackedWindow = window
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            trackedWindow?.isMovable = true
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            // Never leave a window immovable behind us.
+            trackedWindow?.isMovable = true
+            super.viewWillMove(toWindow: newWindow)
+        }
+    }
+    func makeNSView(context: Context) -> View { View() }
+    func updateNSView(_ nsView: View, context: Context) {}
 }
 
 private struct TabChipFrames: PreferenceKey {

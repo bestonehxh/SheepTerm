@@ -159,7 +159,7 @@ final class CredentialStore: ObservableObject {
     }
 
     private static func reportCorruptLoad(_ warning: String) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = "Saved credentials could not be read"
         alert.informativeText = warning
@@ -168,7 +168,7 @@ final class CredentialStore: ObservableObject {
     }
 
     private static func reportSaveFailure(_ error: Error) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = "Credentials not saved"
         alert.informativeText = """
@@ -215,7 +215,7 @@ final class CredentialStore: ObservableObject {
     }
 
     private static func reportKeychainFailure(for credential: Credential) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = "Password not saved to the Keychain"
         alert.informativeText = """
@@ -268,7 +268,7 @@ final class CredentialStore: ObservableObject {
     }
 
     private static func reportKeychainDeleteFailure(for credential: Credential) {
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = "Password not removed from the Keychain"
         alert.informativeText = """

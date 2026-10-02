@@ -861,7 +861,7 @@ struct AddHostsSheet: View {
         status = "Header not recognised — nothing was pasted. Use \(BulkHostParser.acceptedHeadingSummary)."
         let informative = detail.joined(separator: " ")
         DispatchQueue.main.async {
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = "Header not recognised"
             alert.informativeText = informative
@@ -1222,7 +1222,7 @@ struct AddHostsSheet: View {
             guard let group = model.store.groups.first(where: { $0.id == id }) else {
                 dismiss()
                 DispatchQueue.main.async {
-                    let alert = NSAlert()
+                    let alert = SheepAlert()
                     alert.alertStyle = .warning
                     alert.messageText = "That group no longer exists."
                     alert.informativeText = "Nothing was added."
@@ -1307,7 +1307,7 @@ struct AddHostsSheet: View {
         // push this alert into the wide layout on the rare run that has one.
         let informative = (detail + (hygiene.map { [$0] } ?? [])).joined(separator: "\n")
         DispatchQueue.main.async {
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .informational
             alert.messageText = message
             alert.informativeText = informative

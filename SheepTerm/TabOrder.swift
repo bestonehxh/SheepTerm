@@ -1,3 +1,6 @@
+import CoreGraphics
+import Foundation
+
 /// The index arithmetic of moving a tab, kept pure so the harness tests the
 /// real function (the tab strip and the Move Tab menu items both call it).
 ///
@@ -28,13 +31,35 @@ enum TabOrder {
         return result
     }
 
-    /// The drop gap for a drag. The strip measures only the OTHER chips (the
-    /// dragged one's frame travels with the pointer): `othersLeft` of them
-    /// lie left of the pointer, which is a gap in the array WITHOUT the
-    /// dragged tab — one at or past its old slot is one further along in the
-    /// array that still has it.
-    static func dragGap(othersLeftOfPointer othersLeft: Int, from: Int) -> Int {
-        othersLeft >= from ? othersLeft + 1 : othersLeft
+    /// Where a dragged tab would land — its index once the move is done —
+    /// from the frames measured when the drag BEGAN and how far it has
+    /// travelled (SheepText's `TabDragGeometry`, 4.2 (1)). A neighbour
+    /// counts as passed once the dragged chip's leading edge crosses its
+    /// midpoint: the right edge for chips to the right, the left edge for
+    /// chips to the left. A chip with no frame is off screen on the side its
+    /// index says. Nil when the dragged tab is unknown or unmeasured.
+    static func dragTarget(order: [UUID], frames: [UUID: CGRect], dragged: UUID,
+                           translation: CGFloat) -> Int? {
+        guard let source = frames[dragged], order.contains(dragged) else { return nil }
+        let minX = source.minX + translation
+        let maxX = source.maxX + translation
+        let firstMeasured = order.firstIndex { frames[$0] != nil } ?? 0
+        var target = 0
+        for (index, other) in order.enumerated() where other != dragged {
+            let passed: Bool
+            if let frame = frames[other] {
+                passed = frame.midX > source.midX ? maxX >= frame.midX : minX > frame.midX
+            } else {
+                passed = index < firstMeasured
+            }
+            if passed { target += 1 }
+        }
+        return target
+    }
+
+    /// The gap (`moved`'s convention) that puts the tab at `index` from `from`.
+    static func gap(forFinalIndex index: Int, from: Int) -> Int {
+        index > from ? index + 1 : index
     }
 
     /// The gap a keyboard "move left/right by one" means: left is the gap

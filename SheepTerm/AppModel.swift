@@ -120,6 +120,8 @@ final class AppModel: ObservableObject {
     }()
     @Published var quickConnect: QuickConnectRequest?
     @Published var showCredentials = false
+    /// File → Known Hosts… (and the HOST KEY CHANGED offer, pre-filtered).
+    @Published var knownHostsRequest: KnownHostsRequest?
     @Published var showReorderGroups = false
     @Published var addHostsRequest: AddHostsRequest?
     @Published var groupCredentialRequest: GroupCredentialRequest?
@@ -273,7 +275,7 @@ final class AppModel: ObservableObject {
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { warning in
-                let alert = NSAlert()
+                let alert = SheepAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "Saved hosts could not be read"
                 alert.informativeText = warning
@@ -382,7 +384,7 @@ final class AppModel: ObservableObject {
         } catch {
             // `try?` here meant a full disk or a read-only folder produced no
             // file and no word — the panel closed as if it had worked.
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = "The group could not be exported"
             alert.informativeText = "\(url.lastPathComponent): \(error.localizedDescription)"
@@ -423,7 +425,7 @@ final class AppModel: ObservableObject {
         do {
             return try ShareCodec.decode(try Data(contentsOf: url))
         } catch {
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = "Could not import \(url.lastPathComponent)"
             alert.informativeText = error.localizedDescription
@@ -516,7 +518,7 @@ final class AppModel: ObservableObject {
         NSLog("SheepTerm: quit could not complete %d session log(s) — %@",
               names.count,
               unflushed.map { "\($0.session) (\(detail($0)))" }.joined(separator: ", "))
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = names.count == 1
             ? "The end of one session log could not be written."
@@ -633,7 +635,7 @@ final class AppModel: ObservableObject {
         // name that was trimmed or a baud that was replaced is still the
         // user's data, and they get to see what changed before accepting.)
         guard let existing = store.existingGroup(matching: group) else {
-            let alert = NSAlert()
+            let alert = SheepAlert()
             // Counts on the message line, detail short: an alert whose text
             // runs long is laid out with the icon on the LEFT (see
             // `NSAlert.sheepStyled`). `corrections` is the exception — it
@@ -655,7 +657,7 @@ final class AppModel: ObservableObject {
         }
 
         // 0.4 (ก): duplicate group — three choices, both host counts shown.
-        let alert = NSAlert()
+        let alert = SheepAlert()
         // Through `sanitizedForDialog` like the incoming side: a stored name
         // can still hold what the dialog should not print raw.
         alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” already exists"
@@ -698,7 +700,7 @@ final class AppModel: ObservableObject {
                 decisions[pair.incomingIndex] = applyToAll
                 continue
             }
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.messageText = "Host “\(Self.sanitizedForDialog(pair.incoming.name))” exists in both"
             alert.informativeText = Self.importDiffDescription(incoming: pair.incoming, existing: pair.existing)
                 + "\n\nReplace uses the file's version — your saved password reference is kept. Keep leaves your version untouched."
@@ -1011,6 +1013,12 @@ final class AppModel: ObservableObject {
         quickConnect = QuickConnectRequest(kind: kind)
     }
 
+    /// Opens the Known Hosts sheet, optionally filtered (a host name finds
+    /// hashed entries too — see `KnownHostsEditor.matches`).
+    func openKnownHosts(search: String = "") {
+        knownHostsRequest = KnownHostsRequest(search: search)
+    }
+
     /// Opens an ad-hoc connection; when `groupName` is given the session is
     /// also saved into that sidebar group (created if needed). A password
     /// typed in the form is used for this session even when not saved.
@@ -1095,7 +1103,7 @@ final class AppModel: ObservableObject {
         // on screen, and an alert stacked on a sheet is a mess.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”"
             alert.informativeText = "This session connects to the same target with different settings.\n\n"
                 + changes.joined(separator: "\n")

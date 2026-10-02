@@ -18,7 +18,6 @@ struct CredentialsSheet: View {
     @State private var password = ""
     @State private var revealedIDs: Set<UUID> = []
     // Credential waiting on the delete confirmation dialog.
-    @State private var pendingDelete: Credential?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -63,7 +62,7 @@ struct CredentialsSheet: View {
                             .help(revealedIDs.contains(credential.id)
                                   ? "Hide password" : "Show password from Keychain")
                             Button {
-                                pendingDelete = credential
+                                confirmDelete(credential)
                             } label: {
                                 Image(systemName: "trash")
                                     .font(.system(size: 11))
@@ -119,19 +118,22 @@ struct CredentialsSheet: View {
         .onAppear {
             AuthPrompt.forceASCIIKeyboard()
         }
-        .alert("Delete credential?", isPresented: Binding(
-            get: { pendingDelete != nil },
-            set: { if !$0 { pendingDelete = nil } }
-        ), presenting: pendingDelete) { credential in
-            Button("Delete", role: .destructive) { delete(credential) }
-            Button("Cancel", role: .cancel) {}
-        } message: { credential in
-            let count = model.store.hostCount(usingCredential: credential.id)
-            if count == 0 {
-                Text("“\(credential.name)” is not used by any saved host.")
-            } else {
-                Text("\(count) saved host\(count == 1 ? "" : "s") use\(count == 1 ? "s" : "") “\(credential.name)”. Deleting it also removes the reference — \(count == 1 ? "that host" : "those hosts") will fall back to manual password entry.")
-            }
+    }
+
+    /// Delete asks first, in the app's centred alert (a SwiftUI `.alert` is
+    /// an NSAlert underneath and flips to the left-aligned layout for a long
+    /// message — see SheepAlert). Cancel is the default (Return).
+    private func confirmDelete(_ credential: Credential) {
+        let count = model.store.hostCount(usingCredential: credential.id)
+        let alert = SheepAlert()
+        alert.messageText = "Delete credential?"
+        alert.informativeText = count == 0
+            ? "“\(credential.name)” is not used by any saved host."
+            : "\(count) saved host\(count == 1 ? "" : "s") use\(count == 1 ? "s" : "") “\(credential.name)”. Deleting it also removes the reference — \(count == 1 ? "that host" : "those hosts") will fall back to manual password entry."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Delete")
+        if alert.runModal() == .alertSecondButtonReturn {
+            delete(credential)
         }
     }
 

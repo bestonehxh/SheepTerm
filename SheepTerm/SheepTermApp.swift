@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func askAboutLiveSessions() -> QuitAnswer {
         let live = AppModel.shared.liveRemoteSessions
         guard !live.isEmpty else { return .nothingToAsk }
-        let alert = NSAlert()
+        let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = live.count == 1
             ? "Quit SheepTerm? One session is still open."
@@ -295,6 +295,7 @@ struct SheepTermCommands: Commands {
                 .disabled(!mainWindowKey.isKey)
             Divider()
             Button("Credentials…") { model.showCredentials = true }
+            Button("Known Hosts…") { model.openKnownHosts() }
             Divider()
             Toggle("Log Sessions to File", isOn: $model.sessionLogging)
             Button("Open Logs Folder") {

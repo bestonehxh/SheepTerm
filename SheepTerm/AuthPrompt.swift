@@ -80,8 +80,8 @@ enum AuthPrompt {
     }
 
     /// First connection to a host: show what the server presented and ask.
-    /// Compact alert (icon centred — see `NSAlert.sheepStyled`): the target
-    /// on the message line, key type and fingerprint below. "Cancel" is the
+    /// A glass panel (`HostKeyPromptView`), everything centred: the target,
+    /// the key type and the fingerprint in two even lines. "Cancel" is the
     /// default button (Return) and Escape; trusting takes a deliberate click.
     /// Polls `isCancelled` while open: a tab closed (or the app quitting)
     /// underneath the dialog takes the dialog with it and answers `.stopped`,
@@ -91,56 +91,65 @@ enum AuthPrompt {
                                isCancelled: @escaping @Sendable () -> Bool) -> SSHWorker.HostKeyAnswer {
         // The worker may have been stopped while this waited for main.
         if isCancelled() { return .stopped }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
+        final class Box { var trusted = false }
+        let box = Box()
+
         // Everything shown went through the worker's sanitizer: the host is
         // the user's, but the key type is the server's.
-        let target = SSHWorker.printable(question.target)
-        alert.messageText = "First connection to \(target)"
-        alert.informativeText = "Not in known_hosts. Check its key before you trust it."
-        // The key type and fingerprint go in a monospaced field that wraps by
-        // CHARACTER: as informative text AppKit hyphenated the wrap
-        // ("…T9m-" / "Ke4…"), inserting a "-" that is not in the key at the
-        // very spot the user is comparing character by character.
-        let fingerprint = NSTextField(wrappingLabelWithString:
-            SSHWorker.printable(question.keyType) + "\n" + SSHWorker.printable(question.fingerprint))
-        fingerprint.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        fingerprint.textColor = .labelColor
-        fingerprint.alignment = .center
-        fingerprint.isSelectable = true   // so it can be copied and compared
-        fingerprint.lineBreakMode = .byCharWrapping
-        fingerprint.preferredMaxLayoutWidth = 230
-        fingerprint.frame = NSRect(x: 0, y: 0, width: 230, height: 0)
-        fingerprint.setFrameSize(NSSize(width: 230, height: fingerprint.fittingSize.height))
-        alert.accessoryView = fingerprint
-        // Added first, so it is the default (Return) button.
-        let cancel = alert.addButton(withTitle: "Cancel")
-        let trust = alert.addButton(withTitle: "Trust & Connect")
-        trust.keyEquivalent = ""
-        cancel.keyEquivalent = "\r"
+        let fingerprint = SSHWorker.printable(question.fingerprint)
+        let root = HostKeyPromptView(
+            target: SSHWorker.printable(question.target),
+            keyType: HostKeyPromptView.keyTypeLabel(SSHWorker.printable(question.keyType)),
+            fingerprint: fingerprint.hasPrefix("SHA256:") ? String(fingerprint.dropFirst(7)) : fingerprint
+        ) { trusted in
+            box.trusted = trusted
+            NSApp.stopModal()
+        }
+        // The same glass panel as the password prompt (`ask`) — see the
+        // notes there on orderOut vs close.
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 420),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = true
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            panel.standardWindowButton(type)?.isHidden = true
+        }
+        let hosting = NSHostingView(rootView: root)
+        panel.contentView = hosting
+        panel.setContentSize(hosting.fittingSize)
+        panel.center()
 
-        let cancelResponse = NSApplication.ModalResponse.alertFirstButtonReturn
-        // Escape answers Cancel too. NSAlert maps Escape to a "Cancel" button
-        // only when that button is not the default one, so it is done here.
+        // Escape answers Cancel (the view's onExitCommand needs focus inside
+        // it; this does not).
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 53, event.window === alert.window else { return event }
-            NSApp.stopModal(withCode: cancelResponse)
+            guard event.keyCode == 53, event.window === panel else { return event }
+            box.trusted = false
+            NSApp.stopModal()
             return nil
         }
-        // Scheduled in the modal run-loop mode, or it never fires while the
-        // alert is up.
-        // The timer fires on the main run loop, hence assumeIsolated.
+        // A tab closed (or the app quitting) underneath the panel takes the
+        // panel with it. Scheduled in the modal run-loop mode, or it never
+        // fires while the panel is up; it fires on the main run loop.
         let watch = Timer(timeInterval: 0.2, repeats: true) { _ in
             guard isCancelled() else { return }
             MainActor.assumeIsolated { NSApp.abortModal() }
         }
         RunLoop.main.add(watch, forMode: .modalPanel)
-        let response = alert.sheepStyled().runModal()
+        NSApp.runModal(for: panel)
         watch.invalidate()
         if let escape { NSEvent.removeMonitor(escape) }
+        panel.orderOut(nil)
 
         if isCancelled() { return .stopped }
-        return response == .alertSecondButtonReturn ? .trust : .cancel
+        return box.trusted ? .trust : .cancel
     }
 
     @MainActor

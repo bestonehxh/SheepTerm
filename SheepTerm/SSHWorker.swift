@@ -1014,10 +1014,10 @@ nonisolated final class SSHWorker: Sendable {
         // re-raised the MITM warning three times and spent the reconnect
         // budget on a device that would never be trusted that way.
         if case .revoked(let line) = user {
-            return .refused(hostKeyRefusedPrefix + "⚠️ this host key is marked @revoked on line \(line) of ~/.ssh/known_hosts — refusing it.")
+            return .refused(hostKeyRefusedPrefix + revokedStart + " on line \(line) of ~/.ssh/known_hosts — refusing it.")
         }
         if case .revoked(let line) = global {
-            return .refused(hostKeyRefusedPrefix + "⚠️ this host key is marked @revoked on line \(line) of \(globalKnownHostsPath) — refusing it.")
+            return .refused(hostKeyRefusedPrefix + revokedStart + " on line \(line) of \(globalKnownHostsPath) — refusing it.")
         }
         if case .ok = user { return .trusted }
         if case .ok = global { return .trusted }
@@ -1048,10 +1048,35 @@ nonisolated final class SSHWorker: Sendable {
     }
 
     private static let changedWarning = "⚠️ HOST KEY CHANGED — possible man-in-the-middle. "
+    private static let typeChangedStart = "⚠️ HOST KEY TYPE CHANGED"
+    private static let revokedStart = "⚠️ this host key is marked @revoked"
 
     private static func typeChangedWarning(_ file: String) -> String {
-        "⚠️ HOST KEY TYPE CHANGED — the server offers a key of a type that is not the one pinned in \(file) "
+        typeChangedStart + " — the server offers a key of a type that is not the one pinned in \(file) "
             + "(possible man-in-the-middle). "
+    }
+
+    /// A close message for a refusal that a known_hosts entry decided — the
+    /// pinned key no longer matches (CHANGED / TYPE CHANGED) or the key is
+    /// @revoked — so the tab can offer File → Known Hosts…. Not for an
+    /// unreadable file, a first connection nobody could be asked about, or a
+    /// key swapped during rekey (no known_hosts line explains those). Only
+    /// `hostKeyVerdict` writes these starts, and `closeSession` defuses any
+    /// server text that begins with `hostKeyRefusedPrefix`, so a hostile
+    /// server cannot raise the offer.
+    static func knownHostsConflict(_ closeMessage: String) -> KnownHostsConflict? {
+        guard closeMessage.hasPrefix(hostKeyRefusedPrefix) else { return nil }
+        let rest = closeMessage.dropFirst(hostKeyRefusedPrefix.count)
+        if rest.hasPrefix(changedWarning) || rest.hasPrefix(typeChangedStart) { return .changed }
+        if rest.hasPrefix(revokedStart) { return .revoked }
+        return nil
+    }
+
+    nonisolated enum KnownHostsConflict: Sendable, Equatable {
+        /// CHANGED or TYPE CHANGED: the pinned key is not the one offered.
+        case changed
+        /// The offered key is marked @revoked.
+        case revoked
     }
 
     /// "line 5" / "lines 3, 9" over `sorted` (deduplicated, ascending).
@@ -1265,17 +1290,7 @@ nonisolated final class SSHWorker: Sendable {
         // parallel, never queued behind another tab's wait): this runs
         // inside the handshake, where neither Stop nor the connect deadline
         // reaches, so it must not wait forever.
-        let clock = ContinuousClock()
-        let giveUp = clock.now.advanced(by: knownHostsLockWait)
-        var locked = false, lockTimedOut = false
-        while true {
-            if flock(fd, LOCK_EX | LOCK_NB) == 0 { locked = true; break }
-            let e = errno
-            if e == EINTR { continue }
-            guard e == EWOULDBLOCK || e == EAGAIN else { break }     // no flock here: the in-app lock stands
-            if clock.now >= giveUp { lockTimedOut = true; break }
-            usleep(50_000)
-        }
+        let (locked, lockTimedOut) = lockKnownHostsFile(fd)
         defer { if locked { _ = flock(fd, LOCK_UN) } }
         // Then the in-app lock, held only for read-decide-append: tabs are
         // serialized even where the file system refuses flock.
@@ -1319,6 +1334,141 @@ nonisolated final class SSHWorker: Sendable {
     private static let pinLock = Mutex(())
     /// How long to wait for another program's lock on known_hosts.
     static let knownHostsLockWait: Duration = .seconds(5)
+
+    /// An exclusive flock on known_hosts, polled (never a blocking wait) for
+    /// up to `knownHostsLockWait`. Neither locked nor timed out = the file
+    /// system does not do flock; `pinLock` still serializes our own tabs.
+    private static func lockKnownHostsFile(_ fd: Int32) -> (locked: Bool, timedOut: Bool) {
+        let clock = ContinuousClock()
+        let giveUp = clock.now.advanced(by: knownHostsLockWait)
+        while true {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return (true, false) }
+            let e = errno
+            if e == EINTR { continue }
+            guard e == EWOULDBLOCK || e == EAGAIN else { return (false, false) }     // no flock here: the in-app lock stands
+            if clock.now >= giveUp { return (false, true) }
+            usleep(50_000)
+        }
+    }
+
+    // MARK: Known Hosts editor (File → Known Hosts…)
+
+    nonisolated enum KnownHostsRemoval: Equatable, Sendable {
+        /// Lines cut from the file. 0 = none of the entries is in it any more
+        /// (removed meanwhile); nothing was written then.
+        case removed(Int)
+        /// Says what went wrong and whether anything was changed.
+        case failed(String)
+    }
+
+    /// The copy of the file as it was before the last removal, next to it.
+    static let knownHostsBackupSuffix = ".sheepterm-bak"
+
+    /// Removes the entries the user picked in the Known Hosts sheet, under
+    /// the SAME locks `pinFirstUse` takes (flock on the file, then
+    /// `pinLock`), so a tab pinning a new host at that moment is neither
+    /// lost nor interleaved. The file is re-read under the lock and the
+    /// lines are found again by CONTENT (marker, host field, type, key) —
+    /// the sheet's line numbers can be stale. Before anything is changed the
+    /// whole file is copied to `known_hosts.sheepterm-bak` (0600). The file
+    /// is rewritten IN PLACE (write + truncate): same inode, same mode — a
+    /// rename would hand a new file to anyone holding a lock on the old one.
+    /// Fails closed: no lock (another program holds it), no read, no backup
+    /// = nothing is written.
+    static func removeKnownHosts(_ identities: Set<KnownHostsEditor.Identity>,
+                                 path: String = sshDirectory + "/known_hosts") -> KnownHostsRemoval {
+        guard !identities.isEmpty else { return .removed(0) }
+        let name = (path as NSString).abbreviatingWithTildeInPath
+        let fd = open(path, O_RDWR | O_CLOEXEC)
+        guard fd >= 0 else {
+            let e = errno
+            return .failed(e == ENOENT ? "\(name) no longer exists — nothing was changed."
+                : "cannot open \(name) for writing (\(String(cString: strerror(e)))) — nothing was changed.")
+        }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
+            return .failed("\(name) is not a regular file — nothing was changed.")
+        }
+        let (locked, timedOut) = lockKnownHostsFile(fd)
+        defer { if locked { _ = flock(fd, LOCK_UN) } }
+        guard !timedOut else {
+            return .failed("another program holds \(name) locked — nothing was changed. Try again in a moment.")
+        }
+        return pinLock.withLock { _ -> KnownHostsRemoval in
+            guard let original = readKnownHosts(fd, from: 0) else {
+                return .failed("cannot read \(name) — nothing was changed.")
+            }
+            let doomed = KnownHostsEditor.lineIndices(holding: identities, in: original)
+            guard !doomed.isEmpty else { return .removed(0) }
+            var updated = KnownHostsEditor.removing(lineIndices: doomed, from: original)
+
+            let backupPath = path + knownHostsBackupSuffix
+            let backupName = (backupPath as NSString).abbreviatingWithTildeInPath
+            if let why = writeKnownHostsBackup(original, to: backupPath) {
+                return .failed("could not write the backup \(backupName) (\(why)) — nothing was changed.")
+            }
+            if let why = writeKnownHosts(fd, updated, at: 0) {
+                return .failed("writing \(name) failed (\(why)); its previous contents are in \(backupName).")
+            }
+            // OpenSSH's ssh appends without flock: bytes it added after our
+            // read sit past `original.count`, untouched by the shorter write
+            // above — carry them over instead of truncating them away.
+            var now = stat()
+            if fstat(fd, &now) == 0, Int(now.st_size) > original.count,
+               let tail = readKnownHosts(fd, from: original.count), !tail.isEmpty {
+                if let why = writeKnownHosts(fd, tail, at: updated.count) {
+                    return .failed("writing \(name) failed (\(why)); its previous contents are in \(backupName).")
+                }
+                updated += tail
+            }
+            guard ftruncate(fd, off_t(updated.count)) == 0 else {
+                return .failed("truncating \(name) failed (\(String(cString: strerror(errno)))); "
+                    + "its previous contents are in \(backupName).")
+            }
+            _ = fsync(fd)
+            return .removed(doomed.count)
+        }
+    }
+
+    /// The file from `offset` to its end, or nil on a read error.
+    private static func readKnownHosts(_ fd: Int32, from offset: Int) -> [UInt8]? {
+        var bytes = [UInt8]()
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let n = chunk.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, off_t(offset + bytes.count)) }
+            if n > 0 { bytes.append(contentsOf: chunk[0..<n]); continue }
+            if n < 0, errno == EINTR { continue }
+            return n < 0 ? nil : bytes
+        }
+    }
+
+    /// nil on success, otherwise why not.
+    private static func writeKnownHosts(_ fd: Int32, _ bytes: [UInt8], at offset: Int) -> String? {
+        var written = 0
+        while written < bytes.count {
+            let n = bytes[written...].withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, off_t(offset + written)) }
+            if n > 0 { written += n; continue }
+            if n < 0, errno == EINTR { continue }
+            return n < 0 ? String(cString: strerror(errno)) : "the disk took no more bytes"
+        }
+        return nil
+    }
+
+    /// The pre-removal copy: private (0600 even when an older backup had
+    /// another mode), never through a symlink, flushed before the original
+    /// is touched. nil on success.
+    private static func writeKnownHostsBackup(_ bytes: [UInt8], to path: String) -> String? {
+        let fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return String(cString: strerror(errno)) }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return "not a regular file" }
+        guard fchmod(fd, 0o600) == 0, ftruncate(fd, 0) == 0 else { return String(cString: strerror(errno)) }
+        if let why = writeKnownHosts(fd, bytes, at: 0) { return why }
+        guard fsync(fd) == 0 else { return String(cString: strerror(errno)) }
+        return nil
+    }
 
     /// How to clear a stale pin, by LINE NUMBER. Pointing at `ssh-keygen -R`
     /// sent people into a dead end: OpenSSH 10's ssh-keygen calls any

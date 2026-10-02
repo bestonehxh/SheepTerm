@@ -15,9 +15,9 @@ config pasting.
 
 ## ⬇️ Download
 
-[![Download SheepTerm for macOS](https://img.shields.io/badge/Download-SheepTerm_4.1_%2837%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTerm/releases/latest)
+[![Download SheepTerm for macOS](https://img.shields.io/badge/Download-SheepTerm_4.2_%281%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTerm/releases/latest)
 
-**[Get the latest release →](https://github.com/bestonehxh/SheepTerm/releases/latest)** — download `SheepTerm-4.1-37.zip`, unzip, and drag **SheepTerm.app** into `Applications`.
+**[Get the latest release →](https://github.com/bestonehxh/SheepTerm/releases/latest)** — download `SheepTerm-4.2-1.zip`, unzip, and drag **SheepTerm.app** into `Applications`.
 
 > The build is unsigned (not notarized), so macOS will warn on first launch —
 > right-click the app and choose **Open**, or run

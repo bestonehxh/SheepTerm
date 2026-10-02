@@ -186,7 +186,7 @@ struct GroupCredentialSheet: View {
     /// sheet is still on screen, and an alert stacked on a sheet is a mess.
     private static func explain(_ message: String) {
         DispatchQueue.main.async {
-            let alert = NSAlert()
+            let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = message
             // Short on purpose — see `NSAlert.sheepStyled` for the measured
