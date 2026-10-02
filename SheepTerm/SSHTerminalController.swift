@@ -3,7 +3,7 @@ import Foundation
 import SheepVTRender
 import Synchronization
 
-/// Owns one SSH session tab: the SheepVT view plus the libssh worker.
+/// Owns one SSH session tab: the SheepVT view plus the SSH worker.
 final class SSHTerminalController: NSObject {
     /// The view, its fading scroller and SafePaste. See SessionTerminalHost.
     let terminalHost = SessionTerminalHost(safePaste: true)
@@ -220,6 +220,10 @@ final class SSHTerminalController: NSObject {
                     status = "disconnected — cancelled"
                 } else if message.hasPrefix(SSHWorker.hostKeyRefusedPrefix) {
                     status = "disconnected — host key refused"
+                } else if message.hasPrefix(SSHWorker.sessionEndedPrefix) {
+                    // `exit` / logout / the device's idle timeout: the session
+                    // ended on purpose — not a drop to reconnect.
+                    status = "disconnected — session ended"
                 } else {
                     status = "disconnected"
                 }
@@ -231,6 +235,9 @@ final class SSHTerminalController: NSObject {
                 // (tab close) and beginShutdownForQuit() own the close.
             }
         }
+        // First connection to a host: show its key fingerprint and ask before
+        // anything is pinned or sent (nil here would refuse every new host).
+        worker.hostKeyPrompt = AuthPrompt.confirmHostKeyFromWorker
         worker.passwordPrompt = { prompt in
             Self.askOnMainActor(prompt: prompt, secure: true)
         }
@@ -255,7 +262,7 @@ final class SSHTerminalController: NSObject {
         }
     }
 
-    /// libssh asks for credentials synchronously on its dedicated blocking
+    /// The SSH worker asks for credentials synchronously on its dedicated blocking
     /// queue, while AppKit must present the prompt on the main actor. Keep
     /// that bridge in one place and avoid sync-dispatching to the main queue
     /// if a future caller is already there.
@@ -457,15 +464,17 @@ extension SSHTerminalController: TerminalViewDelegate {
         NSSound.beep()
     }
 
-    /// The device replaced the Mac's clipboard (OSC 52). Said out loud because
-    /// nothing else on screen changes when it happens, and what is now on the
-    /// clipboard will be pasted somewhere else entirely — a payload ending in a
-    /// newline runs itself in the next terminal it lands in.
-    func clipboardWritten(_ view: TerminalView, bytes: Int) {
-        if bytes < 0 {
-            printNotice("the device tried to replace the clipboard with \(-bytes) bytes — refused, that is far more than a copy")
-        } else {
-            printNotice("the device replaced the clipboard (\(bytes) bytes)")
+    /// OSC 52: only when the user turned it on in Settings → Clipboard.
+    func allowsClipboardWrite(_ view: TerminalView) -> Bool {
+        SessionTerminalHost.clipboardWriteAllowed
+    }
+
+    /// Said out loud because nothing else on screen changes when the device
+    /// sets (or is refused) the clipboard; the host records a write so the
+    /// next paste of that text asks first.
+    func clipboardWrite(_ view: TerminalView, outcome: ClipboardWriteOutcome) {
+        if let notice = terminalHost.clipboardWriteNotice(outcome, source: "device") {
+            printNotice(notice)
         }
     }
 

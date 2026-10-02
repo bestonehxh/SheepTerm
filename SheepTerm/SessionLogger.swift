@@ -600,7 +600,7 @@ nonisolated final class SessionLogger: Sendable {
             // second used to destroy the first one's bytes and then interleave
             // at independent offsets. Refusing to land on an existing path and
             // redrawing costs one failed syscall instead.
-            let fd = Darwin.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+            let fd = Darwin.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
             if fd >= 0 { opened = (candidate, fd); break }
             lastFailure = OpenFailure(path: candidate.path, code: errno)
             switch lastFailure.code {
@@ -772,7 +772,7 @@ nonisolated final class SessionLogger: Sendable {
         // has since taken the path (a restored backup, a second SheepTerm),
         // adding to it beats losing the rest of the session.
         _ = Self.logsDirectory
-        let fd = Darwin.open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        let fd = Darwin.open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
         // `== 0` is "never reported": the interval alone would swallow the
         // first notice on a Mac that booted less than 30 s ago, which is
         // exactly when a login-item SheepTerm is starting its sessions.
@@ -1169,6 +1169,25 @@ nonisolated final class SessionLogger: Sendable {
     /// CSI, OSC, DCS, APC, ordinary two-byte ESC commands, and CR without
     /// creating five intermediate Strings as the previous regex pipeline did.
     /// `incompleteEscapeTail` ensures normal calls never end mid-sequence.
+    ///
+    /// **Invariant (4.1 (37)): the output never holds ESC, a C0 control other
+    /// than TAB/LF, DEL, or a UTF-8-encoded C1 control (U+0080–U+009F).** A log
+    /// is read back with `cat`/`less -R`/`tail -f` in a real terminal, so any
+    /// control that survives here is the DEVICE driving the reader's terminal
+    /// (retitling it, rewriting what an earlier line appeared to say). It used
+    /// to leak three ways: an unrecognised ESC was "preserved exactly", so
+    /// `ESC ESC [0m ]2;X BEL` stripped the CSI and left a live `ESC ]2;X BEL`
+    /// spliced together in the file; BS/BEL/NUL went straight through; and
+    /// U+009B (C1 CSI) passed as an ordinary character. Now every control the
+    /// log has no use for is DROPPED, not interpreted:
+    ///   • a lone / unrecognised ESC is dropped and the bytes after it are
+    ///     scanned again as data (they can no longer join a sequence);
+    ///   • BS is dropped too. The logger has no cursor — CR and every cursor
+    ///     CSI are already dropped, so BS "semantics" were only ever replayed
+    ///     by the reader's terminal. A pager's `--More-- BS… SP… BS…` erase now
+    ///     leaves its spaces in the line; the text is intact and greppable,
+    ///     and nothing can be hidden behind a backspace any more;
+    ///   • CR is still dropped (CRLF → LF), as before.
     static func stripANSIBytes(_ input: [UInt8]) -> [UInt8] {
         var output: [UInt8] = []
         output.reserveCapacity(input.count)
@@ -1176,12 +1195,32 @@ nonisolated final class SessionLogger: Sendable {
 
         while index < input.count {
             let byte = input[index]
-            if byte == 0x0D { // normalize CRLF to LF
+            if byte >= 0x20, byte != 0x7F {
+                // Printable ASCII or a UTF-8 byte — the hot path. The only
+                // thing to catch here is a C1 control in its UTF-8 form:
+                // 0xC2 is always a lead byte, and 0xC2 0x80…0x9F is exactly
+                // U+0080…U+009F (overlong forms are invalid and become
+                // U+FFFD; so does a bare 8-bit C1 byte). Checked against the
+                // OUTPUT, not the input: a control dropped between the two
+                // halves (`C2 BEL 9B`, `C2 ESC 85`) must not splice a C1
+                // together — the same class of bug as the ESC ESC bypass.
+                if byte & 0xE0 == 0x80, output.last == 0xC2 {
+                    output.removeLast()
+                    index += 1
+                    continue
+                }
+                output.append(byte)
                 index += 1
                 continue
             }
-            guard byte == 0x1B, index + 1 < input.count else {
+            if byte == 0x0A || byte == 0x09 {
                 output.append(byte)
+                index += 1
+                continue
+            }
+            // Every other C0 control (CR, BS, BEL, NUL, …), DEL, and an ESC
+            // with nothing after it: dropped.
+            guard byte == 0x1B, index + 1 < input.count else {
                 index += 1
                 continue
             }
@@ -1245,20 +1284,27 @@ nonisolated final class SessionLogger: Sendable {
                 continue
             }
 
-            // Not a recognized complete sequence: preserve the ESC exactly.
-            output.append(byte)
+            // Not a recognized complete sequence: DROP the ESC (it used to be
+            // preserved exactly, which let `ESC ESC [0m ]2;X BEL` reassemble a
+            // live OSC in the file once the CSI between them was stripped).
+            // What follows is re-scanned as data, so it cannot start a
+            // sequence of its own without a fresh ESC.
             index += 1
         }
         return output
     }
 
-    /// Produces UTF-8 log bytes. Plain ASCII without controls is the dominant
-    /// router-output path and writes directly; non-ASCII still takes the lossy
-    /// UTF-8 normalization path so invalid bytes retain the established U+FFFD
+    /// Produces UTF-8 log bytes. Plain printable ASCII (plus TAB/LF) is the
+    /// dominant router-output path and writes directly; anything else goes
+    /// through `stripANSIBytes` (which drops every control the log has no use
+    /// for — see its invariant), and non-ASCII still takes the lossy UTF-8
+    /// normalization path so invalid bytes retain the established U+FFFD
     /// behavior covered by tests.
     private static func encodedLogChunk(_ input: [UInt8]) -> Data? {
         guard !input.isEmpty else { return nil }
-        if input.allSatisfy({ $0 < 0x80 && $0 != 0x1B && $0 != 0x0D }) {
+        // Fast path: 0x20…0x7E, TAB, LF. Everything below 0x20 except those
+        // two, DEL, ESC, CR and every byte ≥ 0x80 takes the scanner.
+        if input.allSatisfy({ $0 &- 0x20 < 0x5F || $0 == 0x0A || $0 == 0x09 }) {
             return Data(input)
         }
         let stripped = stripANSIBytes(input)

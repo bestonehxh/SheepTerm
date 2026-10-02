@@ -188,7 +188,13 @@ final class CredentialStore: ObservableObject {
         // and spread into the next column. The username is left exactly as
         // given: it is a login, and changing it would change who logs in.
         let cleaned = ConfigurationHygiene.cleanedName(name)
-        let credential = Credential(name: cleaned.isEmpty ? name : cleaned, username: username)
+        // Everything stripped = nothing readable was ever typed (a name of
+        // pure control characters). Storing the RAW input put an invisible
+        // label in every picker and alert; every other name door in the
+        // stores refuses instead, so this one does too.
+        let credential = Credential(
+            name: cleaned.isEmpty ? "Unnamed Credential" : cleaned,
+            username: username)
         noteUserMutation()
         credentials.append(credential)
         uiTrace("CredentialStore.add appended \(credential.name) → \(credentials.count) entries")

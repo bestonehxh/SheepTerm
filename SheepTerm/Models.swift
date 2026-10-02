@@ -408,7 +408,7 @@ extension HostGroup {
 /// so the value that reaches a worker is whatever some file said. These are
 /// the ranges the workers can actually represent.
 extension Host {
-    /// libssh takes the port as `UInt32`; `SSHWorker.connect` refuses
+    /// the SSH connect needs a TCP port; `SSHWorker.connect` refuses
     /// anything outside this politely instead of trapping on the conversion.
     nonisolated static let sshPortRange = 1...65_535
     nonisolated static let defaultSSHPort = 22
@@ -479,7 +479,7 @@ enum ConfigurationHygiene {
         /// `.serial` hosts whose baud rate was not a baud rate.
         var narrowedBauds = 0
         /// Addresses or usernames that carried control characters (a newline
-        /// in an address reaches libssh and the sidebar detail line as is).
+        /// in an address reaches the SSH layer and the sidebar detail line as is).
         var cleanedFields = 0
 
         var isEmpty: Bool {
@@ -640,7 +640,7 @@ enum ConfigurationHygiene {
                 hosts[index].section = trimmed.isEmpty ? nil : trimmed
             }
             // Control characters only — no length cap here: an address is
-            // handed to libssh / the serial open, and a username to the login,
+            // handed to the SSH layer / the serial open, and a username to the login,
             // where a newline is a different (wrong) value, not a long one.
             for keyPath in [\Host.address, \Host.username] {
                 let value = hosts[index][keyPath: keyPath]
@@ -925,7 +925,7 @@ enum ConnectParser {
     /// a dot, a user@, or an IPv6 address. A Host field has no such ambiguity:
     /// whatever is in it is meant to be a host, so `switch1:2222` must parse
     /// there. It used to fail that test, fall back to the raw string, and be
-    /// handed to libssh whole as a hostname.
+    /// handed to the SSH layer whole as a hostname.
     /// Hex groups and colons, an optional embedded IPv4 tail, an optional
     /// `%zone` — nothing else. Not a validator (`:::::` passes), only the
     /// spelling test that keeps a name with two colons in it from being
@@ -946,7 +946,7 @@ enum ConnectParser {
     static func parse(_ text: String, requireHostShape: Bool = true) -> Host? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // No whitespace may survive anywhere in the target — a pasted
-        // newline/tab/inner space would otherwise reach libssh raw.
+        // newline/tab/inner space would otherwise reach the SSH layer raw.
         guard !trimmed.isEmpty, !trimmed.contains(where: { $0.isWhitespace }) else { return nil }
 
         var username = ""
@@ -994,7 +994,7 @@ enum ConnectParser {
             rest = String(rest[..<colon])
         }
 
-        // libssh takes the port as UInt32 — reject values it can't
+        // the SSH connect needs a TCP port — reject values it can't
         // represent here instead of trapping at connect time.
         guard (1...65535).contains(port) else { return nil }
 
@@ -2261,7 +2261,7 @@ enum BulkHostParser {
         let addressUser: String
         // Same test, same parser, as HostEditSheet's Host field: a pasted
         // `admin@10.0.0.1:2222` must come apart here instead of being handed
-        // to libssh whole.
+        // to the SSH layer whole.
         if raw.contains(":") || raw.contains("[") || raw.contains("@") {
             guard let parsed = ConnectParser.parse(raw, requireHostShape: false) else { return nil }
             host = parsed.address
@@ -3213,8 +3213,11 @@ final class HostStore: ObservableObject {
         ConfigurationHygiene.cleanedName(a.name) == ConfigurationHygiene.cleanedName(b.name)
             && a.kind == b.kind && a.address == b.address
             && a.port == b.port && a.username == b.username
-            && (a.cipherMode ?? .auto) == (b.cipherMode ?? .auto)
-            && (a.agentForward ?? false) == (b.agentForward ?? false)
+            // cipherMode and agentForward are NOT compared (4.1 (37)): a
+            // .sheepterm cannot carry them any more (ShareCodec resets both
+            // on import) and a Replace keeps ours — so a difference there is
+            // never something the import would apply, and re-importing your
+            // own export must not raise a conflict over it.
             // The device family travels in the file and decides which
             // highlight pack a session gets. Leaving it out of this test made
             // a file that changed ONLY the family (Cisco → Aruba CX) look
@@ -3327,6 +3330,12 @@ final class HostStore: ObservableObject {
                     // unfiled the host with nothing on screen to say so.
                     var merged = inc.carryingLocalFiling(from: current)
                     merged.credentialID = current.credentialID
+                    // Same for what this Mac hands the server: the file's
+                    // values were reset on import (ShareCodec.stripForImport),
+                    // so taking them would silently switch OUR agent
+                    // forwarding off and our cipher policy back to auto.
+                    merged.agentForward = current.agentForward
+                    merged.cipherMode = current.cipherMode
                     // In place: the slot is claimed by this row alone, so no
                     // later row can read or overwrite what was just written.
                     groups[index].hosts[hostIndex] = merged

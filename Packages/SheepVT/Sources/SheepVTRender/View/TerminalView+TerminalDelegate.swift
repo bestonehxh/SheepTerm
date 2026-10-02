@@ -31,29 +31,35 @@ extension TerminalView: TerminalDelegate {
     /// OSC 52 write. The read side (`getClipboard`) stays refused below — a
     /// program that can read the pasteboard can read the user's passwords.
     ///
-    /// The write side is kept, because copying out of vim or tmux on the far
-    /// end is what it is for, but not silently and not without a limit. A
-    /// device that has been compromised can otherwise replace the clipboard as
-    /// often as it likes with as much as it likes, and a payload ending in a
-    /// newline runs itself the moment it is pasted into another terminal. The
-    /// view tells its delegate every time, and the delegate is what puts a line
-    /// in the session; `maxClipboardWrite` is the ceiling on one write (the
-    /// parser's own 8 MiB payload cap is far above anything a copy needs).
+    /// The write side exists for copying out of vim or tmux on the far end,
+    /// but it is OFF unless the host says otherwise: a device that has been
+    /// compromised could replace the clipboard as often as it likes, and a
+    /// payload ending in a newline runs itself the moment it is pasted into a
+    /// terminal. The host is asked per write (`allowsClipboardWrite`, default
+    /// false — no delegate means no write) and told the outcome every time;
+    /// `maxClipboardWrite` is the ceiling on one allowed write (the parser's
+    /// own 8 MiB payload cap is far above anything a copy needs).
     public static let maxClipboardWrite = 512 * 1024
 
     public nonisolated func setClipboard(_ terminal: Terminal, selection: String, data: [UInt8]) {
         MainActor.assumeIsolated {
             guard let text = String(bytes: data, encoding: .utf8), !text.isEmpty else { return }
+            guard self.delegate?.allowsClipboardWrite(self) == true else {
+                self.delegate?.clipboardWrite(self, outcome: .blocked(bytes: data.count))
+                return
+            }
             guard data.count <= TerminalView.maxClipboardWrite else {
-                self.delegate?.clipboardWritten(self, bytes: -data.count)   // negative = refused
+                self.delegate?.clipboardWrite(self, outcome: .tooLarge(bytes: data.count))
                 return
             }
             self.pasteboard.clearContents()
             self.pasteboard.setString(text, forType: .string)
-            self.delegate?.clipboardWritten(self, bytes: data.count)
+            self.delegate?.clipboardWrite(self, outcome: .written(bytes: data.count,
+                                                                   changeCount: self.pasteboard.changeCount))
         }
     }
 
+    /// OSC 52 read: always refused, whatever the host allows for writes.
     public nonisolated func getClipboard(_ terminal: Terminal, selection: String) -> [UInt8]? {
         nil
     }

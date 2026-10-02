@@ -189,7 +189,7 @@ nonisolated final class SerialWorker: Sendable {
             onClosed?(rejection)
             return
         }
-        var fd = open(devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK)
+        var fd = open(devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC)
         // A reconnect reaches open() before the PREVIOUS session's defers
         // have run: stop() only pokes the self-pipe, so for a few
         // milliseconds the old descriptor still holds TIOCEXCL and the port
@@ -199,7 +199,7 @@ nonisolated final class SerialWorker: Sendable {
             let deadline = Date().addingTimeInterval(1.0)
             while fd < 0, isRunning, Date() < deadline {
                 usleep(20_000)
-                fd = open(devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK)
+                fd = open(devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC)
                 if fd < 0, errno != EBUSY { break }
             }
         }
@@ -220,6 +220,9 @@ nonisolated final class SerialWorker: Sendable {
         let pipeWrite = pipeFDs[1]
         // Non-blocking so a full pipe can never stall the caller of write().
         _ = fcntl(pipeWrite, F_SETFL, O_NONBLOCK)
+        // Never inherited across exec (a local shell tab's child).
+        _ = fcntl(pipeWrite, F_SETFD, FD_CLOEXEC)
+        _ = fcntl(pipeRead, F_SETFD, FD_CLOEXEC)
         state.withLock { $0.wakeFD = pipeWrite }
         defer {
             state.withLock { $0.wakeFD = -1 }

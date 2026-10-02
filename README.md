@@ -6,7 +6,8 @@
 
 **A native macOS terminal client built for network engineers — SSH, Serial, and local shell in one window.**
 
-SheepTerm is written in SwiftUI + AppKit (Swift 6) with its own terminal emulator, and is
+SheepTerm is written in SwiftUI + AppKit (Swift 6) with its own terminal emulator and its own
+SSH implementation — no third-party libraries — and is
 designed around the daily workflow of configuring switches, routers, firewalls, and access
 points: legacy-cipher SSH to old gear, serial consoles over USB adapters, device output
 highlighted per vendor, hundreds of hosts organised by site and floor, and safe multi-line
@@ -14,9 +15,9 @@ config pasting.
 
 ## ⬇️ Download
 
-[![Download SheepTerm for macOS](https://img.shields.io/badge/Download-SheepTerm_4.1_%286%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTerm/releases/latest)
+[![Download SheepTerm for macOS](https://img.shields.io/badge/Download-SheepTerm_4.1_%2837%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTerm/releases/latest)
 
-**[Get the latest release →](https://github.com/bestonehxh/SheepTerm/releases/latest)** — download `SheepTerm-4.1-6.zip`, unzip, and drag **SheepTerm.app** into `Applications`.
+**[Get the latest release →](https://github.com/bestonehxh/SheepTerm/releases/latest)** — download `SheepTerm-4.1-37.zip`, unzip, and drag **SheepTerm.app** into `Applications`.
 
 > The build is unsigned (not notarized), so macOS will warn on first launch —
 > right-click the app and choose **Open**, or run
@@ -40,8 +41,11 @@ SheepTerm is one of a few small native macOS apps for network engineers:
 ## Features
 
 ### Connections
-- **SSH** via bundled libssh 0.12 — works with both modern ciphers and the legacy
-  algorithms old Cisco / Aruba / HPE gear still speaks; SSH agent forwarding supported
+- **SSH** via **SheepSSH**, SheepTerm's own SSH implementation — modern algorithms
+  (including post-quantum `mlkem768x25519-sha256`) and, when a device needs them, the legacy
+  ones old Cisco / Aruba / HPE gear still speaks (`diffie-hellman-group1-sha1`, `3des-cbc`,
+  `ssh-dss`, `hmac-md5`), with automatic fallback; strict key exchange (Terrapin-safe); password,
+  keyboard-interactive (TACACS / OTP), public-key and ssh-agent logins; SSH agent forwarding
 - **Serial console** over USB serial adapters (configurable baud rate)
 - **Local shell** tabs alongside your remote sessions
 - **Quick Connect (⌘K)** — type `admin@10.0.0.1`, `admin@sw01:2222`, or an IPv6 literal and go,
@@ -90,28 +94,37 @@ SheepTerm is one of a few small native macOS apps for network engineers:
 ### Security
 - Passwords are stored **only in the macOS Keychain** — never in config files,
   backups, or exports
+- Host keys are pinned in `~/.ssh/known_hosts` (shared with OpenSSH); a changed key, a key of a
+  different type or a revoked one is refused, and the message names the line to delete
+- **No third-party libraries in the app.** SSH (SheepSSH) and the terminal emulator (SheepVT) are
+  written in-house; cryptography comes from macOS itself — CryptoKit, CommonCrypto and
+  Security — and is updated with the system
 
 ## Requirements
 
 - macOS 26.4 (Tahoe) or later, Apple Silicon
-- To build: Xcode 26+ and Homebrew `libssh` (which brings `openssl@3`)
+- To build: Xcode 26+ (nothing else — no Homebrew)
 
 ## Building
 
 ```bash
-brew install libssh
 xcodebuild -project SheepTerm.xcodeproj -scheme SheepTerm -configuration Release build
 ```
 
 The app is built at
 `~/Library/Developer/Xcode/DerivedData/SheepTerm-*/Build/Products/Release/SheepTerm.app`.
-The build copies libssh and OpenSSL's libcrypto into the app bundle, so the result runs on a Mac
-without Homebrew.
+It links only Apple's frameworks and the two local packages in `Packages/` (SheepVT, SheepSSH).
 
 ## Acknowledgements
 
-- [libssh](https://www.libssh.org) (LGPL-2.1) — SSH transport, bundled as a dynamic library
-- [OpenSSL](https://www.openssl.org) (Apache-2.0) — `libcrypto`, bundled as a dynamic library for libssh
+SheepTerm links and bundles no third-party library. One data table is derived from another
+project:
+
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, Miguel de Icaza) — the East Asian
+  wide-character ranges in SheepVT's `UnicodeWidthData.swift`
+
+Earlier releases (up to 4.1 (6)) bundled [libssh](https://www.libssh.org) (LGPL-2.1) and
+[OpenSSL](https://www.openssl.org)'s libcrypto (Apache-2.0); SheepSSH replaced both.
 
 ## License
 

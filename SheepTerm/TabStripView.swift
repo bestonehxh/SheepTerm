@@ -9,6 +9,20 @@ struct TabStripView: View {
     /// there put the chips 1pt BELOW the icons beside them.
     var compensateWindowBorder = true
 
+    /// The tab being dragged and where the pointer is, in the strip's own
+    /// coordinate space. Reordering follows the sidebar's lesson
+    /// (ARCHITECTURE §11): no `.onDrag` (its snap-back cannot be switched
+    /// off), neighbours do NOT shuffle live — only the dragged chip follows
+    /// the pointer and an insertion bar marks the gap — and the move is
+    /// committed once, on release, without animation.
+    /// GestureState, not State: a drag the system cancels (the chip vanishes
+    /// mid-drag, the window loses the mouse) resets itself instead of leaving
+    /// a chip parked off its slot.
+    @GestureState private var drag: TabDrag?
+    @State private var chipFrames: [UUID: CGRect] = [:]
+
+    private static let space = "tabstrip"
+
     var body: some View {
         // ScrollViewReader so a newly created or ⌘-selected tab is brought
         // into view: with many tabs the active one could sit off-screen with
@@ -39,9 +53,29 @@ struct TabStripView: View {
                         onClose: { model.close(tab: tab) },
                         onReconnect: { model.reconnect(tab: tab) }
                     )
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: TabChipFrames.self,
+                                               value: [tab.id: proxy.frame(in: .named(Self.space))])
+                    })
+                    .offset(x: drag?.id == tab.id ? drag?.translation ?? 0 : 0)
+                    .zIndex(drag?.id == tab.id ? 1 : 0)
+                    .opacity(drag?.id == tab.id ? 0.85 : 1)
+                    // minimumDistance keeps a click a click: the chip's tap
+                    // gesture still selects, the × button still closes.
+                    .gesture(
+                        DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.space))
+                            .updating($drag) { value, state, _ in
+                                state = TabDrag(id: tab.id, translation: value.translation.width,
+                                                pointerX: value.location.x)
+                            }
+                            .onEnded { value in commitDrag(tab.id, pointerX: value.location.x) }
+                    )
                     .id(tab.id)
                 }
             }
+            .overlay(alignment: .topLeading) { insertionBar }
+            .coordinateSpace(name: Self.space)
+            .onPreferenceChange(TabChipFrames.self) { chipFrames = $0 }
             .frame(maxHeight: .infinity)
             .padding(.top, compensateWindowBorder ? 2 : 0)
         }
@@ -54,6 +88,61 @@ struct TabStripView: View {
             withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
         }
         }
+    }
+
+    /// The gap the pointer is over, counted before the dragged tab is
+    /// removed (`TabOrder`'s convention). Only the OTHER chips are measured:
+    /// the dragged chip's reported frame travels with its offset, so it would
+    /// count itself depending on which side of the pointer its centre is.
+    private func dropGap(dragging id: UUID, pointerX: CGFloat) -> Int {
+        let tabs = model.tabs
+        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return 0 }
+        let othersLeft = tabs.filter { tab in
+            guard tab.id != id, let frame = chipFrames[tab.id] else { return false }
+            return frame.midX < pointerX
+        }.count
+        return TabOrder.dragGap(othersLeftOfPointer: othersLeft, from: from)
+    }
+
+    /// Accent bar in the gap the tab will land in — hidden while the drop
+    /// would leave it where it is.
+    @ViewBuilder private var insertionBar: some View {
+        if let drag, let from = model.tabs.firstIndex(where: { $0.id == drag.id }),
+           case let gap = dropGap(dragging: drag.id, pointerX: drag.pointerX),
+           TabOrder.destination(from: from, toGap: gap, count: model.tabs.count) != nil {
+            let tabs = model.tabs
+            let x: CGFloat? = gap < tabs.count
+                ? chipFrames[tabs[gap].id].map { $0.minX - 3 }
+                : chipFrames[tabs[tabs.count - 1].id].map { $0.maxX + 1 }
+            if let x, let reference = chipFrames[drag.id] {
+                Capsule()
+                    .fill(Theme.accent)
+                    .frame(width: 2, height: reference.height)
+                    .offset(x: x, y: reference.minY)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func commitDrag(_ id: UUID, pointerX: CGFloat) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            model.moveTab(id: id, toGap: dropGap(dragging: id, pointerX: pointerX))
+        }
+    }
+}
+
+private struct TabDrag {
+    let id: UUID
+    let translation: CGFloat
+    let pointerX: CGFloat
+}
+
+private struct TabChipFrames: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 

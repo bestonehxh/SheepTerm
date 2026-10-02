@@ -127,6 +127,24 @@ final class SessionTerminalHost {
     private var pastingImmediately = false
 
     private static let pasteDelayKey = "safePasteDelayMilliseconds"
+
+    // MARK: OSC 52 (remote clipboard write)
+
+    /// Settings → Clipboard. Off unless the user turned it on: a device that
+    /// may set the clipboard can plant a command for the user's next ⌘V.
+    static let clipboardWriteKey = "allowOSC52ClipboardWrite"
+    static var clipboardWriteAllowed: Bool {
+        UserDefaults.standard.bool(forKey: clipboardWriteKey)
+    }
+    /// Process-wide: every tab pastes from the same pasteboard, so text one
+    /// tab's device planted must be caught when it is pasted into another.
+    private static var plantedClipboard = PlantedClipboard()
+    /// The "blocked" line is said once per tab, not once per write — a
+    /// device (or tmux's set-clipboard) can try on every copy.
+    private var blockedClipboardNoticeShown = false
+    /// Set while a paste the user confirmed in the planted-text prompt goes
+    /// back through the view, so `shouldPaste` does not ask a second time.
+    private var plantedPasteConfirmed = false
     /// Bumped by every prompt AND every cancel, so a stale sheet's answer can
     /// be told from the live one's.
     private var pasteGeneration = 0
@@ -143,9 +161,43 @@ final class SessionTerminalHost {
 
     // MARK: - SafePaste
 
+    /// `TerminalViewDelegate.clipboardWrite`: records a write that reached
+    /// the pasteboard and returns the grey line the controller prints, or nil
+    /// when there is nothing (more) to say. `source` is "device" or
+    /// "program"; every message is fixed text plus a number — nothing the
+    /// device sent is echoed.
+    func clipboardWriteNotice(_ outcome: ClipboardWriteOutcome, source: String) -> String? {
+        switch outcome {
+        case .written(let bytes, let changeCount):
+            Self.plantedClipboard.noteDeviceWrite(reachedPasteboard: true, changeCount: changeCount)
+            return "the \(source) set the clipboard (\(bytes) bytes) — pasting it will ask first"
+        case .blocked:
+            guard !blockedClipboardNoticeShown else { return nil }
+            blockedClipboardNoticeShown = true
+            return "the \(source) tried to set the clipboard — blocked; allow it in Settings → Clipboard"
+        case .tooLarge(let bytes):
+            return "the \(source) tried to set the clipboard with \(bytes) bytes — refused, that is far more than a copy"
+        }
+    }
+
     /// `TerminalViewDelegate.shouldPaste`: true lets the view paste normally,
     /// false means this host has taken the text over.
+    ///
+    /// Every paste in the app reaches here: ⌘V, Edit → Paste and the
+    /// terminal's context-menu Paste all send `paste:` to the view, which asks
+    /// this before sending a byte (middle-click paste and text drops do not
+    /// exist in the view). Text a device planted is asked about first — in
+    /// every tab kind and whatever Safe Paste is set to.
     func shouldPaste(_ text: String) -> Bool {
+        if !pastingImmediately, !plantedPasteConfirmed,
+           Self.plantedClipboard.needsConfirmation(currentChangeCount: terminalView.pasteboard.changeCount) {
+            guard !pastePromptPresented else {
+                NSSound.beep()
+                return false
+            }
+            presentPlantedPasteConfirmation(text)
+            return false
+        }
         guard safePasteAvailable, !pastingImmediately, AppModel.shared.safePasteEnabled else {
             return true
         }
@@ -310,6 +362,58 @@ final class SessionTerminalHost {
             // Application-modal: nothing else in this app runs while it is up,
             // so there is no window to end — the generation check still covers
             // a cancel that arrives from a background queue's hop to main.
+            handleResponse(alert.sheepStyled().runModal())
+        }
+    }
+
+    /// The clipboard holds text a session's device/program set (OSC 52) and
+    /// nothing has been copied since. Asked every time, single line or not:
+    /// `evil-cmd\n` is one line, and the newline runs it. Cancel is the
+    /// default, so Return does not paste. Shares the Safe Paste prompt's
+    /// bookkeeping (`pastePromptPresented`, `pasteGeneration`,
+    /// `pastePromptWindow`), so `cancelSafePaste` tears this one down too.
+    private func presentPlantedPasteConfirmation(_ text: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Paste text a session put on the clipboard?"
+        alert.informativeText = "Set by a device or program (OSC 52), not by a copy."
+        alert.addButton(withTitle: "Cancel")   // default, so Return cancels
+        alert.addButton(withTitle: "Paste")
+
+        let preview = NSTextField(wrappingLabelWithString: PlantedClipboard.preview(text))
+        preview.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        preview.textColor = .labelColor
+        preview.isSelectable = false
+        preview.maximumNumberOfLines = 6
+        preview.lineBreakMode = .byCharWrapping
+        preview.preferredMaxLayoutWidth = 300
+        preview.frame = NSRect(x: 0, y: 0, width: 300, height: 0)
+        preview.setFrameSize(NSSize(width: 300, height: preview.fittingSize.height))
+        alert.accessoryView = preview
+
+        pastePromptPresented = true
+        pasteGeneration &+= 1
+        let generation = pasteGeneration
+        let handleResponse = { [weak self] (response: NSApplication.ModalResponse) in
+            guard let self, self.pasteGeneration == generation else { return }
+            self.pastePromptPresented = false
+            self.pastePromptWindow = nil
+            guard response == .alertSecondButtonReturn else { return }
+            // Next turn of the run loop: the sheet must be gone before Safe
+            // Paste (a multi-line text still gets its own review) can put one
+            // up. A cancel or a newer prompt in between bumps the generation.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.pasteGeneration == generation, !self.pastePromptPresented else { return }
+                self.plantedPasteConfirmed = true
+                self.terminalView.pasteText(text)
+                self.plantedPasteConfirmed = false
+            }
+        }
+
+        if let window = terminalView.window, window.attachedSheet == nil {
+            pastePromptWindow = alert.window
+            alert.beginSheetModal(for: window, completionHandler: handleResponse)
+        } else {
             handleResponse(alert.sheepStyled().runModal())
         }
     }

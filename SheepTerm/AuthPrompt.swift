@@ -60,6 +60,89 @@ enum AuthPrompt {
         return box.value
     }
 
+    /// Runs `body` on the main actor and waits for it — the bridge every
+    /// worker-queue question (password, challenge, username, host key) goes
+    /// through: the worker blocks on the answer, AppKit presents on main.
+    /// Never sync-dispatches to main from main.
+    nonisolated static func onMain<T: Sendable>(_ body: @MainActor () -> T) -> T {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { body() }
+        }
+        return DispatchQueue.main.sync {
+            MainActor.assumeIsolated { body() }
+        }
+    }
+
+    /// `SSHWorker.hostKeyPrompt` for the app: asks on the main actor from the
+    /// worker queue. Wire it as `worker.hostKeyPrompt = AuthPrompt.confirmHostKeyFromWorker`.
+    nonisolated static let confirmHostKeyFromWorker: SSHWorker.HostKeyPrompt = { question, isCancelled in
+        onMain { confirmHostKey(question, isCancelled: isCancelled) }
+    }
+
+    /// First connection to a host: show what the server presented and ask.
+    /// Compact alert (icon centred — see `NSAlert.sheepStyled`): the target
+    /// on the message line, key type and fingerprint below. "Cancel" is the
+    /// default button (Return) and Escape; trusting takes a deliberate click.
+    /// Polls `isCancelled` while open: a tab closed (or the app quitting)
+    /// underneath the dialog takes the dialog with it and answers `.stopped`,
+    /// so the blocked worker is released and nothing is pinned.
+    @MainActor
+    static func confirmHostKey(_ question: SSHWorker.HostKeyQuestion,
+                               isCancelled: @escaping @Sendable () -> Bool) -> SSHWorker.HostKeyAnswer {
+        // The worker may have been stopped while this waited for main.
+        if isCancelled() { return .stopped }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        // Everything shown went through the worker's sanitizer: the host is
+        // the user's, but the key type is the server's.
+        let target = SSHWorker.printable(question.target)
+        alert.messageText = "First connection to \(target)"
+        alert.informativeText = "Not in known_hosts. Check its key before you trust it."
+        // The key type and fingerprint go in a monospaced field that wraps by
+        // CHARACTER: as informative text AppKit hyphenated the wrap
+        // ("…T9m-" / "Ke4…"), inserting a "-" that is not in the key at the
+        // very spot the user is comparing character by character.
+        let fingerprint = NSTextField(wrappingLabelWithString:
+            SSHWorker.printable(question.keyType) + "\n" + SSHWorker.printable(question.fingerprint))
+        fingerprint.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        fingerprint.textColor = .labelColor
+        fingerprint.alignment = .center
+        fingerprint.isSelectable = true   // so it can be copied and compared
+        fingerprint.lineBreakMode = .byCharWrapping
+        fingerprint.preferredMaxLayoutWidth = 230
+        fingerprint.frame = NSRect(x: 0, y: 0, width: 230, height: 0)
+        fingerprint.setFrameSize(NSSize(width: 230, height: fingerprint.fittingSize.height))
+        alert.accessoryView = fingerprint
+        // Added first, so it is the default (Return) button.
+        let cancel = alert.addButton(withTitle: "Cancel")
+        let trust = alert.addButton(withTitle: "Trust & Connect")
+        trust.keyEquivalent = ""
+        cancel.keyEquivalent = "\r"
+
+        let cancelResponse = NSApplication.ModalResponse.alertFirstButtonReturn
+        // Escape answers Cancel too. NSAlert maps Escape to a "Cancel" button
+        // only when that button is not the default one, so it is done here.
+        let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53, event.window === alert.window else { return event }
+            NSApp.stopModal(withCode: cancelResponse)
+            return nil
+        }
+        // Scheduled in the modal run-loop mode, or it never fires while the
+        // alert is up.
+        // The timer fires on the main run loop, hence assumeIsolated.
+        let watch = Timer(timeInterval: 0.2, repeats: true) { _ in
+            guard isCancelled() else { return }
+            MainActor.assumeIsolated { NSApp.abortModal() }
+        }
+        RunLoop.main.add(watch, forMode: .modalPanel)
+        let response = alert.sheepStyled().runModal()
+        watch.invalidate()
+        if let escape { NSEvent.removeMonitor(escape) }
+
+        if isCancelled() { return .stopped }
+        return response == .alertSecondButtonReturn ? .trust : .cancel
+    }
+
     @MainActor
     static func forceASCIIKeyboard() {
         if let source = TISCopyCurrentASCIICapableKeyboardInputSource()?.takeRetainedValue() {

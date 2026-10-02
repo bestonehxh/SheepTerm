@@ -60,8 +60,14 @@ private final class RecordingDelegate: TerminalViewDelegate {
     var bells = 0
     var links: [String] = []
     var allowPaste = true
+    var allowClipboard = false
+    var clipboardAsks = 0
+    var clipboardOutcomes: [ClipboardWriteOutcome] = []
 
     var sentBytes: [UInt8] { sent.flatMap { $0 } }
+
+    func allowsClipboardWrite(_ view: TerminalView) -> Bool { clipboardAsks += 1; return allowClipboard }
+    func clipboardWrite(_ view: TerminalView, outcome: ClipboardWriteOutcome) { clipboardOutcomes.append(outcome) }
 
     func send(_ view: TerminalView, bytes: [UInt8]) { sent.append(bytes) }
     func sizeChanged(_ view: TerminalView, cols: Int, rows: Int) { sizes.append((cols, rows)) }
@@ -494,15 +500,84 @@ private func privateBoard(_ name: String) -> NSPasteboard {
         #expect(delegate.bells == 1)
     }
 
-    @Test func osc52WritesToTheInjectedPasteboard() {
+    @Test func osc52WritesToTheInjectedPasteboardWhenTheHostAllowsIt() {
         let view = makeView()
+        let delegate = RecordingDelegate()
+        delegate.allowClipboard = true
+        view.delegate = delegate
         view.pasteboard = privateBoard("osc52")
         // OSC 52 ; c ; base64("hello") BEL
         view.feed("\u{1b}]52;c;aGVsbG8=\u{7}")
         #expect(view.pasteboard.string(forType: .string) == "hello")
+        // The outcome carries the count right after the write, so the host
+        // can tell later whether the clipboard still holds the device's text.
+        #expect(delegate.clipboardOutcomes == [.written(bytes: 5, changeCount: view.pasteboard.changeCount)])
         // Reading is always refused: a program must not be able to read the
-        // user's clipboard.
+        // user's clipboard — allowing writes does not open reads.
         #expect(view.getClipboard(view.terminal, selection: "c") == nil)
+        view.feed("\u{1b}]52;c;?\u{7}")                    // the query form
+        #expect(delegate.sent.isEmpty)                      // no reply carrying "hello"
+    }
+
+    /// Security (OSC 52 off by default): a host that says no — or never
+    /// answers — gets the pasteboard left exactly as it was, and is told.
+    @Test func osc52WriteIsBlockedWhenTheHostSaysNo() {
+        let view = makeView()
+        let delegate = RecordingDelegate()                  // allowClipboard = false
+        view.delegate = delegate
+        view.pasteboard = privateBoard("osc52-blocked")
+        view.pasteboard.setString("mine", forType: .string)
+        let before = view.pasteboard.changeCount
+        // base64("evil-cmd\n")
+        view.feed("\u{1b}]52;c;ZXZpbC1jbWQK\u{7}")
+        #expect(view.pasteboard.string(forType: .string) == "mine")
+        #expect(view.pasteboard.changeCount == before)
+        #expect(delegate.clipboardAsks == 1)
+        #expect(delegate.clipboardOutcomes == [.blocked(bytes: 9)])
+        #expect(view.getClipboard(view.terminal, selection: "c") == nil)
+    }
+
+    @Test func osc52WriteIsBlockedWithNoDelegateAtAll() {
+        let view = makeView()
+        view.pasteboard = privateBoard("osc52-nodelegate")
+        view.pasteboard.setString("mine", forType: .string)
+        let before = view.pasteboard.changeCount
+        view.feed("\u{1b}]52;c;aGVsbG8=\u{7}")
+        #expect(view.pasteboard.string(forType: .string) == "mine")
+        #expect(view.pasteboard.changeCount == before)
+    }
+
+    /// The default answer of the protocol extension is no, so a host that
+    /// implements only `send` (SheepVTDemo, a test double) is safe.
+    @Test func osc52DefaultDelegateAnswerIsNo() {
+        final class OnlySend: TerminalViewDelegate {
+            func send(_ view: TerminalView, bytes: [UInt8]) {}
+        }
+        let view = makeView()
+        let delegate = OnlySend()
+        view.delegate = delegate
+        view.pasteboard = privateBoard("osc52-default")
+        view.feed("\u{1b}]52;c;aGVsbG8=\u{7}")
+        #expect(view.pasteboard.string(forType: .string) == nil)
+        #expect(delegate.allowsClipboardWrite(view) == false)
+    }
+
+    /// Quiet twin: a disallowed host is not asked and not told about an
+    /// empty / non-UTF-8 payload, and the size ceiling still holds when
+    /// writes are allowed.
+    @Test func osc52EmptyAndOversizedPayloadsStayOffThePasteboard() {
+        let view = makeView()
+        let delegate = RecordingDelegate()
+        delegate.allowClipboard = true
+        view.delegate = delegate
+        view.pasteboard = privateBoard("osc52-edges")
+        view.feed("\u{1b}]52;c;\u{7}")                      // empty
+        #expect(delegate.clipboardAsks == 0)
+        #expect(delegate.clipboardOutcomes.isEmpty)
+        let big = Data(repeating: 0x41, count: TerminalView.maxClipboardWrite + 1).base64EncodedString()
+        view.feed("\u{1b}]52;c;\(big)\u{7}")
+        #expect(view.pasteboard.string(forType: .string) == nil)
+        #expect(delegate.clipboardOutcomes == [.tooLarge(bytes: TerminalView.maxClipboardWrite + 1)])
     }
 
     @Test func aBufferSwitchDropsSelectionAndSearch() {

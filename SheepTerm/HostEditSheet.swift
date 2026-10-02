@@ -45,7 +45,17 @@ struct HostEditSheet: View {
         _address = State(initialValue: host.address)
         _port = State(initialValue: String(host.port))
         _username = State(initialValue: host.username)
-        _credentialSelection = State(initialValue: host.credentialID)
+        // A credentialID that no longer resolves (the credential was deleted
+        // while the hosts.json write of `clearCredentialID` failed, or the
+        // file arrived by sync/restore with the reference already dead) would
+        // seed the picker with a tag that matches no row — the picker rendered
+        // BLANK and Save wrote the dead id straight back. Normalize to nil:
+        // the form says "None (enter manually)" honestly, the manual fields
+        // show, and Save stops persisting the reference.
+        _credentialSelection = State(initialValue:
+            host.credentialID.flatMap { id in
+                AppModel.shared.credentialStore.credential(for: id) == nil ? nil : id
+            })
         _cipherMode = State(initialValue: host.cipherMode ?? .auto)
         _agentForward = State(initialValue: host.agentForward ?? false)
         _vendor = State(initialValue: host.highlightVendor)
@@ -167,7 +177,7 @@ struct HostEditSheet: View {
         }
     }
 
-    /// libssh takes the port as UInt32 — reject values it can't
+    /// the SSH connect needs a TCP port — reject values it can't
     /// represent instead of trapping at connect time.
     private var parsedPort: Int? {
         let trimmed = port.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -292,7 +302,7 @@ struct HostEditSheet: View {
         var host = original
         host.name = trimmedName
         // The host half only: a `:port` typed into this field belongs in the
-        // Port field, not in the address libssh is handed.
+        // Port field, not in the address the SSH layer is handed.
         host.address = splitAddress?.host ?? trimmedAddress
         host.username = effectiveUsername
         // The literal, `.auto` included — same rule as Quick Connect since

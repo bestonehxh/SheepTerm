@@ -747,20 +747,14 @@ final class AppModel: ObservableObject {
         if incoming.username != existing.username {
             diffs.append("username: \(sanitizedForDialog(existing.username)) → \(sanitizedForDialog(incoming.username))")
         }
-        // Effective values, as `sameForImport` compares them — nil IS auto,
-        // and a line reading "cipher: auto → auto" explained nothing.
-        if (incoming.cipherMode ?? .auto) != (existing.cipherMode ?? .auto) {
-            diffs.append("cipher: \((existing.cipherMode ?? .auto).rawValue) → \((incoming.cipherMode ?? .auto).rawValue)")
-        }
+        // No cipher / agent-forwarding lines: a Replace keeps ours (the file
+        // cannot set either since 4.1 (37)), so naming them would describe a
+        // change that never happens.
         // `sameForImport` raises a conflict on the family, so the dialog has
         // to be able to name it — a family-only difference used to read
         // "The two entries differ." and nothing else.
         if incoming.highlightVendor != existing.highlightVendor {
             diffs.append("device family: \(existing.highlightVendor.label) → \(incoming.highlightVendor.label)")
-        }
-        if (incoming.agentForward ?? false) != (existing.agentForward ?? false) {
-            let label = { (on: Bool) in on ? "on" : "off" }
-            diffs.append("agent forwarding: \(label(existing.agentForward ?? false)) → \(label(incoming.agentForward ?? false))")
         }
         return diffs.isEmpty
             ? "The two entries differ."
@@ -840,12 +834,12 @@ final class AppModel: ObservableObject {
     }
 
     func newLocalTab() {
-        // Inherit the working directory of the active local tab (Terminal.app
-        // behavior); shells report cwd via OSC 7.
-        if let tab = selectedTab, case .local(let current) = tab.content,
-           let directory = current.currentDirectoryPath {
-            FileManager.default.changeCurrentDirectoryPath(directory)
-        }
+        // A new local tab always starts in the home directory (iTerm2's
+        // default, the user's choice in 4.1 (37)). It used to inherit the
+        // active tab's cwd from OSC 7 — but OSC 7 is just bytes in the
+        // stream, so a remote host reached by `ssh` inside a local tab could
+        // pick the directory the NEXT local shell started in. The process cwd
+        // is set to home once in init and nothing changes it any more.
         let controller = LocalTerminalController()
         let shellName = (LocalTerminalController.userShell() as NSString).lastPathComponent
         let tab = SessionTab(content: .local(controller), title: "\(shellName) — This Mac")
@@ -1326,6 +1320,22 @@ final class AppModel: ObservableObject {
             // runloop tick later — same pattern as the sidebar rows.
             DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
         }
+    }
+
+    /// Drag-and-drop in the tab strip: `gap` is counted before the tab is
+    /// removed (see `TabOrder`). Selection follows the tab id, so it never
+    /// changes here.
+    func moveTab(id: UUID, toGap gap: Int) {
+        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let reordered = TabOrder.moved(tabs, from: from, toGap: gap)
+        if reordered.map(\.id) != tabs.map(\.id) { tabs = reordered }
+    }
+
+    /// Tabs → Move Tab Left/Right (⌃⌘← / ⌃⌘→) on the visible tab.
+    func moveSelectedTab(right: Bool) {
+        guard let id = selectedID, let from = tabs.firstIndex(where: { $0.id == id }),
+              let gap = TabOrder.gap(movingOneStep: from, right: right, count: tabs.count) else { return }
+        moveTab(id: id, toGap: gap)
     }
 
     func selectAdjacentTab(offset: Int) {

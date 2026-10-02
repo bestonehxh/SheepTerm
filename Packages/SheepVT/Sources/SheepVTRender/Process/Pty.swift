@@ -82,16 +82,40 @@ public nonisolated enum Pty {
             cArgs.deallocate()
         }
 
+        // Every descriptor above stdio is closed in the child before exec:
+        // the app holds SSH sockets, serial ports, agent sockets and log
+        // files, and a shell (or a tmux it starts) that inherits one keeps
+        // it alive after the app closes it — no FIN reaches a device whose
+        // tab was closed, its VTY stays taken. The bound is computed here,
+        // in the parent (the loop below is all the child may do).
+        let maxFD = closeBound()
+
         var size = winsize(cols: cols, rows: rows)
         var master: Int32 = 0
         let pid = forkpty(&master, nil, nil, &size)
         if pid < 0 { return nil }
         if pid == 0 {
             // Child. Only async-signal-safe calls from here on.
+            var fd: Int32 = 3
+            while fd < maxFD { _ = close(fd); fd += 1 }
             _ = execve(cExecutable, cArgs.base, cEnv.base)
             _exit(127)
         }
         return (pid, master)
+    }
+
+    /// One past the highest descriptor the child might inherit: the highest
+    /// open now (from /dev/fd, which lists every open fd on macOS and
+    /// Linux) plus headroom for any another thread opens before the fork,
+    /// never above the fd limit. Looping to the limit itself cost tens of
+    /// ms per tab when it had been raised to 65 536.
+    static func closeBound() -> Int32 {
+        var limit = rlimit()
+        let ceiling: Int32 = getrlimit(RLIMIT_NOFILE, &limit) == 0
+            ? Int32(clamping: min(limit.rlim_cur, 65_536)) : 10_240
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd") else { return ceiling }
+        let highest = names.compactMap { Int32($0) }.max() ?? 2
+        return min(ceiling, highest &+ 257)
     }
 
     /// Tells the pty its new geometry; the kernel raises SIGWINCH in the child's foreground

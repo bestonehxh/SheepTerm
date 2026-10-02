@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+# Resolved only on Linux, where swift-crypto stands in for CryptoKit.
+Package.resolved

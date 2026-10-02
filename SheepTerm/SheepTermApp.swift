@@ -439,6 +439,13 @@ struct SheepTermCommands: Commands {
             Button("Previous Tab") { model.selectAdjacentTab(offset: -1) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
             Divider()
+            // ⌃⌘ arrows, not ⇧⌘: ⇧⌘←/→ is select-to-line-edge in every text
+            // field (sidebar search, Quick Connect) and the menu would win.
+            Button("Move Tab Left") { model.moveSelectedTab(right: false) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+            Button("Move Tab Right") { model.moveSelectedTab(right: true) }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+            Divider()
             ForEach(1..<10, id: \.self) { number in
                 Button("Tab \(number)") { model.selectTab(number: number) }
                     .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)

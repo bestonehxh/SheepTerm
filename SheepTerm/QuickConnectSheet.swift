@@ -241,7 +241,7 @@ struct QuickConnectSheet: View {
     /// nil means "this text is not a target". The distinction matters: the
     /// first version of this fell back to the raw string whenever the parser
     /// said no, so `10.0.0.1:abc`, `h:99999` and a bare trailing colon all
-    /// sailed through validation and were handed to libssh AS A HOSTNAME —
+    /// sailed through validation and were handed to the SSH layer AS A HOSTNAME —
     /// producing a DNS error that says nothing about the port. The comment on
     /// `addressError` claimed those were caught; they were not.
     private var splitTarget: (user: String?, host: String, port: Int?)? {
@@ -257,7 +257,7 @@ struct QuickConnectSheet: View {
                 parsed.port == 22 && !raw.hasSuffix(":22") ? nil : parsed.port)
     }
 
-    /// What actually goes to libssh.
+    /// What actually goes to the SSH layer.
     /// The host half. When the target does not parse there is no host half
     /// — the raw text stands in so the field is not blanked while the user is
     /// still typing, and `addressError` is what refuses it.
@@ -289,7 +289,7 @@ struct QuickConnectSheet: View {
         return nil
     }
 
-    /// libssh takes the port as UInt32 — reject values it can't
+    /// the SSH connect needs a TCP port — reject values it can't
     /// represent instead of trapping at connect time.
     ///
     /// A port typed into the Host field (`10.0.0.1:2222`) wins over the Port

@@ -16,16 +16,6 @@ final class LocalTerminalController: NSObject {
 
     var onTitleChange: ((String) -> Void)?
     var onExit: ((Int32?) -> Void)?
-    private(set) var currentDirectory: String?
-
-    /// OSC 7 reports arrive as file:// URLs; expose a plain path.
-    var currentDirectoryPath: String? {
-        guard let directory = currentDirectory else { return nil }
-        if directory.hasPrefix("file://"), let url = URL(string: directory) {
-            return url.path
-        }
-        return directory.hasPrefix("/") ? directory : nil
-    }
 
     override init() {
         super.init()
@@ -47,8 +37,9 @@ final class LocalTerminalController: NSObject {
         }
         environment.append("TERM=xterm-256color")
         environment.append("COLORTERM=truecolor")
-        // Makes the stock /etc/zshrc emit OSC 7 cwd reports (same hook
-        // Terminal.app uses), so new tabs can inherit the directory.
+        // Identifies us as Terminal.app to the stock /etc/zshrc hooks. Those
+        // emit OSC 7 cwd reports; nothing reads them since 4.1 (37) — a new
+        // local tab starts at home instead of inheriting (AppModel.newLocalTab).
         environment.append("TERM_PROGRAM=Apple_Terminal")
         environment.append("TERM_PROGRAM_VERSION=453")
         if !seen.contains("LANG") { environment.append("LANG=en_US.UTF-8") }
@@ -117,24 +108,22 @@ extension LocalTerminalController: TerminalViewDelegate {
         onTitleChange?(title)
     }
 
-    func workingDirectoryChanged(_ view: TerminalView, url: String?) {
-        currentDirectory = url
-    }
-
     func bell(_ view: TerminalView) {
         NSSound.beep()
     }
 
-    /// The device replaced the Mac's clipboard (OSC 52). Said out loud because
-    /// nothing else on screen changes when it happens, and what is now on the
-    /// clipboard will be pasted somewhere else entirely — a payload ending in a
-    /// newline runs itself in the next terminal it lands in.
-    func clipboardWritten(_ view: TerminalView, bytes: Int) {
+    /// OSC 52: only when the user turned it on in Settings → Clipboard.
+    func allowsClipboardWrite(_ view: TerminalView) -> Bool {
+        SessionTerminalHost.clipboardWriteAllowed
+    }
+
+    /// Said out loud because nothing else on screen changes when the program
+    /// sets (or is refused) the clipboard; the host records a write so the
+    /// next paste of that text asks first.
+    func clipboardWrite(_ view: TerminalView, outcome: ClipboardWriteOutcome) {
         // No printNotice here — a local shell has no notice channel; the same
         // grey line goes straight into the terminal it came from.
-        let text = bytes < 0
-            ? "the program tried to replace the clipboard with \(-bytes) bytes — refused, that is far more than a copy"
-            : "the program replaced the clipboard (\(bytes) bytes)"
+        guard let text = terminalHost.clipboardWriteNotice(outcome, source: "program") else { return }
         terminalView.feed("\r\n\u{1b}[90m\(text)\u{1b}[0m\r\n")
     }
 

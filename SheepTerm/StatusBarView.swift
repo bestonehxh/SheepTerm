@@ -192,8 +192,11 @@ struct SessionStatusText: View {
         }
     }
 
+    // Contains, not hasSuffix: with agent forwarding on, SSHWorker appends
+    // " · agent" AFTER " · LEGACY", and a suffix match silently un-warned a
+    // legacy session that forwards its agent (found in the 4.1 bug sweep).
     private var isLegacy: Bool {
-        tab.statusInfo?.hasSuffix("LEGACY") == true
+        tab.statusInfo?.contains("· LEGACY") == true
     }
 
     private enum ConnectionState {

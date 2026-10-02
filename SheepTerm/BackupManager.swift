@@ -70,6 +70,9 @@ enum BackupManager {
         "autoReconnect", "chromeStyle", "collapsedGroups", "collapsedHostSections",
         "highlightDefault", "logSessions", "recentsShown", "showRecents",
         "safePasteDelayMilliseconds", "safePasteEnabled",
+        // Settings → Clipboard (OSC 52 write; off unless set). The literal
+        // is `SessionTerminalHost.clipboardWriteKey`.
+        "allowOSC52ClipboardWrite",
         "showStatusBar", "sidebarWidth", "statusShowClock", "statusShowHints",
         "statusShowIP", "statusShowSession", "terminalTheme",
         // The terminal's own look and its scrollback depth: restoring onto a

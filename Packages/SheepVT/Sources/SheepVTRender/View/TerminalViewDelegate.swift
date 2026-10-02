@@ -10,6 +10,18 @@
 
 import Foundation
 
+/// The fate of one OSC 52 write (see `TerminalViewDelegate.clipboardWrite`).
+public nonisolated enum ClipboardWriteOutcome: Equatable, Sendable {
+    /// On the pasteboard. `changeCount` is the pasteboard's count right after
+    /// the write, so a host can tell later whether what is on the clipboard
+    /// is still what the device put there (any other copy moves it).
+    case written(bytes: Int, changeCount: Int)
+    /// The host's `allowsClipboardWrite` said no; the pasteboard is untouched.
+    case blocked(bytes: Int)
+    /// Over `TerminalView.maxClipboardWrite`; the pasteboard is untouched.
+    case tooLarge(bytes: Int)
+}
+
 public protocol TerminalViewDelegate: AnyObject {
     /// The user typed / pasted / the terminal replied: write these bytes to the
     /// device.
@@ -36,12 +48,18 @@ public protocol TerminalViewDelegate: AnyObject {
     /// ⌘-click on an OSC 8 hyperlink.
     func openLink(_ view: TerminalView, url: String)
 
-    /// The device asked to replace the Mac's clipboard (OSC 52) and the view
-    /// did it. Worth saying out loud: the clipboard is shared with every other
-    /// app, a poisoned one carrying a trailing newline runs itself the moment
-    /// it is pasted into another terminal, and nothing else on screen changes
-    /// when it happens. `bytes` is what was written.
-    func clipboardWritten(_ view: TerminalView, bytes: Int)
+    /// May the device replace the Mac's clipboard (OSC 52)? Asked once per
+    /// write, live, so a host can read its setting at that moment. The
+    /// default is **no**: the clipboard is shared with every other app, and a
+    /// poisoned one carrying a trailing newline runs itself the moment it is
+    /// pasted into a terminal. A host that never answers gets no writes.
+    func allowsClipboardWrite(_ view: TerminalView) -> Bool
+
+    /// What became of an OSC 52 write — written, refused because the host
+    /// said no, or refused for size. Always reported, because nothing else on
+    /// screen changes when it happens. Never called for an empty or
+    /// non-UTF-8 payload (nothing to write, nothing written).
+    func clipboardWrite(_ view: TerminalView, outcome: ClipboardWriteOutcome)
 
     /// Return false to swallow a paste — the app's SafePaste takes over and
     /// feeds the text back through `send` at its own pace.
@@ -59,7 +77,8 @@ public extension TerminalViewDelegate {
     func workingDirectoryChanged(_ view: TerminalView, url: String?) {}
     func scrolled(_ view: TerminalView) {}
     func bell(_ view: TerminalView) {}
-    func clipboardWritten(_ view: TerminalView, bytes: Int) {}
+    func allowsClipboardWrite(_ view: TerminalView) -> Bool { false }
+    func clipboardWrite(_ view: TerminalView, outcome: ClipboardWriteOutcome) {}
     func openLink(_ view: TerminalView, url: String) {}
     func shouldPaste(_ view: TerminalView, text: String) -> Bool { true }
     func userTyped(_ view: TerminalView) {}

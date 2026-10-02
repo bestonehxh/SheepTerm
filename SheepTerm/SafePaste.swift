@@ -78,6 +78,83 @@ nonisolated struct SafePastePlan: Equatable, Sendable {
     }
 }
 
+/// "Is what is on the clipboard right now something a terminal session put
+/// there (OSC 52)?" — the decision behind the planted-paste prompt, kept pure
+/// so the standalone harness tests the real thing.
+///
+/// A device that may set the clipboard can plant `evil-cmd\n`; a one-line
+/// paste with a trailing newline is not a multi-line paste, so Safe Paste
+/// (and a local tab, which has none) would send it without asking and the
+/// newline would run it. So every paste of device-written text asks first,
+/// whatever Safe Paste says and in every tab kind.
+///
+/// Identity is the pasteboard's `changeCount` recorded right after the
+/// device's write — process-wide, because every tab shares the one
+/// pasteboard. Any other copy (here or in any other app) moves the count and
+/// the prompt goes away on its own; nothing compares text.
+nonisolated struct PlantedClipboard: Equatable, Sendable {
+    /// The pasteboard's change count right after the last device write that
+    /// actually reached it; nil when no device write ever did.
+    private(set) var plantedChangeCount: Int?
+
+    /// Every OSC 52 outcome lands here. A write that was blocked (setting
+    /// off) or refused (too large) never touched the pasteboard, so it
+    /// records nothing — and it does NOT forget an earlier plant either:
+    /// turning the setting off later does not make text already planted safe.
+    mutating func noteDeviceWrite(reachedPasteboard: Bool, changeCount: Int) {
+        guard reachedPasteboard else { return }
+        plantedChangeCount = changeCount
+    }
+
+    /// True when the clipboard still holds exactly what a device put there.
+    func needsConfirmation(currentChangeCount: Int) -> Bool {
+        guard let plantedChangeCount else { return false }
+        return plantedChangeCount == currentChangeCount
+    }
+
+    static let previewLimit = 200
+
+    /// The text as the prompt shows it: one line, every control character
+    /// made visible (a line break is THE thing the user must see — it is
+    /// what runs the command), bidi overrides neutralised so the preview
+    /// cannot be made to read differently from what will be sent, and cut at
+    /// `limit` characters with the remainder counted.
+    static func preview(_ text: String, limit: Int = previewLimit) -> String {
+        var out = ""
+        var shown = 0
+        var index = text.unicodeScalars.startIndex
+        let scalars = text.unicodeScalars
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            var next = scalars.index(after: index)
+            let piece: String
+            switch scalar.value {
+            case 0x0D:
+                if next < scalars.endIndex, scalars[next].value == 0x0A { next = scalars.index(after: next) }
+                piece = "⏎"
+            case 0x0A:
+                piece = "⏎"
+            case 0x09:
+                piece = "⇥"
+            case 0x00...0x1F, 0x7F...0x9F,
+                 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069, 0x061C:
+                piece = "\u{FFFD}"
+            default:
+                piece = String(scalar)
+            }
+            if shown >= limit {
+                let rest = scalars[index...].count
+                out += "… (+\(rest) more)"
+                return out
+            }
+            out += piece
+            shown += 1
+            index = next
+        }
+        return out
+    }
+}
+
 @MainActor
 final class SafePastePacer {
     enum EndReason: Equatable {

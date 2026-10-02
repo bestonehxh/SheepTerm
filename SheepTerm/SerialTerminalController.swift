@@ -388,15 +388,17 @@ extension SerialTerminalController: TerminalViewDelegate {
         NSSound.beep()
     }
 
-    /// The device replaced the Mac's clipboard (OSC 52). Said out loud because
-    /// nothing else on screen changes when it happens, and what is now on the
-    /// clipboard will be pasted somewhere else entirely — a payload ending in a
-    /// newline runs itself in the next terminal it lands in.
-    func clipboardWritten(_ view: TerminalView, bytes: Int) {
-        if bytes < 0 {
-            printNotice("the device tried to replace the clipboard with \(-bytes) bytes — refused, that is far more than a copy")
-        } else {
-            printNotice("the device replaced the clipboard (\(bytes) bytes)")
+    /// OSC 52: only when the user turned it on in Settings → Clipboard.
+    func allowsClipboardWrite(_ view: TerminalView) -> Bool {
+        SessionTerminalHost.clipboardWriteAllowed
+    }
+
+    /// Said out loud because nothing else on screen changes when the device
+    /// sets (or is refused) the clipboard; the host records a write so the
+    /// next paste of that text asks first.
+    func clipboardWrite(_ view: TerminalView, outcome: ClipboardWriteOutcome) {
+        if let notice = terminalHost.clipboardWriteNotice(outcome, source: "device") {
+            printNotice(notice)
         }
     }
 

@@ -940,11 +940,25 @@ struct VendorFingerprint {
     static let signatures: [(Vendor, [[UInt8]])] = {
         func s(_ strings: [String]) -> [[UInt8]] { strings.map { Array($0.utf8) } }
         return [
-            // `aos-cx` covers every command that matters: the `show version`
-            // / `show system` banner AND the `!Version AOS-CX ...` header that
-            // opens `show running-config`, which is what most sessions run.
-            (.arubaCX, s(["arubaos-cx", "aos-cx"])),
-            (.cisco, s(["cisco ios software", "ios-xe", "nx-os", "cisco nexus",
+            // The three forms AOS-CX prints about ITSELF: `arubaos-cx` is the
+            // login banner, `aos-cx version` the image row `show version`
+            // prints on builds that never spell the long name (real capture:
+            // `AOS-CX Version      : FL.10.16.1006`), `!version aos-cx` the
+            // header that opens `show running-config`. NOT bare `aos-cx`:
+            // an abbreviation that short is quotable in another vendor's
+            // config (`description AOS-CX uplink`) — the same class of bug
+            // that cost `fortigate` its place below.
+            (.arubaCX, s(["arubaos-cx", "aos-cx version", "!version aos-cx"])),
+            // `current configuration :` is `show run`'s byte-count header —
+            // the one string a Cisco config dump prints that belongs to IOS
+            // alone: ArubaOS also opens with `Building Configuration...`,
+            // AOS-CX with `!Version`, Comware with ` version 7.1`. A config
+            // signature had to exist: a Cat9k core opened straight into
+            // `show run` (2026-09-30 capture) prints no Cisco banner at all,
+            // and `description FortiGate` further down the dump — the uplink
+            // to the customer's firewall — won the race and locked FortiOS.
+            (.cisco, s(["cisco ios software", "current configuration :",
+                        "ios-xe", "nx-os", "cisco nexus",
                         "cisco adaptive security"])),
             (.comware, s(["comware software", "h3c comware", "hpe comware"])),
             // The first three come from `display version` / the login banner.
@@ -967,7 +981,14 @@ struct VendorFingerprint {
             (.arubaOS, s(["aruba operating system", "arubaos (", "[mynode]"])),
             (.juniper, s(["junos ", "juniper networks"])),
             (.panos, s(["pan-os", "palo alto networks"])),
-            // `fortigate`/`fortios ` catch `get system status`; the two
+            // `version: fortigate`/`fortios ` catch `get system status` — the
+            // Version row is the box naming ITSELF (`Version: FortiGate-100F
+            // v7.6.7,build3704` in the captures; older firmware says
+            // `Firmware version: FortiOS v6.x`). NOT bare `fortigate`: a NAME
+            // is quotable anywhere — a Cat9k core's `show run` carried
+            // `description FortiGate` on its firewall uplinks (2026-09-30
+            // capture) and `show interface status` repeats the word in a
+            // column, which locked FortiOS on a Cisco session. The two
             // `config ...` blocks catch `show` / `show full-configuration` —
             // the command most sessions run. FortiOS has no version header in
             // `show`, so unlike AOS-CX its config SYNTAX is the signal:
@@ -981,9 +1002,9 @@ struct VendorFingerprint {
             // Aruba CX capture prints `Execute "show alias" ...`) and
             // mislocked — the full command form is FortiOS-specific (everyone
             // else says just `ping`/`traceroute`) and clean across the corpus.
-            (.fortios, s(["fortigate", "fortios ", "config system global",
-                          "config firewall policy", "execute ping",
-                          "execute traceroute"])),
+            (.fortios, s(["version: fortigate", "fortios ",
+                          "config system global", "config firewall policy",
+                          "execute ping", "execute traceroute"])),
             // `check point gaia`/`gaia r8` catch `show version all` and the
             // banner. But Gaia `show configuration` (clish) prints neither —
             // its config syntax is the signal: `set installer policy` opens
