@@ -93,6 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // live session, and Escape maps to it as well.
         quit.keyEquivalent = ""
         cancel.keyEquivalent = "\r"
+        // Red, as a button that drops live sessions should look (SheepAlert
+        // paints `hasDestructiveAction`); it is still not the default.
+        quit.hasDestructiveAction = true
         return alert.sheepStyled().runModal() == .alertFirstButtonReturn ? .quit : .cancel
     }
 

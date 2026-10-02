@@ -610,8 +610,7 @@ final class AppModel: ObservableObject {
         for (index, group) in groups.enumerated() {
             var corrections = hygieneNote
             hygieneNote = ""
-            // Short, because an alert whose text runs past ~3 rendered lines
-            // is laid out the wide way (see `NSAlert.sheepStyled`).
+            // Short: one line per fact, read at a glance.
             if repeated[index] > 0 {
                 corrections += "\n\n\(repeated[index]) repeated "
                     + "row\(repeated[index] == 1 ? "" : "s") collapsed."
@@ -636,10 +635,9 @@ final class AppModel: ObservableObject {
         // user's data, and they get to see what changed before accepting.)
         guard let existing = store.existingGroup(matching: group) else {
             let alert = SheepAlert()
-            // Counts on the message line, detail short: an alert whose text
-            // runs long is laid out with the icon on the LEFT (see
-            // `NSAlert.sheepStyled`). `corrections` is the exception — it
-            // names changes made to the user's own data and is allowed to.
+            // Counts on the message line, detail short. `corrections` is the
+            // exception — it names changes made to the user's own data and is
+            // allowed to run long (SheepAlert stays centred either way).
             // A group can be all headings and no hosts (someone exported a
             // group they had only set up): "0 hosts" alone reads like an empty
             // file, so the sections are named instead of left unsaid.

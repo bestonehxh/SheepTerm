@@ -1274,23 +1274,19 @@ struct AddHostsSheet: View {
     /// on screen while this runs, and an alert stacked on a sheet is a mess.
     private func report(added: Int, existed: Int, skipped: Int, repeated: Int,
                         group: String?, filed: (hosts: Int, sections: Int), hygiene: String?) {
-        // The COUNT goes on the message line and the rest stays short: an
-        // alert whose text block runs past ~3 lines is laid out the wide way,
-        // with the icon shoved to the left (measured — see `sheepStyled`).
+        // The COUNT goes on the message line and the rest stays short. (The
+        // reason used to be layout — NSAlert left-aligned long text; since
+        // 4.2 (2) every alert is a SheepAlert that stays centred, so it is
+        // only readability now.)
         let message = group.map { "Added \(added) host\(added == 1 ? "" : "s") to “\($0)”." }
             ?? "No hosts were added."
         // ONE line for everything, zeros left out, and the words kept short:
-        // measured (see `NSAlert.sheepStyled`) — "4 filed · 2 existed · 1
-        // repeated · 1 skipped." is 45 characters and stays compact, while
-        // the same facts as three sentences wrapped past the third rendered
-        // line and took the icon to the left with them. A very long group
-        // name on the message line can still push it wide; the name is worth
-        // more there than the layout.
+        // "4 filed · 2 existed · 1 repeated · 1 skipped." reads at a glance;
+        // the same facts as three sentences did not.
         var counts: [String] = []
         if added > 0, filed.hosts > 0 {
             // On its own it can say where they went; beside other counts it
-            // has to be two words or the alert loses the compact layout
-            // (measured — see `NSAlert.sheepStyled`).
+            // stays two words so the line stays one line.
             let alone = existed == 0 && repeated == 0 && skipped == 0
             counts.append(alone
                           ? "\(filed.hosts) filed under \(filed.sections) "
@@ -1303,8 +1299,7 @@ struct AddHostsSheet: View {
         var detail: [String] = []
         if !counts.isEmpty { detail.append(counts.joined(separator: " · ") + ".") }
         // The hygiene report is the one part that cannot be short: it names
-        // every correction made to the user's own data, so it is allowed to
-        // push this alert into the wide layout on the rare run that has one.
+        // every correction made to the user's own data.
         let informative = (detail + (hygiene.map { [$0] } ?? [])).joined(separator: "\n")
         DispatchQueue.main.async {
             let alert = SheepAlert()

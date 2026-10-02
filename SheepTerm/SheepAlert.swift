@@ -19,7 +19,9 @@ import SwiftUI
 ///   • the first button is the default (Return) — reassigning
 ///     `keyEquivalent` on the returned NSButton works as it did;
 ///   • a button titled "Cancel" that is not first answers Escape, and
-///     Escape (cancelOperation) presses "Cancel" wherever it is;
+///     Escape (cancelOperation) presses the Cancel button wherever it is;
+///   • (4.2 (2)) destructive buttons are red, Cancel sits last and is never
+///     drawn blue — see `build`;
 ///   • `window` is the panel, so `sheetParent?.endSheet(window, …)` tears a
 ///     sheet down exactly as before;
 ///   • the object keeps itself alive while a sheet is up, like NSAlert.
@@ -103,7 +105,7 @@ final class SheepAlert: NSObject {
 
     /// Escape with no Escape button: press "Cancel" if there is one.
     fileprivate func cancel() {
-        if let cancel = buttons.first(where: { $0.title == "Cancel" }) {
+        if let cancel = buttons.first(where: Self.isCancel) {
             cancel.performClick(nil)
         }
     }
@@ -121,8 +123,52 @@ final class SheepAlert: NSObject {
 
     fileprivate final class Panel: NSPanel {
         weak var owner: SheepAlert?
+        /// The button Return answers when it must not be drawn as the
+        /// default (a Cancel — see `build`).
+        weak var returnButton: NSButton?
         override var canBecomeKey: Bool { true }
         override func cancelOperation(_ sender: Any?) { owner?.cancel() }
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            if let returnButton, event.type == .keyDown,
+               event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function]).isEmpty,
+               event.charactersIgnoringModifiers == "\r" || event.charactersIgnoringModifiers == "\u{3}" {
+                returnButton.performClick(nil)
+                return true
+            }
+            return super.performKeyEquivalent(with: event)
+        }
+    }
+
+    /// Delete…, Remove… and Quit read as destructive wherever they appear;
+    /// a call site can mark any other button with `hasDestructiveAction`.
+    static func isDestructive(_ button: NSButton) -> Bool {
+        button.hasDestructiveAction || button.title == "Quit"
+            || button.title.hasPrefix("Delete") || button.title.hasPrefix("Remove")
+    }
+
+    static func isCancel(_ button: NSButton) -> Bool { button.title.hasPrefix("Cancel") }
+
+    /// The soft blue macOS 26 gives an alert's default button in a dark
+    /// window (sampled from the system Quit alert the user liked, 4.2 (2)) —
+    /// not the saturated accent, which read too loud on the glass.
+    static let defaultBlue = NSColor(srgbRed: 0.42, green: 0.64, blue: 0.82, alpha: 1)
+    /// Red and green in the SAME soft tone as `defaultBlue` (the user asked
+    /// for one family): destructive buttons, and the host-key Trust button.
+    static let destructiveRed = NSColor(srgbRed: 0.84, green: 0.45, blue: 0.45, alpha: 1)
+    static let confirmGreen = NSColor(srgbRed: 0.42, green: 0.72, blue: 0.52, alpha: 1)
+
+    /// A filled capsule in `color` with white text, the height of a large
+    /// push button.
+    private static func paint(_ button: NSButton, _ color: NSColor) {
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.backgroundColor = color.cgColor
+        button.layer?.cornerRadius = 14
+        button.attributedTitle = NSAttributedString(string: button.title, attributes: [
+            .foregroundColor: NSColor.white,
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large), weight: .semibold),
+        ])
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
     }
 
     private func build() -> Panel {
@@ -187,10 +233,51 @@ final class SheepAlert: NSObject {
 
         // Two buttons side by side (as NSAlert lays out a short pair), three
         // or more stacked; every button the full width it is given.
-        let buttonStack = NSStackView(views: buttons)
-        buttonStack.orientation = buttons.count == 2 ? .horizontal : .vertical
+        // A button marked `hasDestructiveAction` (Quit, Delete) is painted
+        // red, the way the system marks one; Return/Escape are untouched —
+        // the call site still decides which button is the default.
+        // One look across the app (4.2 (2), the user's rules):
+        //  • destructive buttons are red — drawn by hand, because
+        //    `bezelColor` only shows while the window is key;
+        //  • Cancel is never painted as the default: where Cancel answers
+        //    Return, the panel maps Return to it instead of the button's
+        //    key equivalent (which is what turns a button blue);
+        //  • Cancel sits last — right of a pair, bottom of a stack. Only the
+        //    ORDER ON SCREEN changes; response codes follow addButton order.
+        for button in buttons where Self.isCancel(button) && button.keyEquivalent == "\r" {
+            button.keyEquivalent = ""
+            panel.returnButton = button
+        }
+        // The default (Return) button that is NOT a Cancel — OK, Import,
+        // Replace… — stays the familiar blue, drawn by hand for the same
+        // reason as the red one: `bezelColor`/default tint only show while
+        // the window is key.
+        for button in buttons where button.keyEquivalent == "\r" && !Self.isDestructive(button) {
+            Self.paint(button, Self.defaultBlue)
+            // A borderless button is not the window's default button, so the
+            // panel answers Return for it (as it does for a Cancel default).
+            panel.returnButton = button
+        }
+        // When Cancel holds Return (Paste, Open Known Hosts…), the first
+        // other non-destructive button is still the dialog's main action:
+        // blue like any default, but it does NOT answer Return.
+        if panel.returnButton.map(Self.isCancel) == true,
+           let primary = buttons.first(where: { !Self.isCancel($0) && !Self.isDestructive($0) }) {
+            Self.paint(primary, Self.defaultBlue)
+        }
+        for button in buttons where Self.isDestructive(button) {
+            Self.paint(button, Self.destructiveRed)
+        }
+        let ordered = buttons.filter { !Self.isCancel($0) } + buttons.filter(Self.isCancel)
+        let buttonStack = NSStackView(views: ordered)
+        // A pair sits side by side only while both titles fit their half
+        // with room to spare ("Open Known Hosts…" in bold did not); else stack.
+        let half = (Self.contentWidth - 10) / 2
+        let pairFits = buttons.count == 2
+            && buttons.allSatisfy { $0.attributedTitle.size().width + 32 <= half }
+        buttonStack.orientation = pairFits ? .horizontal : .vertical
         buttonStack.distribution = .fillEqually
-        buttonStack.spacing = buttons.count == 2 ? 10 : 8
+        buttonStack.spacing = pairFits ? 10 : 8
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
         buttonStack.widthAnchor.constraint(equalToConstant: Self.contentWidth).isActive = true
         if buttonStack.orientation == .vertical {

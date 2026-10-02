@@ -85,7 +85,7 @@ struct HostKeyPromptView: View {
                 // Trust is the green button (the user's choice in 4.1 (38)),
                 // but Return still answers CANCEL — trusting a key has to be a
                 // deliberate click, never a reflexive Return. Escape cancels
-                // too (AuthPrompt.confirmHostKey).
+                // too (both in AuthPrompt.confirmHostKey's key monitor).
                 Button { completion(true) } label: {
                     Text("Trust & Connect").frame(maxWidth: .infinity)
                 }
@@ -93,7 +93,10 @@ struct HostKeyPromptView: View {
                 Button { completion(false) } label: {
                     Text("Cancel").frame(maxWidth: .infinity)
                 }
-                .keyboardShortcut(.defaultAction)
+                // Not `.keyboardShortcut(.defaultAction)`: that paints Cancel
+                // blue, and the user wants only Trust coloured (4.2 (2)).
+                // Return still answers Cancel — AuthPrompt.confirmHostKey's
+                // key monitor maps Return and Escape both to it.
                 .buttonStyle(.bordered)
             }
             .controlSize(.large)
@@ -130,7 +133,7 @@ private struct TrustButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .padding(.vertical, 7)
             .background(
-                Capsule().fill(Color(nsColor: .systemGreen)
+                Capsule().fill(Color(nsColor: SheepAlert.confirmGreen)
                     .opacity(configuration.isPressed ? 0.75 : 1))
             )
             .contentShape(Capsule())

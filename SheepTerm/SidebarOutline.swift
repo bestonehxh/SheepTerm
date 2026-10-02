@@ -1388,11 +1388,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = message
-        // Short on purpose: past ~3 rendered lines the alert flips to the
-        // wide layout and the icon leaves the centre (see `sheepStyled`).
         alert.informativeText = "This cannot be undone."
         alert.addButton(withTitle: "Cancel")   // default, so Return cancels
-        alert.addButton(withTitle: "Continue")
+        // Unfiling many hosts cannot be undone: red like Delete/Remove.
+        alert.addButton(withTitle: "Continue").hasDestructiveAction = true
         return alert.sheepStyled().runModal() == .alertSecondButtonReturn
     }
 

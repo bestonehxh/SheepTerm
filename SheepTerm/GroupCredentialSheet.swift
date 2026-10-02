@@ -189,8 +189,6 @@ struct GroupCredentialSheet: View {
             let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = message
-            // Short on purpose — see `NSAlert.sheepStyled` for the measured
-            // point where the icon leaves the centre.
             alert.informativeText = "Nothing was changed."
             alert.addButton(withTitle: "OK")
             alert.sheepStyled().runModal()

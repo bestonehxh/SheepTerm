@@ -4099,10 +4099,7 @@ final class HostStore: ObservableObject {
 
     /// The question asked before a MENU unfiles several hosts at once.
     ///
-    /// One function because both menu paths ask it, and because the copy has
-    /// a measured budget: past ~30 characters on the message line the alert
-    /// stops using the compact layout and the icon leaves the centre (see
-    /// `NSAlert.sheepStyled`). It counts HOSTS — twelve hosts under one
+    /// One function because both menu paths ask it. It counts HOSTS — twelve hosts under one
     /// heading is one heading, so "Remove 1 heading?" was the wrong number,
     /// and "Remove 12 headings?" was the wrong noun.
     /// The singular branch is unreachable through the menu — `confirmUnfiling`

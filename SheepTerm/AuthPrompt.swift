@@ -127,10 +127,12 @@ enum AuthPrompt {
         panel.setContentSize(hosting.fittingSize)
         panel.center()
 
-        // Escape answers Cancel (the view's onExitCommand needs focus inside
-        // it; this does not).
+        // Return and Escape both answer Cancel (keyCodes 36 Return, 76
+        // keypad Enter, 53 Escape). Done here rather than with the view's
+        // `.defaultAction`, which would paint Cancel blue — only Trust is
+        // coloured.
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 53, event.window === panel else { return event }
+            guard [36, 76, 53].contains(event.keyCode), event.window === panel else { return event }
             box.trusted = false
             NSApp.stopModal()
             return nil
