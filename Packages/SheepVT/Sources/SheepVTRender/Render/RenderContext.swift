@@ -62,10 +62,6 @@ final class RenderContext {
 
     /// Renderers per font, so a font is let go of exactly once.
     private var fontUsers: [FontKey: Int] = [:]
-    /// `glyphCache.rasterised` at the last clear — a clear that would remove
-    /// nothing is skipped (the default font every renderer starts on is let go
-    /// of before it ever drew a glyph).
-    private var rasterisedAtClear = 0
 
     /// The colour atlas starts small. It holds emoji and other colour glyphs
     /// only, which most sessions never show; at 1024² it was 4 MB of texture
@@ -167,6 +163,10 @@ final class RenderContext {
             return
         }
         fontUsers[key] = nil
+        // Only a font that put glyphs in the atlases leaves dead weight. The
+        // default font every renderer starts on is let go of before its first
+        // frame — every new tab used to clear every other tab's glyphs here.
+        guard glyphCache.fontsWithGlyphs.contains(key) else { return }
         clearGlyphs()
     }
 
@@ -174,8 +174,6 @@ final class RenderContext {
     var fontsInUse: Int { fontUsers.count }
 
     private func clearGlyphs() {
-        guard glyphCache.rasterised != rasterisedAtClear else { return }
-        rasterisedAtClear = glyphCache.rasterised
         glyphCache.reset()
         grayAtlas.clear()
         colorAtlas.clear()

@@ -244,7 +244,7 @@ nonisolated enum Highlighter {
             let end = #"(?![0-9a-z_:])"#
             out.append(HighlightRuleConfig(
                 name: "timestamp",
-                pattern: #"\b\d{4}[-/]\d{2}[-/]\d{2}(?:(?:[t ]"# + time + #")|"# + end + ")"
+                pattern: #"\b\d{4}([-/])\d{2}\1\d{2}(?:(?:[t ]"# + time + #")|"# + end + ")"
                     + #"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ \t]+\d{1,2}(?:[ \t]+\d{4})?[ \t]+"# + time
                     + #"|(?<![0-9a-f:])"# + time,
                 colorHex: "8A8F98", caseInsensitive: true

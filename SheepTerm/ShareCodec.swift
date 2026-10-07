@@ -103,6 +103,9 @@ enum ShareCodec {
             var host = host
             host.credentialID = nil
             host.agentForward = nil
+            // The jump host is a path THIS Mac takes, chosen by its user —
+            // and an id that means nothing outside this hosts.json.
+            host.jumpHostID = nil
             return host
         }
         return copy
@@ -118,6 +121,9 @@ enum ShareCodec {
             host.credentialID = nil
             host.agentForward = false
             host.cipherMode = nil
+            // A file must not decide which bastion this Mac logs into and
+            // types a password at: the importer picks one in Edit Host.
+            host.jumpHostID = nil
             return host
         }
         return copy

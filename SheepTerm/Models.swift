@@ -3259,7 +3259,8 @@ final class HostStore: ObservableObject {
             // Same reasoning: a file that changes only this must raise the
             // conflict, or Replace would silently keep the old answer.
             && (a.disablePaging ?? false) == (b.disablePaging ?? false)
-            && a.jumpHostID == b.jumpHostID
+        // jumpHostID is NOT compared: ShareCodec strips it both ways, so a
+        // file can never carry one and a Replace keeps ours (like cipherMode).
     }
 
     /// Applies an import after the dialog decided the outcome (0.4).
@@ -3371,6 +3372,7 @@ final class HostStore: ObservableObject {
                     // forwarding off and our cipher policy back to auto.
                     merged.agentForward = current.agentForward
                     merged.cipherMode = current.cipherMode
+                    merged.jumpHostID = current.jumpHostID
                     // In place: the slot is claimed by this row alone, so no
                     // later row can read or overwrite what was just written.
                     groups[index].hosts[hostIndex] = merged

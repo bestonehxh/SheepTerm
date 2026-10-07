@@ -391,10 +391,14 @@ func plainOverlay() -> FrameOverlay {
     @Test func renderersOnOneDeviceShareTheirGlyphs() throws {
         guard let a = try makeHarness(), let b = try makeHarness() else { return }
         #expect(a.renderer.context === b.renderer.context)
-        a.terminal.feed("interface up")
+        // Glyphs now outlive a test (the atlases are only cleared when a
+        // font's last user goes away WITH glyphs behind), so a text no other
+        // test draws: the glyphs are the proof that the first frame did work.
+        let text = "ΨΩΞ shared-\(Int.random(in: 1000...9999))"
+        a.terminal.feed(text)
         a.render(plainOverlay())
         #expect(a.renderer.lastFrameStats.glyphsRasterised > 0)
-        b.terminal.feed("interface up")
+        b.terminal.feed(text)
         b.render(plainOverlay())
         #expect(b.renderer.lastFrameStats.glyphsRasterised == 0)     // nothing new to draw
         #expect(b.renderer.lastFrameStats.rowsRebuilt == b.rows)      // but its OWN rows
@@ -446,6 +450,37 @@ func plainOverlay() -> FrameOverlay {
         #expect(a.renderer.lastFrameStats.glyphsRasterised > 0)       // put back once
         a.render(plainOverlay())
         #expect(a.renderer.lastFrameStats.glyphsRasterised == 0)      // and cached again
+    }
+
+    /// Review fix (4.2 (5)): a renderer that never drew with its default font
+    /// — every new tab, before its first frame — must not clear the shared
+    /// atlases when it moves to the real font or goes away.
+    @Test func aRendererThatNeverDrewLeavesTheSharedAtlasesAlone() throws {
+        guard let a = try makeHarness() else { return }
+        a.terminal.feed("interface up")
+        a.render(plainOverlay())
+        let context = a.renderer.context
+        let gray = context.grayAtlas.generation, color = context.colorAtlas.generation
+        do {
+            let fresh = MetalRenderer(context: context)          // default font, never draws
+            fresh.fontSet = a.renderer.fontSet                    // swaps to the shared font
+            #expect(context.grayAtlas.generation == gray)
+        }
+        #expect(context.grayAtlas.generation == gray)
+        #expect(context.colorAtlas.generation == color)
+        a.render(plainOverlay())
+        #expect(a.renderer.lastFrameStats.glyphsRasterised == 0)      // nothing had to come back
+    }
+
+    /// A reset hands the atlas a fresh texture: a frame still in flight keeps
+    /// sampling the old one instead of a texture being rewritten under it.
+    @Test func anAtlasResetUsesAFreshTexture() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { return }
+        let atlas = try #require(GlyphAtlas(device: device, size: 64, maxSize: 64, format: .grayscale))
+        let before = atlas.texture
+        atlas.clear()
+        #expect(atlas.texture !== before)
+        #expect(atlas.texture.width == 64)
     }
 
     /// The colour atlas starts small (emoji only) and grows when it has to.

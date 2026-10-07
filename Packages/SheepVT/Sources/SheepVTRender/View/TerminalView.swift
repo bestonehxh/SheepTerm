@@ -1126,10 +1126,14 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
 
     /// Paste `text` the way a paste should reach the device — after the host's
     /// SafePaste veto, CR for newlines, bracketed when the program asked.
-    public func pasteText(_ text: String) {
-        guard delegate?.shouldPaste(self, text: text) ?? true else { return }
+    /// Returns whether the bytes went out now; false when the host vetoed
+    /// (it may still send the text itself later, after its own question).
+    @discardableResult
+    public func pasteText(_ text: String) -> Bool {
+        guard delegate?.shouldPaste(self, text: text) ?? true else { return false }
         send(KeyEncoder.paste(text, bracketed: terminal.modes.bracketedPaste), keystroke: false)
         scrollToBottom()
+        return true
     }
 
     @objc public override func selectAll(_ sender: Any?) {

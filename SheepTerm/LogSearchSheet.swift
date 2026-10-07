@@ -157,6 +157,9 @@ struct LogSearchSheet: View {
         let query = LogSearch.Query(text: text, regex: regex, caseSensitive: caseSensitive)
         guard !query.text.isEmpty else {
             generation += 1
+            // The run in flight polls the box, not `generation`: tell it to
+            // stop, or its result would land under an empty field.
+            LogSearchGeneration.shared.set(generation)
             outcome = nil
             problem = nil
             running = false

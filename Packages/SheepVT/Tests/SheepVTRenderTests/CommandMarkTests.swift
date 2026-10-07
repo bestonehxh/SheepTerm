@@ -153,6 +153,49 @@ import SheepVT
         #expect(view.terminal.commandLines().count == 1)
     }
 
+    /// A command longer than the screen wraps; Return is pressed on the
+    /// continuation row, but the mark belongs to the HEAD — and survives the
+    /// widen that folds the continuation back into it.
+    @Test func aWrappedCommandIsMarkedOnItsHeadAndSurvivesWidening() {
+        let view = makeView(rows: 6, scrollback: 100)
+        let cols = view.terminal.cols
+        let command = "Switch# show " + String(repeating: "x", count: cols)   // > cols: wraps once
+        view.feed(command)
+        view.send([0x0D])
+        let marks = view.terminal.commandLines()
+        #expect(marks.count == 1)
+        let head = view.terminal.buffer.lineNumber(ofScreenRow: 0)
+        #expect(marks == [head])
+        #expect(view.terminal.buffer.row(line: head)?.string().hasPrefix("Switch# show") == true)
+        view.feed("\r\nout\r\nSwitch# ")
+        view.terminal.resize(cols: cols * 2 + 20, rows: 6)       // the line fits on one row now
+        let after = view.terminal.commandLines()
+        #expect(after.count == 1)
+        #expect(view.terminal.buffer.row(line: after[0])?.string().hasPrefix("Switch# show") == true)
+    }
+
+    /// Blanks inside a wrapped output line are part of the line.
+    @Test func copyLastOutputKeepsBlanksInsideAWrappedLine() {
+        let view = makeView(rows: 6, scrollback: 100)
+        let cols = view.terminal.cols
+        view.feed("# cmd")
+        view.send([0x0D])
+        let first = "a" + String(repeating: " ", count: cols - 1)       // fills the row, ends in blanks
+        view.feed("\r\n" + first + "b\r\n# ")
+        #expect(view.terminal.lastCommandOutput() == first + "b")
+    }
+
+    /// Erasing the screen erases the commands on it: no hairline on a blank
+    /// row, no stop for ⌘↓.
+    @Test func erasingTheScreenDropsTheMarks() {
+        let view = makeView()
+        view.feed("# cmd")
+        view.send([0x0D])
+        #expect(view.terminal.commandLines().count == 1)
+        view.feed("\u{1b}[2J")
+        #expect(view.terminal.commandLines().isEmpty)
+    }
+
     /// The hairline: a marked row has one more decoration than it had.
     @Test func aMarkedRowGetsAHairline() throws {
         guard let harness = try makeHarness() else { return }

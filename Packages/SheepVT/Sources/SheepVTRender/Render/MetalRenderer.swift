@@ -613,6 +613,11 @@ final class GlyphCache: GlyphSource {
     private var cache: [Key: Entry] = [:]
     /// Total glyphs rasterised since creation (the renderer reports deltas).
     private(set) var rasterised = 0
+    /// Fonts with at least one glyph in the atlases since the last reset —
+    /// what `RenderContext.releaseFont` asks before clearing: a renderer that
+    /// only ever held its default font and never drew with it leaves nothing
+    /// behind, and clearing for it would throw every other tab's glyphs away.
+    private(set) var fontsWithGlyphs: Set<FontKey> = []
 
     init(rasterizer: GlyphRasterizer, gray: GlyphAtlas, color: GlyphAtlas) {
         self.rasterizer = rasterizer
@@ -628,7 +633,10 @@ final class GlyphCache: GlyphSource {
         rasterizer.fontSmoothing = key.smoothing
     }
 
-    func reset() { cache.removeAll(keepingCapacity: true) }
+    func reset() {
+        cache.removeAll(keepingCapacity: true)
+        fontsWithGlyphs.removeAll()
+    }
 
     func glyph(_ scalar: Unicode.Scalar, bold: Bool, italic: Bool) -> GlyphPlacement? {
         lookup(Key(font: fontKey, text: String(scalar), bold: bold, italic: italic), scalar: scalar)
@@ -677,6 +685,7 @@ final class GlyphCache: GlyphSource {
         }
         atlas.write(region: region, bitmap: bm)
         rasterised += 1
+        fontsWithGlyphs.insert(key.font)
 
         // The bitmap and the atlas are both top-down, so the region maps
         // straight onto the quad: v0 is its top row.

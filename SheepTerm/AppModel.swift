@@ -776,9 +776,7 @@ final class AppModel: ObservableObject {
         if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
             diffs.append("disable paging: \((existing.disablePaging ?? false) ? "on" : "off") → \((incoming.disablePaging ?? false) ? "on" : "off")")
         }
-        if incoming.jumpHostID != existing.jumpHostID {
-            diffs.append("jump host: \(existing.jumpHostID == nil ? "none" : "set") → \(incoming.jumpHostID == nil ? "none" : "set")")
-        }
+        // No jump-host line: ShareCodec strips it on import, a Replace keeps ours.
         return diffs.isEmpty
             ? "The two entries differ."
             : "Differences (yours → file):\n" + diffs.joined(separator: "\n")
@@ -845,8 +843,17 @@ final class AppModel: ObservableObject {
     /// Snippets menu: type a saved command into the current tab, the way a
     /// paste does (Safe Paste asks about a multi-line one).
     func sendSnippet(_ snippet: Snippet) {
-        guard let view = activeTerminalView else { NSSound.beep(); return }
-        view.pasteText(snippet.payload)
+        guard let tab = selectedTab, let host = terminalHost(of: tab) else { NSSound.beep(); return }
+        host.sendCommand(snippet.payload)
+    }
+
+    /// The Safe Paste owner of a tab — every session kind has one.
+    private func terminalHost(of tab: SessionTab) -> SessionTerminalHost? {
+        switch tab.content {
+        case .local(let controller): return controller.terminalHost
+        case .ssh(let controller): return controller.terminalHost
+        case .serial(let controller): return controller.terminalHost
+        }
     }
 
     /// Broadcast: one payload per ticked tab (`BroadcastPlan.sends`). Returns
@@ -857,12 +864,10 @@ final class AppModel: ObservableObject {
         var count = 0
         for send in sends {
             guard let tab = tabs.first(where: { $0.id == send.id }) else { continue }
-            switch tab.content {
-            case .local: continue
-            case .ssh(let controller): controller.terminalView.pasteText(send.payload)
-            case .serial(let controller): controller.terminalView.pasteText(send.payload)
-            }
-            count += 1
+            if case .local = tab.content { continue }
+            // Counted only when the bytes went out: a veto (Safe Paste, a
+            // session that refused) is not a send.
+            if terminalHost(of: tab)?.sendCommand(send.payload) == true { count += 1 }
         }
         return count
     }
@@ -968,7 +973,10 @@ final class AppModel: ObservableObject {
             var jump: JumpHop?
             var jumpUnresolved = false
             if let jumpID = host.jumpHostID, jumpID != host.id {
-                if var bastion = store.groups.flatMap(\.hosts).first(where: { $0.id == jumpID && $0.kind == .ssh }) {
+                // One hop only: a bastion that is itself behind a jump host is
+                // not resolved (connecting to it directly would be a silent
+                // change of path), and the tab says so.
+                if var bastion = store.groups.flatMap(\.hosts).first(where: { $0.id == jumpID && $0.kind == .ssh && $0.jumpHostID == nil }) {
                     let bastionCredential = bastion.credentialID.flatMap { credentialStore.credential(for: $0) }
                     if let bastionCredential, !bastionCredential.username.isEmpty {
                         bastion.username = bastionCredential.username
@@ -1091,6 +1099,13 @@ final class AppModel: ObservableObject {
             selectedID = tab.id
             controller.start()
         }
+    }
+
+    /// A jump host's accepted password: cached for the bastion's endpoint
+    /// only. No recent, no username change — the tab's host is the target.
+    func rememberJumpPassword(_ password: String, forUser user: String, address: String, port: Int) {
+        guard !password.isEmpty else { return }
+        passwordCache["\(user)@\(address):\(port)"] = password
     }
 
     func rememberSessionPassword(_ password: String, forUser user: String, host: Host) {

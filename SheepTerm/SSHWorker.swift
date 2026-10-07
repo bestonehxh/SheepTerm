@@ -66,6 +66,12 @@ nonisolated final class SSHWorker: Sendable {
         var usernamePrompt: (@Sendable (String) -> String?)?
         var hostKeyPrompt: HostKeyPrompt?
         var onPasswordWorked: (@Sendable (String, String) -> Void)?
+        /// The same for the JUMP host's login — a separate door, so the
+        /// bastion's user/password never land in the target's record.
+        var onJumpPasswordWorked: (@Sendable (String, String) -> Void)?
+        /// `host:port` of the host whose key was refused (either hop), for
+        /// the controller's Known Hosts offer.
+        var refusedHost: String?
         /// Fired as soon as a username typed at the prompt is known, before
         /// authentication. Without it the controller's `host` kept an empty
         /// username for a key-authenticated session, so every reconnect —
@@ -156,6 +162,15 @@ nonisolated final class SSHWorker: Sendable {
     var onPasswordWorked: (@Sendable (String, String) -> Void)? {
         get { state.withLock { $0.onPasswordWorked } }
         set { state.withLock { $0.onPasswordWorked = newValue } }
+    }
+    var onJumpPasswordWorked: (@Sendable (String, String) -> Void)? {
+        get { state.withLock { $0.onJumpPasswordWorked } }
+        set { state.withLock { $0.onJumpPasswordWorked = newValue } }
+    }
+    /// Which host's key was refused in this run (`host:port`), or nil.
+    var refusedHost: String? {
+        get { state.withLock { $0.refusedHost } }
+        set { state.withLock { $0.refusedHost = newValue } }
     }
 
 
@@ -376,6 +391,7 @@ nonisolated final class SSHWorker: Sendable {
             }
         }
         var config = initialConfig
+        refusedHost = nil
         if config.username.trimmingCharacters(in: .whitespaces).isEmpty {
             guard let user = usernamePrompt?("Username for \(config.host)")?
                 .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
@@ -647,6 +663,14 @@ nonisolated final class SSHWorker: Sendable {
         }
         authCancelled = false
         authTransportError = nil
+        // `authenticate` reports an accepted password through
+        // `onPasswordWorked`, which the controller files under ITS host — the
+        // target. For the hop it must go through the jump door instead, or
+        // the bastion's user and password would be remembered for the target
+        // (and handed to it on a later connect).
+        let targetDoor = onPasswordWorked
+        onPasswordWorked = { [weak self] user, password in self?.onJumpPasswordWorked?(user, password) }
+        defer { onPasswordWorked = targetDoor }
         guard authenticate(link, hopConfig, legacy: usedLegacy, wake: wake) else {
             if isRunning {
                 if let refusal = hostKeyRefusedDuringAuth {
@@ -695,7 +719,12 @@ nonisolated final class SSHWorker: Sendable {
             }
         }
         notice("tunnel to \(target.host):\(target.port) open through \(hop.label)")
-        return SSHLink.Tunnel(bastion: link, adapter: ChannelTunnel(connection: connection, channel: channel))
+        let adapter = ChannelTunnel(connection: connection, channel: channel)
+        // The target's first bytes (its version line) routinely arrive in
+        // the same read as OPEN_CONFIRMATION; `waitFor` collected them into
+        // `pending`, and they are the inner transport's to read.
+        adapter.absorb(pending)
+        return SSHLink.Tunnel(bastion: link, adapter: adapter, label: hop.label)
     }
 
     private func report(_ failure: HandshakeFailure, prefix: String = "") {
@@ -833,6 +862,10 @@ nonisolated final class SSHWorker: Sendable {
                 if let reason = self.verifyHostKey(key, host: host, port: port, files: files,
                                                    waited: { d in refusal.waitedForUser.withLock { $0 += d } }) {
                     refusal.reason.withLock { $0 = reason }
+                    // Named here, where the host is known: a tunnelled session
+                    // has two hosts and the Known Hosts offer must not blame
+                    // the target for the bastion's key.
+                    self.refusedHost = port == 22 ? host : (host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)")
                     return false
                 }
                 return true
@@ -2635,10 +2668,13 @@ nonisolated final class SSHLink {
         let bastion: SSHLink
         /// The channel ↔ transport adapter (`SheepJumphost`).
         let adapter: ChannelTunnel
+        /// How the bastion is named in messages.
+        let label: String
 
-        init(bastion: SSHLink, adapter: ChannelTunnel) {
+        init(bastion: SSHLink, adapter: ChannelTunnel, label: String) {
             self.bastion = bastion
             self.adapter = adapter
+            self.label = label
         }
     }
 
@@ -2814,7 +2850,14 @@ nonisolated final class SSHLink {
     /// channel's data out of the connection's events, and feed it to the
     /// inner transport. EOF or CLOSE on the channel is the peer hanging up.
     private func readTunnel(_ tunnel: Tunnel) throws -> Bool {
-        _ = try tunnel.bastion.readSocket()
+        do {
+            _ = try tunnel.bastion.readSocket()
+        } catch {
+            // A refusal keeps its marker (the worker reads it); anything else
+            // from the bastion's socket is named as the bastion's.
+            if SSHWorker.hostKeyRefusal(in: error) != nil { throw error }
+            throw Failure.socket("jump host \(tunnel.label): \(SSHWorker.describe(error))")
+        }
         // Other channels' events (none are expected on a bastion we opened
         // nothing else on) are dropped here.
         _ = tunnel.adapter.absorb(tunnel.adapter.connection.takeEvents())

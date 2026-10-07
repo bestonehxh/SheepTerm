@@ -274,6 +274,14 @@ final class SSHTerminalController: NSObject {
                 AppModel.shared.rememberSessionPassword(password, forUser: user, host: self.host)
             }
         }
+        worker.onJumpPasswordWorked = { [weak self] user, password in
+            DispatchQueue.main.async {
+                guard let self, let jump = self.jump else { return }
+                // The bastion's login goes under the bastion's own key — and
+                // nowhere near this tab's host, username or recents.
+                AppModel.shared.rememberJumpPassword(password, forUser: user, address: jump.host, port: jump.port)
+            }
+        }
         worker.usernamePrompt = { prompt in
             Self.askOnMainActor(prompt: prompt, secure: false)
         }
@@ -325,7 +333,7 @@ final class SSHTerminalController: NSObject {
         }
         if jumpUnresolved {
             // Never "connect directly instead": the user set a path on purpose.
-            printNotice("this host connects via a jump host that no longer exists — edit the host and pick another, or None", error: true)
+            printNotice("this host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only) — edit the host and pick another, or None", error: true)
             onStatus?("disconnected — jump host missing")
             return
         }
@@ -423,8 +431,10 @@ final class SSHTerminalController: NSObject {
     private func offerKnownHosts(_ conflict: SSHWorker.KnownHostsConflict) {
         guard !stopped else { return }
         let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
-        let target = host.port == 22 ? address
-            : address.contains(":") ? "[\(address)]:\(host.port)" : "\(address):\(host.port)"
+        // The refused host is whichever hop said no — through a jump host it
+        // may be the bastion, and the wrong pin must not be offered.
+        let target = worker.refusedHost ?? (host.port == 22 ? address
+            : address.contains(":") ? "[\(address)]:\(host.port)" : "\(address):\(host.port)")
         let alert = SheepAlert()
         alert.alertStyle = .warning
         switch conflict {

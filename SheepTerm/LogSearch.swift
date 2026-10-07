@@ -18,6 +18,12 @@ nonisolated enum LogSearch {
     static let chunkBytes = 1 << 20
     /// Bytes without a newline that are flushed as a line of their own.
     static let maxCarryBytes = 4 << 20
+    /// The most of one line the matcher looks at. A regex that is harmless
+    /// on log lines can be exponential on a multi-megabyte one (a config
+    /// dump without newlines, a binary wearing .log), and a match cannot be
+    /// cancelled from outside — so a line is matched on its head only. The
+    /// list shows 300 characters anyway.
+    static let maxMatchBytes = 64 << 10
 
     struct Query: Equatable, Sendable {
         var text: String
@@ -159,7 +165,7 @@ nonisolated enum LogSearch {
 
     private static func consider(_ bytes: Data, lineNumber: Int, file: URL, matcher: Matcher,
                                  into hits: inout [Hit], outcome: inout Outcome, stop: inout Bool) {
-        var line = String(decoding: bytes, as: UTF8.self)
+        var line = String(decoding: bytes.count > maxMatchBytes ? bytes.prefix(maxMatchBytes) : bytes, as: UTF8.self)
         if line.hasSuffix("\r") { line.removeLast() }
         guard matcher.matches(line) else { return }
         let shown = line.count > maxLineChars ? String(line.prefix(maxLineChars)) + "…" : line

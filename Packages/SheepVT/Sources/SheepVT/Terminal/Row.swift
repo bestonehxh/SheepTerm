@@ -306,6 +306,9 @@ public final class Row {
 
     /// Fill `[from, to)` with `cell`, dropping any side-table entries in the range.
     public func fill(_ cell: Cell, from: Int = 0, to: Int? = nil) {
+        // Erasing the whole row erases the command that was on it: no
+        // hairline on a blank line, no stop for ⌘↓ (ED 2, DECALN, a recycle).
+        if from == 0, to == nil || to! >= cols { commandMark = false }
         let lo = Swift.max(from, 0)
         let hi = Swift.min(to ?? cols, cols)
         guard lo < hi else { return }

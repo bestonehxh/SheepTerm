@@ -503,10 +503,17 @@ public final class Terminal: VTActor {
     public func markCommandLine() {
         guard !isAlternate else { return }
         let b = primary
-        let row = b.row(b.y)
+        // The HEAD of the cursor's logical line: a command longer than the
+        // screen wraps, and the cursor sits on a continuation row when Return
+        // is pressed. The mark belongs to the row with the prompt — that is
+        // where the hairline reads right, where ⌘↑ should land, and the row
+        // reflow keeps when it widens the line again.
+        var index = b.ybase + b.y
+        while index > 0, b.lines.allocatedRow(at: index)?.wrapped == true { index -= 1 }
+        let row = b.lines[index]
         guard !row.commandMark else { return }
         row.commandMark = true
-        markDirty(b.y)
+        if index >= b.ybase { markDirty(index - b.ybase) } else { markAllDirty() }
         touch()
     }
 
@@ -539,7 +546,10 @@ public final class Terminal: VTActor {
         var current = ""
         for index in (markIndex + 1)..<cursorIndex {
             let row = b.lines.allocatedRow(at: index)
-            let text = row?.string(trimRight: true) ?? ""
+            // A row that continues on the next one keeps its trailing blanks:
+            // they are inside the logical line (`Selection.text` does the same).
+            let continues = index + 1 < cursorIndex && b.lines.allocatedRow(at: index + 1)?.wrapped == true
+            let text = row?.string(trimRight: !continues) ?? ""
             if row?.wrapped == true, !lines.isEmpty || !current.isEmpty {
                 current += text
             } else {

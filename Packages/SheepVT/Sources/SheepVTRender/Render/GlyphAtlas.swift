@@ -339,6 +339,15 @@ public final class GlyphAtlas {
         nextX = 0
         nextY = 0
         rowHeight = 0
+        // A fresh texture, not the live one rewritten: `replace(region:)` on
+        // a shared texture is not ordered against the GPU reads of a frame
+        // still in flight (the ring admits two), and after a reset the WHOLE
+        // texture changes. The committed command buffer keeps the old texture
+        // alive for as long as it samples it. Allocation failure keeps the
+        // old texture — the memset below still makes the shadow consistent.
+        if let fresh = GlyphAtlas.makeTexture(device: device, size: size, format: format) {
+            texture = fresh
+        }
         // One memset: the shadow copy is 64 MB for an 8192² grey atlas, and a
         // per-byte loop over that is tens of milliseconds inside a frame.
         data.withUnsafeMutableBytes { raw in

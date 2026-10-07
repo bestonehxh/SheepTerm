@@ -146,6 +146,12 @@ struct HostEditSheet: View {
                         ForEach(jumpCandidates) { candidate in
                             Text("\(candidate.name) (\(candidate.address))").tag(UUID?.some(candidate.id))
                         }
+                        // The saved bastion is gone (deleted, or now behind a
+                        // jump host itself): shown rather than a blank picker,
+                        // and the user picks something else or None.
+                        if let dangling = jumpHostID, !jumpCandidates.contains(where: { $0.id == dangling }) {
+                            Text("Missing jump host — pick another or None").tag(UUID?.some(dangling))
+                        }
                     }
                     Text("Logs into the chosen host first and tunnels this connection through it (ProxyJump). That host needs TCP forwarding allowed; this device sees the connection coming from it.")
                         .font(.system(size: 10))
@@ -397,7 +403,8 @@ extension HostEditSheet {
 
 extension HostEditSheet {
     /// Saved SSH hosts this one may hop through — every one but itself.
+    /// One hop only: a host that is itself behind a jump host cannot be one.
     var jumpCandidates: [Host] {
-        model.store.groups.flatMap(\.hosts).filter { $0.kind == .ssh && $0.id != original.id }
+        model.store.groups.flatMap(\.hosts).filter { $0.kind == .ssh && $0.id != original.id && $0.jumpHostID == nil }
     }
 }

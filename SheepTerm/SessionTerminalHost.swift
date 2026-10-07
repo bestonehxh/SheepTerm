@@ -125,6 +125,19 @@ final class SessionTerminalHost {
     /// Set while `sendImmediatePaste` calls back into the view, so the view's
     /// `shouldPaste` veto does not re-enter the SafePaste flow.
     private var pastingImmediately = false
+    /// Set around `sendCommand`: the text is the app's, not the clipboard's.
+    private var sendingCommand = false
+
+    /// Send text the app composed (Snippets, Broadcast) the way a paste
+    /// reaches the device, minus the planted-clipboard question. Returns
+    /// whether it went out now (false = Safe Paste took it for its own
+    /// question, or the session refused it).
+    @discardableResult
+    func sendCommand(_ text: String) -> Bool {
+        sendingCommand = true
+        defer { sendingCommand = false }
+        return terminalView.pasteText(text)
+    }
 
     private static let pasteDelayKey = "safePasteDelayMilliseconds"
 
@@ -189,7 +202,10 @@ final class SessionTerminalHost {
     /// exist in the view). Text a device planted is asked about first — in
     /// every tab kind and whatever Safe Paste is set to.
     func shouldPaste(_ text: String) -> Bool {
-        if !pastingImmediately, !plantedPasteConfirmed,
+        // The planted-clipboard question is about the CLIPBOARD: text the
+        // app composed itself (a snippet, a broadcast line) never came from
+        // it, so it is not asked — Safe Paste below still applies to it.
+        if !pastingImmediately, !sendingCommand, !plantedPasteConfirmed,
            Self.plantedClipboard.needsConfirmation(currentChangeCount: terminalView.pasteboard.changeCount) {
             guard !pastePromptPresented else {
                 NSSound.beep()
