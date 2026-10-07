@@ -304,6 +304,8 @@ struct SheepTermCommands: Commands {
             Button("Open Logs Folder") {
                 NSWorkspace.shared.open(SessionLogger.logsDirectory)
             }
+            Button("Search Logs…") { model.showLogSearch = true }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
             Divider()
             Button("Import Group…") { model.importGroupViaPanel() }
             Divider()
@@ -314,6 +316,12 @@ struct SheepTermCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
             Toggle("Safe Multi-line Paste", isOn: $model.safePasteEnabled)
+            // A break condition on a serial console (a boot loader's "press
+            // Break now"). Greyed out everywhere else: SSH and a local shell
+            // have no line to put one on.
+            Button("Send Break") { model.sendBreak() }
+                .keyboardShortcut("b", modifiers: [.control, .option])
+                .disabled(!model.canSendBreak)
             Divider()
             // Search in the scrollback. SheepVT owns the engine and the
             // find bar itself — these items only forward the standard
@@ -330,6 +338,18 @@ struct SheepTermCommands: Commands {
                 .disabled(model.selectedTab == nil)
             Button("Use Selection for Find") { model.useSelectionForFind() }
                 .keyboardShortcut("e", modifiers: .command)
+                .disabled(model.selectedTab == nil)
+            Divider()
+            // Command marks (4.2 (4)): every Return marks its row, so the
+            // scrollback has a structure to move through and copy from.
+            Button("Previous Command") { model.scrollToPreviousCommand() }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled(model.selectedTab == nil)
+            Button("Next Command") { model.scrollToNextCommand() }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .disabled(model.selectedTab == nil)
+            Button("Copy Last Output") { model.copyLastOutput() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(model.selectedTab == nil)
         }
 
@@ -357,6 +377,12 @@ struct SheepTermCommands: Commands {
             }
             .keyboardShortcut("h", modifiers: [.command, .shift])
             .disabled(!isRemoteSessionSelected)
+            // Answers `--More--` with a space on every SSH/serial tab. Global:
+            // it does what the user would do next, so there is nothing to
+            // decide per host.
+            Toggle(isOn: $model.autoPage) {
+                Label("Auto-page (--More--)", systemImage: "arrow.down.to.line")
+            }
             Menu {
                 ForEach(Vendor.allCases) { family in
                     Toggle(family.label, isOn: Binding(
@@ -435,6 +461,24 @@ struct SheepTermCommands: Commands {
             } label: {
                 Label("Terminal Font", systemImage: "textformat.size")
             }
+        }
+
+        // Saved commands (4.2 (4)). The list is the store's, in its order;
+        // ⌘⇧B opens the broadcast form.
+        CommandMenu("Snippets") {
+            if model.snippetStore.snippets.isEmpty {
+                Text("No snippets yet")
+            } else {
+                ForEach(model.snippetStore.snippets) { snippet in
+                    Button(snippet.name) { model.sendSnippet(snippet) }
+                        .disabled(model.selectedTab == nil)
+                }
+            }
+            Divider()
+            Button("Edit Snippets…") { model.showSnippets = true }
+            Divider()
+            Button("Broadcast to Tabs…") { model.showBroadcast = true }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
         }
 
         CommandMenu("Tabs") {

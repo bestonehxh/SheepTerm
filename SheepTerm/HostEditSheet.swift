@@ -20,6 +20,8 @@ struct HostEditSheet: View {
     @State private var credentialSelection: UUID?
     @State private var cipherMode: CipherMode
     @State private var agentForward: Bool
+    @State private var disablePaging: Bool
+    @State private var jumpHostID: UUID?
     @State private var vendor: Vendor
     @State private var baud: Int
     /// Whether the Port field has been typed in during this edit. See
@@ -58,6 +60,8 @@ struct HostEditSheet: View {
             })
         _cipherMode = State(initialValue: host.cipherMode ?? .auto)
         _agentForward = State(initialValue: host.agentForward ?? false)
+        _disablePaging = State(initialValue: host.disablePaging ?? false)
+        _jumpHostID = State(initialValue: host.jumpHostID)
         _vendor = State(initialValue: host.highlightVendor)
         // A host whose stored baud is not one this picker offers showed a
         // BLANK picker, and Save wrote the bad value straight back, so the
@@ -137,6 +141,15 @@ struct HostEditSheet: View {
                     Text("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+                    Picker("Via jump host", selection: $jumpHostID) {
+                        Text("None (direct)").tag(UUID?.none)
+                        ForEach(jumpCandidates) { candidate in
+                            Text("\(candidate.name) (\(candidate.address))").tag(UUID?.some(candidate.id))
+                        }
+                    }
+                    Text("Logs into the chosen host first and tunnels this connection through it (ProxyJump). That host needs TCP forwarding allowed; this device sees the connection coming from it.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                 } else if original.kind == .serial {
                     TextField("Device path", text: $address)
                     Picker("Baud rate", selection: $baud) {
@@ -153,6 +166,12 @@ struct HostEditSheet: View {
                 Text("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                if original.kind == .ssh {
+                    Toggle("Disable paging on connect", isOn: $disablePaging)
+                    Text(disablePagingCaption)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
             }
             .textFieldStyle(.roundedBorder)
 
@@ -325,6 +344,8 @@ struct HostEditSheet: View {
             host.credentialID = credentialSelection
             host.cipherMode = cipherMode
             host.agentForward = agentForward
+            host.disablePaging = disablePaging
+            host.jumpHostID = jumpHostID
             // `selectedCredential`, not `credentialSelection`: the same
             // question the form asked when it decided to show the password
             // field at all. A host pointing at a deleted credential shows it,
@@ -353,5 +374,30 @@ struct HostEditSheet: View {
         }
         model.store.updateHost(host)
         dismiss()
+    }
+}
+
+extension HostEditSheet {
+    /// What "Disable paging on connect" will actually type, for the family
+    /// picked above — or why it types nothing.
+    var disablePagingCaption: String {
+        if let command = vendor.disablePagingCommand {
+            return "Sends “\(command)” once the shell is up, so long output is not paged. Shown in the session and the log like anything else typed."
+        }
+        switch vendor {
+        case .fortios:
+            return "FortiOS has no per-session switch (its only one is a config change), so nothing is sent — Auto-page in the View menu answers --More-- for you instead."
+        case .auto:
+            return "Pick a device family above to enable this: Auto does not know which command the device wants. Auto-page in the View menu works regardless."
+        default:
+            return "Nothing is sent for this family. Auto-page in the View menu answers --More-- for you instead."
+        }
+    }
+}
+
+extension HostEditSheet {
+    /// Saved SSH hosts this one may hop through — every one but itself.
+    var jumpCandidates: [Host] {
+        model.store.groups.flatMap(\.hosts).filter { $0.kind == .ssh && $0.id != original.id }
     }
 }

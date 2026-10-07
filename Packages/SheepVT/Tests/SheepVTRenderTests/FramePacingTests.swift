@@ -91,6 +91,53 @@ import SheepVT
         #expect(surface == nil)                     // freed, not merely dropped from the ring
     }
 
+    /// ...and its row cache: the instances for a screenful of rows are a few
+    /// MB per tab at 200 columns, rebuilt in the frame that shows the tab.
+    @Test func aHiddenViewDropsItsRowCache() {
+        guard canPresent else { return }
+        let view = makeView()
+        view.feed("hello")
+        view.frameTick(now: CACurrentMediaTime())
+        #expect((view.renderer?.rowCacheCount ?? 0) > 0)
+        view.viewDidMoveToWindow()                  // window == nil
+        #expect(view.renderer?.rowCacheCount == 0)
+    }
+
+    /// 4.2 (3): a view that has gone quiet frees the surfaces it is not
+    /// showing — 2 × 17.7 MB at 2912×1594 — and gets ONE back when the next
+    /// frame comes. No compositor here, so even the displayed surface counts
+    /// as free and the ring empties; in the app `IOSurfaceIsInUse` keeps it.
+    @Test func anIdleViewLetsGoOfTheSurfacesItIsNotShowing() {
+        guard canPresent else { return }
+        let view = makeView()
+        let t = CACurrentMediaTime()
+        view.frameTick(now: t)
+        view.feed("a"); view.frameTick(now: t + 0.02)
+        view.feed("b"); view.frameTick(now: t + 0.04)
+        #expect(view.renderer?.surfaceSlotCount == SurfacePresenter.baseSlots)
+        let shown = view.presentedFrames
+
+        // Quiet for longer than `surfaceIdle`: the tick with nothing to paint
+        // runs the trim.
+        view.frameTick(now: t + 0.6)
+        #expect(view.renderer?.surfaceSlotCount == SurfacePresenter.baseSlots)   // not yet
+        view.frameTick(now: t + TerminalView.surfaceIdle + 0.3)
+        #expect(view.renderer?.surfaceSlotCount == 0)
+        #expect(view.presentedFrames == shown)
+
+        // The next byte paints as usual, on a ring of exactly one.
+        view.feed("c")
+        view.frameTick(now: t + TerminalView.surfaceIdle + 0.4)
+        #expect(view.presentedFrames == shown + 1)
+        #expect(view.renderer?.surfaceSlotCount == 1)
+        #expect(view.terminal.screenLines().first == "abc")
+
+        // The trim after the display link stopped goes through the same
+        // door, unthrottled.
+        view.frameTick(now: t + TerminalView.surfaceIdle * 3)
+        #expect(view.renderer?.surfaceSlotCount == 0)
+    }
+
     /// ...and the way back in paints inside the transaction that puts the view
     /// on screen, so emptying the layer cannot show as a flash of background.
     @Test func aTabComingBackPaintsBeforeItIsShown() {

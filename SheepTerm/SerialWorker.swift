@@ -15,6 +15,10 @@ nonisolated final class SerialWorker: Sendable {
         /// Kept separate from `running`, which stop() clears immediately.
         var runActive = false
         var running = false
+        /// A break condition the user asked for (⌃⌥B). Taken by the loop
+        /// ahead of `pendingWrites`: a break is for a device that is booting,
+        /// and the moment matters more than the order against queued text.
+        var pendingBreak = false
         /// Write end of the self-pipe; -1 when the loop isn't up.
         var wakeFD: Int32 = -1
         var onData: (@Sendable ([UInt8]) -> Void)?
@@ -85,6 +89,7 @@ nonisolated final class SerialWorker: Sendable {
             state.runActive = true
             state.running = true
             state.pendingWrites.removeAll(keepingCapacity: true)
+            state.pendingBreak = false
             state.writeOverflowNotified = false
             return true
         }
@@ -158,8 +163,37 @@ nonisolated final class SerialWorker: Sendable {
         return accepted
     }
 
+    /// Queue a break condition (a ~0.4 s space on the line — `tcsendbreak`
+    /// ignores its duration on macOS). Returns false when there is no live
+    /// session to send it on, so the caller can say so instead of pretending.
+    ///
+    /// It jumps the write queue on purpose: the one time a console user
+    /// reaches for Break is to stop a switch's boot loader, and that window
+    /// is a second or two wide. Text queued behind a slow port can wait.
+    @discardableResult
+    func sendBreak() -> Bool {
+        state.withLock { state in
+            guard state.running else { return false }
+            state.pendingBreak = true
+            if state.wakeFD >= 0 {
+                var byte: UInt8 = 0
+                _ = Darwin.write(state.wakeFD, &byte, 1)
+            }
+            return true
+        }
+    }
+
     private var isRunning: Bool {
         state.withLock { $0.running }
+    }
+
+    /// Clears and returns the pending break flag.
+    private func takeBreak() -> Bool {
+        state.withLock { state in
+            let pending = state.pendingBreak
+            state.pendingBreak = false
+            return pending
+        }
     }
 
     private func takeWrites() -> [UInt8] {
@@ -178,6 +212,7 @@ nonisolated final class SerialWorker: Sendable {
             state.withLock { state in
                 state.running = false
                 state.pendingWrites.removeAll(keepingCapacity: true)
+                state.pendingBreak = false
                 state.runActive = false
             }
         }
@@ -264,6 +299,19 @@ nonisolated final class SerialWorker: Sendable {
 
         var buffer = [UInt8](repeating: 0, count: 4096)
 
+        /// Puts the line in break for the driver's fixed duration when one is
+        /// pending. Blocking: `tcsendbreak` returns after the condition ends
+        /// (~0.4 s), which is also how long the far end needs to notice it —
+        /// nothing else on this queue is more urgent during that time.
+        func sendBreakIfPending() {
+            guard takeBreak() else { return }
+            if tcsendbreak(fd, 0) == 0 {
+                onNotice?("break sent")
+            } else {
+                onNotice?("break failed: \(String(cString: strerror(errno)))")
+            }
+        }
+
         /// One non-blocking read, handed straight to the session. Returns
         /// false when the session is over — the caller must return, and
         /// `onClosed` has already been fired.
@@ -290,6 +338,8 @@ nonisolated final class SerialWorker: Sendable {
         }
 
         while isRunning {
+            // Before the queued text, every pass — see `sendBreak`.
+            sendBreakIfPending()
             let writes = takeWrites()
             if !writes.isEmpty {
                 var offset = 0
@@ -302,6 +352,9 @@ nonisolated final class SerialWorker: Sendable {
                     // Bail out when the tab is closed instead of spinning
                     // forever on a stalled port.
                     guard isRunning else { return }
+                    // A break asked for in the middle of a long paste (or a
+                    // stalled one) must not wait for the paste to finish.
+                    sendBreakIfPending()
                     if Date().timeIntervalSince(lastProgress) > 60 {
                         onClosed?("write stalled for 60 s — is flow control stuck?")
                         return
@@ -405,9 +458,10 @@ nonisolated final class SerialWorker: Sendable {
     func _testLifecycleSnapshot() -> (
         running: Bool,
         runActive: Bool,
-        pendingWriteCount: Int
+        pendingWriteCount: Int,
+        pendingBreak: Bool
     ) {
-        state.withLock { ($0.running, $0.runActive, $0.pendingWrites.count) }
+        state.withLock { ($0.running, $0.runActive, $0.pendingWrites.count, $0.pendingBreak) }
     }
 #endif
 }

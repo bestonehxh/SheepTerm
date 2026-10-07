@@ -495,6 +495,63 @@ public final class Terminal: VTActor {
         return out
     }
 
+    // MARK: - Command marks (4.2 (4))
+
+    /// Mark the cursor's row as a command line — the view calls this when
+    /// the user presses Return. Primary screen only: on the alternate screen
+    /// (vim, less) Return is not a command and the rows are not history.
+    public func markCommandLine() {
+        guard !isAlternate else { return }
+        let b = primary
+        let row = b.row(b.y)
+        guard !row.commandMark else { return }
+        row.commandMark = true
+        markDirty(b.y)
+        touch()
+    }
+
+    /// Line numbers of every marked row still in the ring, ascending.
+    public func commandLines() -> [Int] {
+        let b = primary
+        var out: [Int] = []
+        for i in 0..<b.lines.count where b.lines.allocatedRow(at: i)?.commandMark == true {
+            out.append(b.lineNumber(atIndex: i))
+        }
+        return out
+    }
+
+    /// The text between the most recent command line and the cursor's row:
+    /// what the last command printed, trailing blank lines dropped, soft wraps
+    /// joined. nil when no command has been marked yet (or the cursor sits on
+    /// the marked row itself — nothing has been printed).
+    public func lastCommandOutput() -> String? {
+        guard !isAlternate else { return nil }
+        let b = primary
+        let cursorIndex = b.ybase + b.y
+        var markIndex: Int? = nil
+        var i = Swift.min(cursorIndex, b.lines.count) - 1
+        while i >= 0 {
+            if b.lines.allocatedRow(at: i)?.commandMark == true { markIndex = i; break }
+            i -= 1
+        }
+        guard let markIndex, markIndex + 1 < cursorIndex else { return nil }
+        var lines: [String] = []
+        var current = ""
+        for index in (markIndex + 1)..<cursorIndex {
+            let row = b.lines.allocatedRow(at: index)
+            let text = row?.string(trimRight: true) ?? ""
+            if row?.wrapped == true, !lines.isEmpty || !current.isEmpty {
+                current += text
+            } else {
+                if index > markIndex + 1 { lines.append(current) }
+                current = text
+            }
+        }
+        lines.append(current)
+        while let last = lines.last, last.isEmpty { lines.removeLast() }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
     // MARK: - Viewport (user scrollback)
 
     public func scrollViewport(by lines: Int) {

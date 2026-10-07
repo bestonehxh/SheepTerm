@@ -9,6 +9,7 @@
 import CoreGraphics
 import IOSurface
 import Metal
+import QuartzCore
 import Testing
 
 @testable import SheepVTRender
@@ -307,6 +308,151 @@ func plainOverlay() -> FrameOverlay {
         // A hidden view drops the ring entirely.
         presenter.release()
         #expect(presenter.nextTexture() == nil)
+    }
+
+    /// 4.2 (3): an idle ring keeps only what the compositor is reading. The
+    /// three surfaces of a 2912×1594 ring are 53 MB, half the app's footprint
+    /// with one tab open and nothing happening, for two pictures nobody will
+    /// look at again — the next frame redraws from scratch anyway.
+    @Test func anIdleRingLetsGoOfTheSurfacesNobodyIsReading() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { return }
+        let presenter = SurfacePresenter(device: device)
+        let t: CFTimeInterval = 1000
+        presenter.prepare(pixelSize: CGSize(width: 64, height: 32), now: t)
+        #expect(presenter.slotCount == SurfacePresenter.baseSlots)
+        let first = try #require(presenter.nextTexture(now: t))
+        let firstSurface = try #require(presenter.surface(for: first))
+
+        // The compositor holds the one on screen; the other two sit unused.
+        final class Busy { var held: [IOSurface] = [] }
+        let busy = Busy()
+        presenter.isInUse = { s in busy.held.contains { $0 === s } }
+        busy.held = [firstSurface]
+
+        // Too soon: nothing goes.
+        #expect(presenter.trimIdle(now: t + 0.5, olderThan: 1.0) == 0)
+        #expect(presenter.slotCount == 3)
+        // Idle: the two unused surfaces go, the displayed one stays.
+        #expect(presenter.trimIdle(now: t + 1.5, olderThan: 1.0) == 2)
+        #expect(presenter.slotCount == 1)
+        #expect(presenter.ringSurfaces.first === firstSurface)
+
+        // The next frame has nowhere free, so the ring makes ONE surface for
+        // it (not three) and draws there — never into the displayed one.
+        presenter.prepare(pixelSize: CGSize(width: 64, height: 32), now: t + 1.6)
+        #expect(presenter.slotCount == 1)                 // same size: nothing rebuilt
+        let next = try #require(presenter.nextTexture(now: t + 1.6))
+        #expect(next !== first)
+        #expect(presenter.slotCount == 2)
+
+        // Fully idle (window hidden, nothing on screen): everything goes, and
+        // the ring comes back with a single surface for the next frame.
+        busy.held = []
+        #expect(presenter.trimIdle(now: t + 3.0, olderThan: 1.0) == 2)
+        #expect(presenter.slotCount == 0)
+        presenter.prepare(pixelSize: CGSize(width: 64, height: 32), now: t + 3.1)
+        #expect(presenter.slotCount == 1)
+        #expect(presenter.nextTexture(now: t + 3.1) != nil)
+        #expect(presenter.pixelSize == CGSize(width: 64, height: 32))
+    }
+
+    /// What the first frame after an idle pays for its surface — a full
+    /// 2912×1594 allocation, the size measured on the 13" Air. Printed, not
+    /// asserted (a loaded machine would fail a timing bound for no reason);
+    /// the bound that IS asserted is loose and only guards against a
+    /// pathological allocator.
+    @Test func aSurfaceAllocationAfterAnIdleIsCheap() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { return }
+        let presenter = SurfacePresenter(device: device)
+        let size = CGSize(width: 2912, height: 1594)
+        presenter.prepare(pixelSize: size)
+        _ = presenter.trimIdle(now: CACurrentMediaTime() + 10, olderThan: 1.0)
+        #expect(presenter.slotCount == 0)
+        var worst: CFTimeInterval = 0
+        var total: CFTimeInterval = 0
+        for _ in 0..<5 {
+            let t0 = CACurrentMediaTime()
+            presenter.prepare(pixelSize: size)
+            _ = presenter.nextTexture()
+            let dt = CACurrentMediaTime() - t0
+            worst = max(worst, dt)
+            total += dt
+            _ = presenter.trimIdle(now: CACurrentMediaTime() + 10, olderThan: 1.0)
+        }
+        print(String(format: "surface after idle: 2912×1594 allocate+texture avg %.2f ms, worst %.2f ms",
+                     total / 5 * 1000, worst * 1000))
+        #expect(worst < 0.050)
+    }
+
+    // MARK: - the shared context
+
+    /// Two renderers on one device share pipelines, atlases and the glyph
+    /// cache: a glyph the first one rasterised is a hit for the second.
+    @Test func renderersOnOneDeviceShareTheirGlyphs() throws {
+        guard let a = try makeHarness(), let b = try makeHarness() else { return }
+        #expect(a.renderer.context === b.renderer.context)
+        a.terminal.feed("interface up")
+        a.render(plainOverlay())
+        #expect(a.renderer.lastFrameStats.glyphsRasterised > 0)
+        b.terminal.feed("interface up")
+        b.render(plainOverlay())
+        #expect(b.renderer.lastFrameStats.glyphsRasterised == 0)     // nothing new to draw
+        #expect(b.renderer.lastFrameStats.rowsRebuilt == b.rows)      // but its OWN rows
+    }
+
+    /// ...and two fonts never collide in it: a renderer on a bigger font
+    /// rasterises its own glyphs, and the first renderer's frame is still
+    /// entirely cached afterwards (the other font did not clear anything).
+    @Test func differentFontsCoexistInTheSharedCache() throws {
+        guard let a = try makeHarness(), let b = try makeHarness() else { return }
+        a.terminal.feed("interface up")
+        a.render(plainOverlay())
+        b.renderer.fontSet = FontSet(font: .monospacedSystemFont(ofSize: 26, weight: .regular), scale: b.scale)
+        b.terminal.feed("interface up")
+        b.render(plainOverlay())
+        #expect(b.renderer.lastFrameStats.glyphsRasterised > 0)
+        a.render(plainOverlay())
+        #expect(a.renderer.lastFrameStats.glyphsRasterised == 0)
+        #expect(a.renderer.lastFrameStats.rowsCached == a.rows)
+        // The big glyphs really are bigger: the bright band of B's first row
+        // is taller than A's.
+        func inkRows(_ fb: Framebuffer) -> Int {
+            (0..<fb.height).filter { y in (0..<fb.width).contains { x in fb.rgb(x: x, y: y) & 0xFF > 0x60 } }.count
+        }
+        #expect(inkRows(b.readback()) > inkRows(a.readback()))
+    }
+
+    /// When the last renderer on a font goes away, the font's glyphs are
+    /// dead weight in a packer that cannot evict them, so the atlases are
+    /// cleared — and the font the survivors use comes back in one frame.
+    @Test func theLastRendererOnAFontClearsItsGlyphs() throws {
+        guard let a = try makeHarness() else { return }
+        let context = a.renderer.context
+        a.terminal.feed("interface up")
+        a.render(plainOverlay())
+        let fontsBefore = context.fontsInUse
+        let generationBefore = context.grayAtlas.generation
+        do {
+            guard let b = try makeHarness() else { return }
+            b.renderer.fontSet = FontSet(font: .monospacedSystemFont(ofSize: 26, weight: .regular), scale: b.scale)
+            b.terminal.feed("interface up")
+            b.render(plainOverlay())
+            #expect(context.fontsInUse == fontsBefore + 1)
+        }
+        // b is gone: its font was released, the atlases cleared.
+        #expect(context.fontsInUse == fontsBefore)
+        #expect(context.grayAtlas.generation > generationBefore)
+        a.render(plainOverlay())
+        #expect(a.renderer.lastFrameStats.glyphsRasterised > 0)       // put back once
+        a.render(plainOverlay())
+        #expect(a.renderer.lastFrameStats.glyphsRasterised == 0)      // and cached again
+    }
+
+    /// The colour atlas starts small (emoji only) and grows when it has to.
+    @Test func theColourAtlasStartsSmall() throws {
+        guard let harness = try makeHarness() else { return }
+        #expect(harness.renderer.context.colorAtlas.size == RenderContext.colorAtlasInitialSize)
+        #expect(harness.renderer.context.grayAtlas.size >= 1024)
     }
 
     // P2: the fallback used to be `slots[next % count]` — a surface the window

@@ -32,6 +32,11 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
     public let terminal: Terminal
     public let selection: Selection
     public let search: SearchEngine
+    /// Selection echo (4.2 (4)): a second engine that looks for the selected
+    /// word, so the other occurrences on screen light up quietly. Separate
+    /// from `search` so the find bar's term and its current match are left
+    /// alone. Case-sensitive and literal: the selection IS the exact text.
+    let echo: SearchEngine
 
     public weak var delegate: (any TerminalViewDelegate)?
 
@@ -162,6 +167,18 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
     /// Keep the display link for this long after the last paint: re-creating
     /// it costs a frame of latency on the next keystroke.
     static let idleStop: CFTimeInterval = 0.5
+    /// A presentation surface nobody has drawn into for this long is freed
+    /// (17.7 MB apiece at 2912×1594): an idle terminal keeps the one on
+    /// screen, a blinking cursor two. The ring grows back one surface per
+    /// frame that needs one; measured, the allocation is well under a
+    /// millisecond and happens once after an idle, not per frame.
+    static let surfaceIdle: CFTimeInterval = 1.0
+    /// The trim is checked on the tick, but not every tick.
+    private var lastTrimCheck: CFTimeInterval = 0
+    /// Runs the trim once more after the display link has stopped — the
+    /// tick is gone by then, and the last surfaces it would have freed are
+    /// exactly the ones an idle tab is holding.
+    private var idleTrimTimer: Timer?
 
     // MARK: - Mouse / selection gesture state
 
@@ -202,6 +219,9 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         terminal = Terminal(cols: cols, rows: rows, scrollback: scrollback)
         selection = Selection(terminal: terminal)
         search = SearchEngine(terminal: terminal)
+        let echoEngine = SearchEngine(terminal: terminal)
+        echoEngine.options = SearchOptions(caseSensitive: true)
+        echo = echoEngine
         super.init(frame: frame)
         configure()
     }
@@ -216,6 +236,9 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         terminal = Terminal(cols: 80, rows: 24, scrollback: TerminalView.scrollbackLinesDefault)
         selection = Selection(terminal: terminal)
         search = SearchEngine(terminal: terminal)
+        let echoEngine = SearchEngine(terminal: terminal)
+        echoEngine.options = SearchOptions(caseSensitive: true)
+        echo = echoEngine
         super.init(coder: coder)
         configure()
     }
@@ -377,6 +400,12 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
             // IOSurfaces (14.06 MB each at 2560×1440); they come back on the
             // first frame after the tab is shown again.
             renderer?.releaseSurfaces()
+            cancelIdleTrim()
+            // Nor its row cache: the instances for a screenful of rows are a
+            // few MB per tab at 200 columns, and the first frame back rebuilds
+            // them in a millisecond or two inside the transaction that shows
+            // the tab (`presentSynchronously` below).
+            renderer?.invalidateRows()
             // The ring is gone, but the layer holds a reference of its own to
             // the surface it is showing: measured with vmmap, eight hidden tabs
             // at 2560×1440 kept 112.5 MB of dirty IOSurface after
@@ -596,8 +625,60 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         // working after every Enter in that mode.
         lastKeyWasPrintable = bytes.count <= 4
             && bytes.allSatisfy { $0 == 0x0D || $0 == 0x0A || ($0 >= 0x20 && $0 != 0x7F) }
+        // Return: the row the cursor is on holds the prompt and the command
+        // just typed. Marked before the bytes go out, so the mark sits on the
+        // command and not on whatever the device prints next.
+        if commandMarksEnabled, bytes == [0x0D] || bytes == [0x0D, 0x0A] {
+            terminal.markCommandLine()
+        }
         delegate?.userTyped(self)
         delegate?.send(self, bytes: bytes)
+    }
+
+    // MARK: - Command marks (4.2 (4))
+
+    /// Whether Return marks the cursor's row (see `Terminal.markCommandLine`).
+    public var commandMarksEnabled = true
+
+    /// Scroll so the previous marked command (above the top of the viewport)
+    /// sits at the top. Returns false when there is none.
+    @discardableResult
+    public func scrollToPreviousCommand() -> Bool {
+        let b = terminal.buffer
+        let top = b.lineNumber(ofViewportRow: 0)
+        guard let line = terminal.commandLines().last(where: { $0 < top }) else { return false }
+        return scrollViewport(toLine: line)
+    }
+
+    /// Scroll so the next marked command (below the top of the viewport)
+    /// sits at the top. Returns false when there is none.
+    @discardableResult
+    public func scrollToNextCommand() -> Bool {
+        let b = terminal.buffer
+        let top = b.lineNumber(ofViewportRow: 0)
+        guard let line = terminal.commandLines().first(where: { $0 > top }) else { return false }
+        return scrollViewport(toLine: line)
+    }
+
+    private func scrollViewport(toLine line: Int) -> Bool {
+        let b = terminal.buffer
+        guard let index = b.index(ofLine: line) else { return false }
+        let target = Swift.min(index, b.ybase)
+        guard target != b.ydisp else { return false }
+        terminal.scrollViewport(by: target - b.ydisp)
+        setNeedsFrame()
+        delegate?.scrolled(self)
+        return true
+    }
+
+    /// Put the output of the last command on the pasteboard. Returns false
+    /// (and leaves the pasteboard alone) when there is nothing to copy.
+    @discardableResult
+    public func copyLastOutput() -> Bool {
+        guard let text = terminal.lastCommandOutput() else { return false }
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        return true
     }
     private var lastKeySentTime: CFTimeInterval = 0
     private var lastKeyWasPrintable = false
@@ -702,6 +783,38 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
     isolated deinit {
         displayLinkRef?.invalidate()
         autoScrollTimer?.invalidate()
+        idleTrimTimer?.invalidate()
+    }
+
+    /// Free the surfaces the ring has not needed for `surfaceIdle`. Cheap
+    /// (a scan of at most six slots), still rate-limited to four times a
+    /// second — a 120 Hz tick has better things to do.
+    func trimSurfacesIfIdle(now: CFTimeInterval) {
+        guard now - lastTrimCheck >= 0.25 else { return }
+        lastTrimCheck = now
+        renderer?.trimIdleSurfaces(now: now, olderThan: TerminalView.surfaceIdle)
+    }
+
+    /// Arm the one trim that has to happen after the tick is gone.
+    private func scheduleIdleTrim() {
+        idleTrimTimer?.invalidate()
+        let timer = Timer(timeInterval: TerminalView.surfaceIdle + 0.1, target: self,
+                          selector: #selector(idleTrimFired(_:)), userInfo: nil, repeats: false)
+        RunLoop.current.add(timer, forMode: .common)
+        idleTrimTimer = timer
+    }
+
+    private func cancelIdleTrim() {
+        idleTrimTimer?.invalidate()
+        idleTrimTimer = nil
+    }
+
+    @objc private func idleTrimFired(_ timer: Timer) {
+        idleTrimTimer = nil
+        // Not through the rate limit: this is the one call that is meant to
+        // land after the last tick, whenever that was.
+        lastTrimCheck = 0
+        trimSurfacesIfIdle(now: CACurrentMediaTime())
     }
 
     /// Whether the tick is still running — the tests watch it to see that a
@@ -735,9 +848,15 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
                 // keeps ticking past the idle stop — but only until the retry
                 // deadline, or a renderer that never recovers would hold a
                 // display link for ever.
-                if now > retryUntil, now - lastPresentTime > TerminalView.idleStop { stopDisplayLink() }
+                if now > retryUntil, now - lastPresentTime > TerminalView.idleStop {
+                    stopDisplayLink()
+                    scheduleIdleTrim()
+                }
             }
         }
+        // After the paint, so a surface this very frame drew into is the
+        // youngest and never the one freed.
+        trimSurfacesIfIdle(now: now)
     }
 
     /// Paint when something changed. Shared by the display-link tick and the
@@ -938,12 +1057,31 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
             overlay.searchMatches = search.findAll()
             overlay.currentMatch = currentMatch
         }
+        echo.term = echoTerm
+        if echo.isValid { overlay.echoMatches = echo.findAll(limit: TerminalView.echoLimit) }
         overlay.highlight = (highlightEnabled && !terminal.isAlternate) ? highlight : nil
         overlay.cursorVisible = terminal.cursorVisible && terminal.buffer.ydisp == terminal.buffer.ybase
         overlay.cursorBlinkOn = shouldBlink ? cursorBlinkOn : true
         overlay.focused = isFocused
         overlay.reverseVideo = terminal.modes.reverseVideo
         return overlay
+    }
+
+    /// How many echoes are worth finding — one screen can show far fewer,
+    /// and the engine stops looking once it has this many.
+    static let echoLimit = 500
+
+    /// The selected word, when the selection is one worth echoing: a single
+    /// line, 2–64 characters, no whitespace — an interface name, an address,
+    /// a MAC, a VLAN id. Anything else (a dragged paragraph, one character,
+    /// a run of spaces) is "" and switches the echo off.
+    var echoTerm: String {
+        guard selection.isActive, selection.mode != .line, selection.mode != .block,
+              let range = selection.lineRange, range.lowerBound == range.upperBound else { return "" }
+        let text = selection.text()
+        guard text.count >= 2, text.count <= 64,
+              !text.contains(where: { $0.isWhitespace || $0.isNewline }) else { return "" }
+        return text
     }
 
     // MARK: - Focus

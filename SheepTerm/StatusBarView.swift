@@ -37,7 +37,11 @@ struct StatusBarView: View {
             }
             Spacer()
             if model.statusShowHints {
-                Text("⌘T tab · ⌘0 sidebar · ⌘1–9 switch")
+                // The break key only exists on a serial console; a hint for a
+                // greyed-out item would just raise the question.
+                Text(model.canSendBreak
+                     ? "⌘T tab · ⌘0 sidebar · ⌘1–9 switch · ⌃⌥B break"
+                     : "⌘T tab · ⌘0 sidebar · ⌘1–9 switch")
                     .foregroundStyle(Theme.dimText.opacity(0.7))
             }
             Spacer()

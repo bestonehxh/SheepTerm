@@ -5,6 +5,38 @@ import XCTest
 /// transport is put in its post-kex state with no cipher, so what the
 /// connection sends comes back out as cleartext packets.
 final class ConnectionTests: XCTestCase {
+    /// direct-tcpip (4.2 (4), jump host): the open carries the target and a
+    /// nominal originator, and the channel then behaves like any other.
+    func testDirectTCPIPOpenCarriesTheTargetAndThenCarriesData() throws {
+        let (c, t) = connection()
+        let id = try c.openDirectTCPIP(host: "10.0.0.5", port: 22)
+        let packets = sent(t)
+        XCTAssertEqual(packets.count, 1)
+        var r = SSHReader(packets[0])
+        XCTAssertEqual(try r.readByte(), 90)
+        XCTAssertEqual(try r.readString(), Array("direct-tcpip".utf8))
+        XCTAssertEqual(try r.readUInt32(), id)
+        XCTAssertEqual(try r.readUInt32(), UInt32(SSHConnection.windowSize))
+        XCTAssertEqual(try r.readUInt32(), UInt32(SSHConnection.maxPacket))
+        XCTAssertEqual(try r.readString(), Array("10.0.0.5".utf8))
+        XCTAssertEqual(try r.readUInt32(), 22)
+        XCTAssertEqual(try r.readString(), Array("127.0.0.1".utf8))
+        XCTAssertEqual(try r.readUInt32(), 0)
+        XCTAssertTrue(r.isAtEnd)
+
+        try c.handle(confirmation(local: id, remote: 7))
+        XCTAssertEqual(c.takeEvents(), [.channelOpened(id)])
+        try c.write(id, Array("SSH-2.0-x\r\n".utf8))
+        let data = sent(t)
+        XCTAssertEqual(data.count, 1)
+        XCTAssertEqual(data[0][0], 94)          // CHANNEL_DATA
+        // Inbound data lands as .data, like a session's.
+        var w = SSHWriter()
+        w.writeByte(94); w.writeUInt32(id); w.writeString("SSH-2.0-y\r\n")
+        try c.handle(w.bytes)
+        XCTAssertEqual(c.takeEvents(), [.data(id, Array("SSH-2.0-y\r\n".utf8))])
+    }
+
     func connection() -> (SSHConnection, SSHTransport) {
         let t = SSHTransport(configuration: .init(hostKeyValidator: { _ in true }))
         t._testEnterRunningInTheClear()

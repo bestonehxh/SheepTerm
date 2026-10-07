@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		5EEB00000000000000000040 /* SheepVTRender in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000051 /* SheepVTRender */; };
 		5EEB00000000000000000041 /* SheepSSH in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000053 /* SheepSSH */; };
+		5EEB00000000000000000042 /* SheepJumphost in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000055 /* SheepJumphost */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +44,7 @@
 			files = (
 				5EEB00000000000000000040 /* SheepVTRender in Frameworks */,
 				5EEB00000000000000000041 /* SheepSSH in Frameworks */,
+				5EEB00000000000000000042 /* SheepJumphost in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -87,6 +89,7 @@
 			packageProductDependencies = (
 				5EEB00000000000000000051 /* SheepVTRender */,
 				5EEB00000000000000000053 /* SheepSSH */,
+				5EEB00000000000000000055 /* SheepJumphost */,
 			);
 			productName = SheepTerm;
 			productReference = 5EEB00000000000000000020 /* SheepTerm.app */;
@@ -119,6 +122,7 @@
 			packageReferences = (
 				5EEB00000000000000000050 /* XCLocalSwiftPackageReference "Packages/SheepVT" */,
 				5EEB00000000000000000052 /* XCLocalSwiftPackageReference "Packages/SheepSSH" */,
+				5EEB00000000000000000054 /* XCLocalSwiftPackageReference "Packages/SheepJumphost" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5EEB00000000000000000023 /* Products */;
@@ -282,7 +286,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -313,7 +317,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -369,6 +373,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/SheepSSH;
 		};
+		5EEB00000000000000000054 /* XCLocalSwiftPackageReference "Packages/SheepJumphost" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SheepJumphost;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -380,6 +388,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5EEB00000000000000000052 /* XCLocalSwiftPackageReference "Packages/SheepSSH" */;
 			productName = SheepSSH;
+		};
+		5EEB00000000000000000055 /* SheepJumphost */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5EEB00000000000000000054 /* XCLocalSwiftPackageReference "Packages/SheepJumphost" */;
+			productName = SheepJumphost;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

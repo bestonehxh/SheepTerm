@@ -33,6 +33,8 @@ struct QuickConnectSheet: View {
     @State private var credentialName = ""
     @State private var cipherMode: CipherMode = .auto
     @State private var agentForward = false
+    /// Edit Host → "Disable paging on connect" (SSH only; see `Vendor.disablePagingCommand`).
+    @State private var disablePaging = false
     /// Highlight device family. `.auto` leaves passive stream detection ON; a
     /// specific pick is a manual/saved choice, so detection is off for it.
     @State private var vendor: Vendor = .auto
@@ -116,6 +118,8 @@ struct QuickConnectSheet: View {
                     }
 
                     Toggle("Forward SSH agent", isOn: $agentForward)
+                    Toggle("Disable paging on connect", isOn: $disablePaging)
+                        .disabled(vendor.disablePagingCommand == nil)
 
                     TextField("Session name (optional)", text: $name)
                 } else {
@@ -403,6 +407,7 @@ struct QuickConnectSheet: View {
         // endpoint. HostEditSheet has always stored the literal — the two
         // doors now say the same thing.
         host.vendor = vendor
+        if kind == .ssh { host.disablePaging = disablePaging }
         // A password typed beside "Enter manually" is for THIS session (it is
         // saved only if "Save as credential" was ticked, and then the host
         // carries the id instead). Empty is not a hole to fill from the

@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import SheepSSH
+import SheepJumphost
 import Synchronization
 
 struct SSHConfig: Sendable {
@@ -15,6 +16,18 @@ struct SSHConfig: Sendable {
     /// hop from there can use our keys. Off unless the host asks for it —
     /// anyone with root on the far end can use the socket while we sit there.
     var agentForward: Bool = false
+    /// Reach the host through this bastion (ProxyJump, `SheepJumphost`);
+    /// nil = straight there.
+    var jump: JumpHop? = nil
+}
+
+nonisolated extension JumpHop {
+    /// The hop as a config the handshake/auth helpers can run.
+    func asConfig() -> SSHConfig {
+        SSHConfig(host: host, port: port, username: username, password: password,
+                  mode: CipherMode(rawValue: cipherPolicy.rawValue) ?? .auto,
+                  initialCols: 80, initialRows: 24)
+    }
 }
 
 /// Runs one SSH session (our own SheepSSH stack) on its own serial queue.
@@ -400,15 +413,29 @@ nonisolated final class SSHWorker: Sendable {
             close(pipeWrite)
         }
 
+        // Jump host: the bastion is connected, checked and logged into first,
+        // and the real host's SSH then runs over a direct-tcpip channel of it.
+        var tunnel: SSHLink.Tunnel?
+        if let hop = config.jump {
+            guard let made = establishJump(hop, target: config, wake: pipeRead) else { return }
+            tunnel = made
+        }
+
         var usedLegacy = config.mode == .legacy
         let link: SSHLink
-        switch connectAndExchangeKeys(config, legacy: usedLegacy, wake: pipeRead) {
+        switch connectAndExchangeKeys(config, legacy: usedLegacy, wake: pipeRead, via: tunnel) {
         case .success(let established):
             link = established
         case .failure(.negotiation(let why)) where config.mode == .auto:
             notice("modern negotiation failed (\(why)) — retrying with legacy algorithms…")
             usedLegacy = true
-            switch connectAndExchangeKeys(config, legacy: true, wake: pipeRead) {
+            // A failed negotiation took the bastion channel with it (the far
+            // end hung up on the channel): a retry needs a fresh tunnel.
+            if let hop = config.jump {
+                guard let made = establishJump(hop, target: config, wake: pipeRead) else { return }
+                tunnel = made
+            }
+            switch connectAndExchangeKeys(config, legacy: true, wake: pipeRead, via: tunnel) {
             case .success(let established):
                 link = established
             case .failure(let failure):
@@ -534,6 +561,7 @@ nonisolated final class SSHWorker: Sendable {
         let kex = negotiated?.kex.rawValue ?? "?"
         let cipher = negotiated?.cipherClientToServer.rawValue ?? "?"
         var status = "ssh2 · \(cipher) · \(kex) · \(config.host):\(config.port) · \(config.username)"
+        if let hop = config.jump { status += " · via \(hop.label)" }
         if usedLegacy { status += " · LEGACY" }
         if forwarder != nil { status += " · agent" }
         onStatus?(status)
@@ -578,6 +606,96 @@ nonisolated final class SSHWorker: Sendable {
             // straight back in).
             closeSession(Self.sessionEndedPrefix + "\(config.host) closed.", endedNormally: true)
         }
+    }
+
+    /// The jump half of `run`: connect to the bastion, verify its host key,
+    /// authenticate, and open a direct-tcpip channel to the real host. Every
+    /// failure is reported here with the bastion named, and nil comes back.
+    /// The bastion link is owned by the returned tunnel; the inner link
+    /// closes it with itself.
+    private func establishJump(_ hop: JumpHop, target: SSHConfig, wake: Int32) -> SSHLink.Tunnel? {
+        var hopConfig = hop.asConfig()
+        if hopConfig.username.trimmingCharacters(in: .whitespaces).isEmpty {
+            guard let user = usernamePrompt?("Username for jump host \(hop.host)")?
+                .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
+                closeSession("connection cancelled — no username given for jump host \(hop.host)")
+                return nil
+            }
+            hopConfig.username = user
+        }
+        guard (1...65535).contains(hopConfig.port) else {
+            closeSession("jump host \(hop.host): invalid port \(hopConfig.port)")
+            return nil
+        }
+        notice("via jump host \(hop.label) — connecting…")
+        let prefix = "jump host \(hop.label): "
+        var usedLegacy = hopConfig.mode == .legacy
+        let link: SSHLink
+        switch connectAndExchangeKeys(hopConfig, legacy: usedLegacy, wake: wake) {
+        case .success(let established):
+            link = established
+        case .failure(.negotiation(let why)) where hopConfig.mode == .auto:
+            notice("jump host \(hop.label): modern negotiation failed (\(why)) — retrying with legacy algorithms…")
+            usedLegacy = true
+            switch connectAndExchangeKeys(hopConfig, legacy: true, wake: wake) {
+            case .success(let established): link = established
+            case .failure(let failure): report(failure, prefix: prefix); return nil
+            }
+        case .failure(let failure):
+            report(failure, prefix: prefix)
+            return nil
+        }
+        authCancelled = false
+        authTransportError = nil
+        guard authenticate(link, hopConfig, legacy: usedLegacy, wake: wake) else {
+            if isRunning {
+                if let refusal = hostKeyRefusedDuringAuth {
+                    closeSession(refusal, hostKeyRefusal: true)
+                } else if let transport = authTransportError {
+                    closeSession(prefix + transport)
+                } else {
+                    closeSession(prefix + (authCancelled ? "connection cancelled — no password given" : "authentication failed"))
+                }
+            }
+            link.close()
+            return nil
+        }
+        let connection = SSHConnection(transport: link.transport)
+        link.route = { try connection.handle($0) }
+        do {
+            try link.drainMessages()
+        } catch {
+            closeSession(prefix + "connection lost: \(Self.describe(error))")
+            link.close()
+            return nil
+        }
+        let channel: UInt32
+        do {
+            channel = try ChannelTunnel.open(on: connection, host: target.host, port: target.port)
+        } catch {
+            closeSession(prefix + "could not ask for a tunnel: \(Self.describe(error))")
+            link.close()
+            return nil
+        }
+        var pending: [SSHConnection.Event] = []
+        switch waitFor(link, connection, wake: wake, collecting: &pending, until: { events in
+            ChannelTunnel.outcome(of: events, channel: channel) != nil
+        }) {
+        case .failure(let failure):
+            report(failure, prefix: prefix + "tunnel: ")
+            link.close()
+            return nil
+        case .success:
+            let target = "\(target.host):\(target.port)"
+            if let outcome = ChannelTunnel.outcome(of: pending, channel: channel),
+               let why = ChannelTunnel.explain(outcome, target: target) {
+                closeSession(prefix + why)
+                link.close()
+                return nil
+            }
+        }
+        notice("tunnel to \(target.host):\(target.port) open through \(hop.label)")
+        return SSHLink.Tunnel(bastion: link, adapter: ChannelTunnel(connection: connection, channel: channel))
     }
 
     private func report(_ failure: HandshakeFailure, prefix: String = "") {
@@ -680,15 +798,18 @@ nonisolated final class SSHWorker: Sendable {
     /// Time spent waiting on the first-connection trust question is NOT
     /// counted: the deadline moves out by exactly that long (the password
     /// prompt gets the same treatment by running before its own clock).
-    private func connectAndExchangeKeys(_ config: SSHConfig, legacy: Bool, wake: Int32) -> Result<SSHLink, HandshakeFailure> {
+    private func connectAndExchangeKeys(_ config: SSHConfig, legacy: Bool, wake: Int32,
+                                        via tunnel: SSHLink.Tunnel? = nil) -> Result<SSHLink, HandshakeFailure> {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: Self.connectBudget)
-        let fd: Int32
-        switch Self.openTCP(host: config.host, port: config.port, deadline: deadline, isRunning: { [weak self] in self?.isRunning ?? false }) {
-        case .success(let socket): fd = socket
-        case .failure(let failure): return .failure(failure)
+        var fd: Int32 = -1
+        if tunnel == nil {
+            switch Self.openTCP(host: config.host, port: config.port, deadline: deadline, isRunning: { [weak self] in self?.isRunning ?? false }) {
+            case .success(let socket): fd = socket
+            case .failure(let failure): return .failure(failure)
+            }
+            enableTCPKeepalive(on: fd)
         }
-        enableTCPKeepalive(on: fd)
 
         let refusal = RefusalBox()
         let host = config.host, port = config.port
@@ -716,7 +837,8 @@ nonisolated final class SSHWorker: Sendable {
                 }
                 return true
             })
-        let link = SSHLink(fd: fd, transport: SSHTransport(configuration: transportConfig))
+        let link = tunnel.map { SSHLink(tunnel: $0, transport: SSHTransport(configuration: transportConfig)) }
+            ?? SSHLink(fd: fd, transport: SSHTransport(configuration: transportConfig))
         link.transport.start()
         let outcome = pump(link, wake: wake, deadline: deadline,
                            slack: { refusal.waitedForUser.withLock { $0 } }) { link.isReady }
@@ -2505,21 +2627,44 @@ nonisolated final class SSHLink {
         case socket(String)
     }
 
+    /// A jump host's channel, as the wire under a tunnelled link: the inner
+    /// transport's bytes go out as CHANNEL_DATA on the bastion connection and
+    /// come back as `.data` events for this channel. The bastion link is
+    /// owned here and polled through the tunnelled link's `step`.
+    final class Tunnel {
+        let bastion: SSHLink
+        /// The channel ↔ transport adapter (`SheepJumphost`).
+        let adapter: ChannelTunnel
+
+        init(bastion: SSHLink, adapter: ChannelTunnel) {
+            self.bastion = bastion
+            self.adapter = adapter
+        }
+    }
+
+    /// The socket this link polls: its own, or the bastion's for a tunnel.
     let fd: Int32
     let transport: SSHTransport
+    let tunnel: Tunnel?
     /// Where transport `.message` payloads go; by default they park until
     /// a layer takes them (`nextParked`) or `drainMessages` replays them.
     var route: ([UInt8]) throws -> Void = { _ in }
     private(set) var isReady = false
     private var outbound = ByteQueue()
-    /// Bytes the socket has accepted, ever (write-stall accounting).
-    private(set) var socketBytesWritten = 0
+    var hasPendingOutbound: Bool { !outbound.isEmpty }
+    /// Bytes the socket has accepted, ever (write-stall accounting). For a
+    /// tunnel it is the bastion's socket that counts: that is the one that
+    /// can stall.
+    var socketBytesWritten: Int { tunnel?.bastion.socketBytesWritten ?? ownSocketBytesWritten }
+    private var ownSocketBytesWritten = 0
     /// Everything accepted for sending that the socket has not taken yet:
     /// sealed and queued here or in the transport, or held by it during a
     /// rekey. The worker's back-pressure counts all of it — a large remote
-    /// window and a black-holed socket must not buffer a paste unseen.
+    /// window and a black-holed socket must not buffer a paste unseen. A
+    /// tunnel adds what sits in the bastion channel and the bastion link.
     var unsentBytes: Int {
         outbound.count + transport.outgoingByteCount + transport.heldPayloadBytes
+            + (tunnel.map { $0.adapter.pendingOutput + $0.bastion.unsentBytes } ?? 0)
     }
     private var closed = false
     private var parked: [[UInt8]] = []
@@ -2529,6 +2674,14 @@ nonisolated final class SSHLink {
     init(fd: Int32, transport: SSHTransport) {
         self.fd = fd
         self.transport = transport
+        self.tunnel = nil
+        parkMessages()
+    }
+
+    init(tunnel: Tunnel, transport: SSHTransport) {
+        self.fd = tunnel.bastion.fd
+        self.transport = transport
+        self.tunnel = tunnel
         parkMessages()
     }
 
@@ -2545,15 +2698,29 @@ nonisolated final class SSHLink {
     func close() {
         guard !closed else { return }
         closed = true
-        _ = Darwin.close(fd)
+        if let tunnel {
+            // The bastion socket is the bastion link's to close; the channel
+            // goes with the connection.
+            tunnel.bastion.close()
+        } else {
+            _ = Darwin.close(fd)
+        }
     }
 
     /// Best-effort goodbye: channel close/EOF already queued by the caller,
-    /// then SSH_MSG_DISCONNECT, one non-blocking flush, close.
+    /// then SSH_MSG_DISCONNECT, one non-blocking flush, close. For a tunnel
+    /// the inner DISCONNECT rides the channel, the channel is closed, and the
+    /// bastion gets its own goodbye.
     func shutdown() {
         guard !closed else { return }
         transport.disconnect(reason: .byApplication, description: "")
         try? flush()
+        if let tunnel {
+            tunnel.adapter.close()
+            closed = true
+            tunnel.bastion.shutdown()
+            return
+        }
         close()
     }
 
@@ -2575,20 +2742,93 @@ nonisolated final class SSHLink {
         }
     }
 
-    /// Writes as much queued output as the socket takes right now.
+    /// Writes as much queued output as the socket takes right now. Through
+    /// a tunnel, everything goes into the bastion channel (its window and
+    /// the bastion socket decide when it actually leaves).
     func flush() throws {
         transport.drainOutgoing(into: &outbound)
+        if let tunnel {
+            if !outbound.isEmpty {
+                let bytes = Array(outbound.unread)
+                do {
+                    try tunnel.adapter.write(bytes)
+                } catch {
+                    throw Failure.socket("tunnel write failed: \(error)")
+                }
+                outbound.consume(bytes.count)
+            }
+            try tunnel.bastion.flush()
+            return
+        }
         while !outbound.isEmpty {
             let n = outbound.unread.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
             if n > 0 {
                 outbound.consume(n)
-                socketBytesWritten += n
+                ownSocketBytesWritten += n
             } else if n < 0, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR {
                 break
             } else {
                 throw Failure.socket("write failed: \(String(cString: strerror(errno)))")
             }
         }
+    }
+
+    /// Feed bytes that arrived for this transport, routing what they decode
+    /// to. Shared by the socket read and the tunnel.
+    private func receive(_ bytes: ArraySlice<UInt8>) throws {
+        do {
+            try transport.receive(bytes)
+        } catch {
+            // Packets parsed before the failing one (the last output, EOF,
+            // CLOSE before a DISCONNECT) still count.
+            try? takeTransportEvents()
+            throw error
+        }
+        try takeTransportEvents()
+    }
+
+    /// Read what the socket has right now, at most `maxReadsPerStep`
+    /// buffers, into this link's transport. Returns true when bytes came.
+    func readSocket() throws -> Bool {
+        var gotBytes = false
+        for _ in 0..<Self.maxReadsPerStep {
+            let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if n > 0 {
+                gotBytes = true
+                try receive(buffer[0..<n])
+                if n < buffer.count { break }
+            } else if n == 0 {
+                try takeTransportEvents()
+                throw Failure.closedByPeer
+            } else if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR {
+                break
+            } else {
+                throw Failure.socket("read failed: \(String(cString: strerror(errno)))")
+            }
+        }
+        return gotBytes
+    }
+
+    /// The tunnel's read: pump the bastion socket into the bastion
+    /// transport (whose messages route to the bastion connection), take our
+    /// channel's data out of the connection's events, and feed it to the
+    /// inner transport. EOF or CLOSE on the channel is the peer hanging up.
+    private func readTunnel(_ tunnel: Tunnel) throws -> Bool {
+        _ = try tunnel.bastion.readSocket()
+        // Other channels' events (none are expected on a bastion we opened
+        // nothing else on) are dropped here.
+        _ = tunnel.adapter.absorb(tunnel.adapter.connection.takeEvents())
+        var gotBytes = false
+        let bytes = tunnel.adapter.takeInbound()
+        if !bytes.isEmpty {
+            gotBytes = true
+            try receive(bytes[...])
+        }
+        if tunnel.adapter.peerClosed, !tunnel.adapter.hasInbound {
+            try takeTransportEvents()
+            throw Failure.closedByPeer
+        }
+        return gotBytes
     }
 
     /// One pass: flush, wait up to `timeoutMS` for the socket / wake pipe /
@@ -2598,7 +2838,8 @@ nonisolated final class SSHLink {
     func step(timeoutMS: Int32, wake: Int32, extra: [Int32]) throws -> Bool {
         try flush()
         try takeTransportEvents()
-        var fds = [pollfd(fd: fd, events: Int16(POLLIN) | (outbound.isEmpty ? 0 : Int16(POLLOUT)), revents: 0),
+        let wantsOut = tunnel.map { $0.bastion.hasPendingOutbound } ?? !outbound.isEmpty
+        var fds = [pollfd(fd: fd, events: Int16(POLLIN) | (wantsOut ? Int16(POLLOUT) : 0), revents: 0),
                    pollfd(fd: wake, events: Int16(POLLIN), revents: 0)]
         fds += extra.map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
         let ready = poll(&fds, nfds_t(fds.count), timeoutMS)
@@ -2614,34 +2855,12 @@ nonisolated final class SSHLink {
         var gotBytes = false
         let revents = Int32(fds[0].revents)
         // HUP/ERR is checked after the read: a hang-up arriving WITH final
-        // data must still deliver that data first.
+        // data must still deliver that data first. At most `maxReadsPerStep`
+        // buffers per pass, so a flood cannot keep the caller from typing,
+        // resizing, probing or stopping — and its output reaches the
+        // terminal as it comes.
         if revents & Int32(POLLIN | POLLHUP | POLLERR) != 0 {
-            // At most `maxReadsPerStep` buffers per pass, so a flood cannot
-            // keep the caller from typing, resizing, probing or stopping —
-            // and its output reaches the terminal as it comes.
-            for _ in 0..<Self.maxReadsPerStep {
-                let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
-                if n > 0 {
-                    gotBytes = true
-                    do {
-                        try transport.receive(buffer[0..<n])
-                    } catch {
-                        // Packets parsed before the failing one (the last
-                        // output, EOF, CLOSE before a DISCONNECT) still count.
-                        try? takeTransportEvents()
-                        throw error
-                    }
-                    try takeTransportEvents()
-                    if n < buffer.count { break }
-                } else if n == 0 {
-                    try takeTransportEvents()
-                    throw Failure.closedByPeer
-                } else if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR {
-                    break
-                } else {
-                    throw Failure.socket("read failed: \(String(cString: strerror(errno)))")
-                }
-            }
+            gotBytes = try tunnel.map { try readTunnel($0) } ?? readSocket()
         }
         if revents & Int32(POLLNVAL) != 0 { throw Failure.socket("socket closed") }
         try flush()

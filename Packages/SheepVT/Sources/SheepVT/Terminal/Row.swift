@@ -102,6 +102,16 @@ public final class Row {
     /// No `bump()`: nothing painted changes when this flips.
     @exclusivity(unchecked) public var wrapGapBefore: Bool = false
 
+    /// Command mark (4.2 (4)): the user pressed Return on this row, so it
+    /// holds a prompt and the command typed at it. Set by
+    /// `Terminal.markCommandLine`, cleared with the row when the ring recycles
+    /// it (`LineRing.reset`). Reflow keeps the Row object, so the mark rides
+    /// along with the first row of its logical line. Painted as a hairline
+    /// above the row; `commandLines()` and `lastCommandOutput()` read it.
+    @exclusivity(unchecked) public var commandMark: Bool = false {
+        didSet { if commandMark != oldValue { bump() } }
+    }
+
     /// Bumped on every mutation through the public API.
     @exclusivity(unchecked) public private(set) var generation: UInt64 = 0
 

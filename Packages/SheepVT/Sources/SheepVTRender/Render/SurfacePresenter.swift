@@ -27,6 +27,8 @@ final class SurfacePresenter {
     private struct Slot {
         let surface: IOSurface
         let texture: MTLTexture
+        /// When a frame was last drawn into it — what `trimIdle` goes by.
+        var lastUsed: CFTimeInterval
     }
     private let device: MTLDevice
     private var slots: [Slot] = []
@@ -50,17 +52,27 @@ final class SurfacePresenter {
     init(device: MTLDevice) { self.device = device }
 
     /// (Re)create the ring for a pixel size. Cheap when unchanged.
-    func prepare(pixelSize: CGSize) {
+    func prepare(pixelSize: CGSize, now: CFTimeInterval = CACurrentMediaTime()) {
         let w = Int(max(1, pixelSize.width.rounded())), h = Int(max(1, pixelSize.height.rounded()))
         // `slots.count` is not compared: a ring that grew under compositor
         // pressure is still the right ring for this size, and rebuilding it
         // here would throw that away every frame.
-        if !slots.isEmpty, Int(self.pixelSize.width) == w, Int(self.pixelSize.height) == h { return }
+        let sameSize = Int(self.pixelSize.width) == w && Int(self.pixelSize.height) == h
+        if !slots.isEmpty, sameSize { return }
+        if sameSize {
+            // `trimIdle` emptied the ring at this size. One surface, not
+            // three: the first frame after an idle is one frame, and
+            // `nextTexture` adds a slot the moment one is really needed —
+            // so a ring that woke up for a single keystroke stays at one.
+            if let slot = makeSlot(width: w, height: h, now: now) { slots.append(slot) }
+            next = 0
+            return
+        }
         self.pixelSize = CGSize(width: w, height: h)
         slots.removeAll()
         next = 0
         for _ in 0..<SurfacePresenter.baseSlots {
-            guard let slot = makeSlot(width: w, height: h) else { continue }
+            guard let slot = makeSlot(width: w, height: h, now: now) else { continue }
             slots.append(slot)
         }
     }
@@ -72,20 +84,38 @@ final class SurfacePresenter {
         pixelSize = .zero
     }
 
+    /// Drop every surface that has not been drawn into for `interval` and
+    /// that the window server is not reading. The one on screen stays (the
+    /// layer holds it anyway); everything else is 17.7 MB apiece at
+    /// 2912×1594 for a picture that will be redrawn from scratch when the
+    /// next frame comes. `prepare` and `nextTexture` grow the ring back on
+    /// demand, one surface per frame that needs one, so an idle terminal
+    /// settles at one surface and a blinking cursor at two.
+    ///
+    /// - Returns: how many surfaces were freed.
+    @discardableResult
+    func trimIdle(now: CFTimeInterval = CACurrentMediaTime(), olderThan interval: CFTimeInterval) -> Int {
+        let before = slots.count
+        slots.removeAll { now - $0.lastUsed > interval && !isInUse($0.surface) }
+        if next >= slots.count { next = 0 }
+        return before - slots.count
+    }
+
     /// The texture to render the next frame into (nil until `prepare` succeeded).
     ///
     /// Round-robin, but skipping any surface the window server still holds:
     /// on a 120 Hz display a frame can be encoded while the compositor is
     /// reading the one presented a moment ago, and drawing into that one would
     /// show half of the new frame. `IOSurfaceIsInUse` is exactly that question.
-    func nextTexture() -> MTLTexture? {
+    func nextTexture(now: CFTimeInterval = CACurrentMediaTime()) -> MTLTexture? {
         guard !slots.isEmpty else { return nil }
         let count = slots.count
         for k in 0..<count {
-            let slot = slots[(next + k) % count]
-            if !isInUse(slot.surface) {
-                next = (next + k + 1) % count
-                return slot.texture
+            let index = (next + k) % count
+            if !isInUse(slots[index].surface) {
+                next = (index + 1) % count
+                slots[index].lastUsed = now
+                return slots[index].texture
             }
         }
         // Every surface is being read. Two things are NOT options here.
@@ -103,7 +133,7 @@ final class SurfacePresenter {
         // the compositor keeps whatever it still holds alive through the
         // layer's own reference and releases it when it is done. nil is left
         // for the one case with no safe answer: the allocation failed.
-        guard let fresh = makeSlot(width: Int(pixelSize.width), height: Int(pixelSize.height)) else { return nil }
+        guard let fresh = makeSlot(width: Int(pixelSize.width), height: Int(pixelSize.height), now: now) else { return nil }
         let index: Int
         if count < SurfacePresenter.maxSlots, (count + 1) * surfaceBytes <= SurfacePresenter.maxRingBytes {
             slots.append(fresh)
@@ -144,7 +174,7 @@ final class SurfacePresenter {
 
     private var surfaceBytes: Int { Int(pixelSize.width) * Int(pixelSize.height) * 4 }
 
-    private func makeSlot(width w: Int, height h: Int) -> Slot? {
+    private func makeSlot(width w: Int, height h: Int, now: CFTimeInterval) -> Slot? {
         guard w >= 1, h >= 1 else { return nil }
         let props: [IOSurfacePropertyKey: Any] = [
             .width: w, .height: h, .bytesPerElement: 4,
@@ -155,7 +185,7 @@ final class SurfacePresenter {
         desc.usage = [.renderTarget, .shaderRead]
         desc.storageMode = .shared
         guard let texture = device.makeTexture(descriptor: desc, iosurface: surface, plane: 0) else { return nil }
-        return Slot(surface: surface, texture: texture)
+        return Slot(surface: surface, texture: texture, lastUsed: now)
     }
 
     /// The surface a texture was made from. Used by `present`, and by the tests

@@ -244,6 +244,26 @@ final class SerialTerminalController: NSObject {
         worker.start(devicePath: host.address, baudRate: host.port)
     }
 
+    /// Per-session `--More--` detector; see `PagerDetector`.
+    private var pager = PagerDetector()
+
+    /// Auto-page on a console: same as SSH. "Disable paging on connect" is
+    /// SSH-only on purpose — a console may be sitting at a login prompt or
+    /// a boot loader, where typing a command blind is wrong.
+    private func answerPagerIfNeeded(_ chunk: [UInt8]) {
+        guard AppModel.shared.autoPage, pager.consume(chunk) else { return }
+        worker.write([0x20])
+    }
+
+    /// Send Break (⌃⌥B): a break condition on the line, for a boot loader
+    /// that wants one. The worker reports "break sent" through `onNotice`
+    /// when the driver accepted it; here only the refusal is worth a line.
+    func sendBreak() {
+        if !worker.sendBreak() {
+            printNotice("no serial session — break not sent", error: true)
+        }
+    }
+
     /// Points the logger's own trouble reports at this session's terminal.
     /// The logger discovers a deleted file or a refused write on its I/O
     /// queue, where the only outlet used to be an NSLog nobody sees; this is
@@ -331,6 +351,7 @@ final class SerialTerminalController: NSObject {
         let pending = mainFeed.take()
         guard !pending.isEmpty else { return }
         terminalView.feed(pending)
+        answerPagerIfNeeded(pending)
         // Passive family detection, after the terminal has the bytes.
         // Bounded — see VendorFingerprint. Detection deliberately CONTINUES
         // after an automatic lock (`autoDetected` keeps

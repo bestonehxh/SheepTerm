@@ -27,7 +27,7 @@ enum BackupManager {
     /// that is there but could not be read must abort the backup rather than
     /// be quietly skipped — see `makePayload`.
     private static let fileNames = [
-        "hosts.json", "recents.json", "credentials.json",
+        "hosts.json", "recents.json", "credentials.json", "snippets.json",
     ]
 
     /// Reasons a backup or a restore is refused outright. Every case is
@@ -499,6 +499,9 @@ enum BackupManager {
         if let credentials = payload.files["credentials.json"] {
             try decodeOrThrow([Credential].self, from: credentials, name: "credentials.json")
             try checkCredentialsCarryNoSecrets(credentials)
+        }
+        if let snippets = payload.files["snippets.json"] {
+            try decodeOrThrow([Snippet].self, from: snippets, name: "snippets.json")
         }
     }
 

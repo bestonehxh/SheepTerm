@@ -114,6 +114,12 @@ public struct FrameOverlay {
     /// Search tints for a line (column range, isCurrent), precomputed by the
     /// renderer once per frame; nil = derive from `searchMatches`.
     public var searchTints: ((Int) -> [(Range<Int>, Bool)])?
+    /// Selection echo: the other occurrences of the selected word. Tinted in
+    /// the search colour at `echoAlpha`, under the search tints.
+    public var echoMatches: [SearchMatch] = []
+    /// Echo tints for a line, precomputed by the renderer like `searchTints`;
+    /// nil = derive from `echoMatches`.
+    public var echoTints: ((Int) -> [Range<Int>])?
     /// Filled in by `MetalRenderer` each frame: `highlight.overrides(line:in:)`
     /// needs the `Terminal`, which the row builder deliberately does not have.
     /// The view sets `highlight`; the renderer turns it into this closure. Tests
@@ -227,6 +233,16 @@ public struct RowBuilder {
                                                       color: bg))
         }
 
+        // 1b — a command mark: a hairline across the top of the row, in the
+        // foreground colour at a quiet alpha, so the eye finds where each
+        // command began without the text itself changing.
+        if row?.commandMark == true {
+            var color = palette.rgba(palette.colors.foreground)
+            color.w = palette.colors.commandMarkAlpha
+            let t = 1 / Swift.max(metrics.scale, 1)
+            out.decorations.append(BackgroundInstance(x: 0, y: top, width: CGFloat(cols) * cellW, height: t, color: color))
+        }
+
         // 2 — selection, then search tints, over the cell colours.
         if let range = overlay.selection?.columnRange(onLine: line), !range.isEmpty {
             out.backgrounds.append(tint(range: range, top: top,
@@ -247,6 +263,20 @@ public struct RowBuilder {
             tints = overlay.searchMatches.compactMap { match in
                 columnRange(of: match, onLine: line, cols: cols).map { ($0, overlay.currentMatch == match) }
             }
+        }
+        // Selection echo first, so a real search hit on the same cells lies
+        // over it and still reads as the stronger of the two.
+        let echoes: [Range<Int>]
+        if let perLine = overlay.echoTints {
+            echoes = perLine(line)
+        } else {
+            echoes = overlay.echoMatches.compactMap { columnRange(of: $0, onLine: line, cols: cols) }
+        }
+        for range in echoes {
+            out.backgrounds.append(tint(range: range, top: top,
+                                        rgb: palette.colors.searchMatch,
+                                        alpha: palette.colors.echoAlpha,
+                                        cols: cols))
         }
         for (range, isCurrent) in tints {
             out.backgrounds.append(tint(range: range, top: top,

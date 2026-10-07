@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SheepVTRender
+import SheepJumphost
 import Synchronization
 
 /// Owns one SSH session tab: the SheepVT view plus the SSH worker.
@@ -129,10 +130,19 @@ final class SSHTerminalController: NSObject {
         terminalView.setNeedsFrame()
     }
 
-    init(host: Host, password: String?, reusingLogger: SessionLogger? = nil) {
+    /// The bastion to go through, resolved by `AppModel.open` from the
+    /// host's `jumpHostID`; `jumpUnresolved` = the id names a host that no
+    /// longer exists, which is reported instead of connecting directly.
+    private let jump: JumpHop?
+    private let jumpUnresolved: Bool
+
+    init(host: Host, password: String?, jump: JumpHop? = nil, jumpUnresolved: Bool = false,
+         reusingLogger: SessionLogger? = nil) {
         highlightProvider = VendorHighlightProvider(vendor: host.highlightVendor)
         self.host = host
         self.password = password
+        self.jump = jump
+        self.jumpUnresolved = jumpUnresolved
         // A reconnect keeps appending to the previous session's log file
         // instead of starting a fresh one per attempt.
         loggerState = Mutex(reusingLogger)
@@ -203,7 +213,11 @@ final class SSHTerminalController: NSObject {
         }
         worker.onStatus = { [weak self] status in
             DispatchQueue.main.async {
-                self?.onStatus?(status)
+                guard let self else { return }
+                self.onStatus?(status)
+                // "ssh2 · …" is sent once, after the shell was granted — the
+                // first moment a command can go to the device.
+                if status.hasPrefix("ssh2") { self.disablePagingIfAsked() }
             }
         }
         worker.onClosed = { [weak self] message in
@@ -309,6 +323,12 @@ final class SSHTerminalController: NSObject {
                 printNotice("session logging is OFF — could not create a log file: \(error)", error: true)
             }
         }
+        if jumpUnresolved {
+            // Never "connect directly instead": the user set a path on purpose.
+            printNotice("this host connects via a jump host that no longer exists — edit the host and pick another, or None", error: true)
+            onStatus?("disconnected — jump host missing")
+            return
+        }
         worker.start(SSHConfig(
             host: host.address,
             port: host.port,
@@ -317,8 +337,30 @@ final class SSHTerminalController: NSObject {
             mode: host.cipherMode ?? .auto,
             initialCols: terminalView.cols,
             initialRows: terminalView.rows,
-            agentForward: host.agentForward ?? false
+            agentForward: host.agentForward ?? false,
+            jump: jump
         ))
+    }
+
+    // MARK: - paging
+
+    /// Per-session `--More--` detector; see `PagerDetector`.
+    private var pager = PagerDetector()
+
+    /// Auto-page: a chunk that ends in a pager prompt gets a space, as the
+    /// user would type. Global switch in View → Auto-page.
+    private func answerPagerIfNeeded(_ chunk: [UInt8]) {
+        guard AppModel.shared.autoPage, pager.consume(chunk) else { return }
+        worker.write([0x20])
+    }
+
+    /// Edit Host → "Disable paging on connect": the family's pager-off
+    /// command, typed once after the shell is up. Visible in the session and
+    /// the log like anything else typed. Nothing for Auto / Linux / FortiOS
+    /// (see `Vendor.disablePagingCommand`).
+    private func disablePagingIfAsked() {
+        guard host.disablePaging == true, let command = host.highlightVendor.disablePagingCommand else { return }
+        worker.write(Array((command + "\r").utf8))
     }
 
     /// Points the logger's own trouble reports at this session's terminal.
@@ -444,6 +486,7 @@ final class SSHTerminalController: NSObject {
         let pending = mainFeed.take()
         guard !pending.isEmpty else { return }
         terminalView.feed(pending)
+        answerPagerIfNeeded(pending)
         // Passive family detection, after the terminal has the bytes.
         // Bounded — see VendorFingerprint. Detection deliberately CONTINUES
         // after an automatic lock (`autoDetected` keeps

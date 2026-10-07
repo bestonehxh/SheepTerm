@@ -26,6 +26,11 @@ nonisolated public struct TerminalColors: Equatable, Sendable {
     public var searchMatchAlpha: Float
     public var searchCurrent: UInt32
     public var searchCurrentAlpha: Float
+    /// Selection echo (4.2 (4)): every other occurrence of the selected word
+    /// on screen, in the search colour at this quieter alpha.
+    public var echoAlpha: Float = 0.18
+    /// Command mark hairline (4.2 (4)): the foreground colour at this alpha.
+    public var commandMarkAlpha: Float = 0.28
     /// Block / bar / underline cursor colour, and the text inside a block cursor.
     public var cursor: UInt32
     public var cursorText: UInt32

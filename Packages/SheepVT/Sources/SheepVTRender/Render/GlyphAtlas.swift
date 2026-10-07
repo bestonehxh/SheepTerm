@@ -322,6 +322,18 @@ public final class GlyphAtlas {
         dirtyMaxY = newSize
     }
 
+    /// Empty the atlas on purpose — between frames, when every glyph in it
+    /// belongs to a font nothing draws with any more. Same as the overflow
+    /// reset: the generation moves and every placement handed out so far is
+    /// void. Unlike the overflow reset it is never refused: nothing is frozen
+    /// outside a frame.
+    public func clear() {
+        let wasFrozen = frozen
+        frozen = false
+        reset()
+        frozen = wasFrozen
+    }
+
     private func reset() {
         guard !frozen else { return }
         nextX = 0

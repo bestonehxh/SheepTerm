@@ -1,6 +1,6 @@
 import Foundation
 
-/// Single-pass byte scanner for the 11 built-in highlight rules.
+/// Single-pass byte scanner for the 13 built-in highlight rules.
 ///
 /// Replaces 11 NSRegularExpression passes (ICU, backtracking) with one walk
 /// over the bytes that can never backtrack: a 256-entry start table says
@@ -18,7 +18,7 @@ import Foundation
 ///
 /// ## Vendors
 ///
-/// The eleven rule NAMES are fixed. What varies between device families is
+/// The thirteen rule NAMES are fixed. What varies between device families is
 /// the DATA inside them — which interface spellings exist, which words are
 /// states rather than policy, whether ports are written `10GE1/1/1` or
 /// `ge-0/0/0` or `1/1/1` — and that data lives in `Profile`. Adding a device
@@ -35,6 +35,9 @@ nonisolated enum HighlightScanner {
     enum BuiltIn: String, CaseIterable {
         case vlan, interface, cxPort = "cx-port", mask, cidr, ipv4, mac, ipv6
         case stateGood = "state-good", stateWarn = "state-warn", stateBad = "state-bad"
+        /// 4.2 (4): a log/event timestamp (dimmed) and an error/drop counter
+        /// that is not zero (warned). Vendor-neutral, in every pack.
+        case timestamp, counter
     }
 
     @inline(__always) static func isWord(_ b: UInt8) -> Bool {
@@ -70,6 +73,8 @@ nonisolated enum HighlightScanner {
         case .stateGood: return 256
         case .stateWarn: return 512
         case .stateBad: return 1024
+        case .timestamp: return 2048
+        case .counter: return 4096
         }
     }
 
@@ -124,7 +129,11 @@ nonisolated enum HighlightScanner {
         /// as `macDashGroups`: the shape is generic enough that only the
         /// families that really print it that way carry it.
         let macSixHexGroups: Bool
-        /// Which of the eleven rules this family uses at all. `cx-port` is
+        /// Counter labels (`input errors`, `CRC`, `drops` …): a number ≥ 1
+        /// next to one of these is the `counter` rule. Lower-cased; matched
+        /// after the number (`12 CRC`) or before it (`CRC errors: 12`).
+        let counterLabels: [String]
+        /// Which of the thirteen rules this family uses at all. `cx-port` is
         /// the one that matters: it claims `0/0/0`, so leaving it on for
         /// Junos would tear `ge-0/0/0` in half.
         let rules: UInt16
@@ -136,6 +145,13 @@ nonisolated enum HighlightScanner {
         let stateWarnByFirst: [[[UInt8]]]
         let stateBadByFirst: [[[UInt8]]]
         let negationBytes: [[UInt8]]
+        let counterByFirst: [[[UInt8]]]
+        let counterLabelBytes: [[UInt8]]
+        /// The same labels bucketed by their LAST byte: the label-behind
+        /// form compares a label's tail against the bytes before the number,
+        /// and every number in a dump takes that path — 55 compares per
+        /// number was the whole of the 25 % the rule cost at first.
+        let counterByLast: [[[UInt8]]]
 
         init(
             interface: [String],
@@ -148,6 +164,7 @@ nonisolated enum HighlightScanner {
             vlanRanges: Bool = false,
             macDashGroups: Bool = false,
             macSixHexGroups: Bool = false,
+            counters: [String] = Vocab.counterCore,
             omitting: Set<BuiltIn> = []
         ) {
             let ifKws = Profile.sortLongestFirst(interface)
@@ -165,6 +182,13 @@ nonisolated enum HighlightScanner {
             self.vlanRanges = vlanRanges
             self.macDashGroups = macDashGroups
             self.macSixHexGroups = macSixHexGroups
+            let counterKws = Profile.sortLongestFirst(counters)
+            counterLabels = counterKws
+            counterByFirst = Profile.bucketByFirst(counterKws)
+            counterLabelBytes = counterKws.map { Array($0.utf8) }
+            var byLast = [[[UInt8]]](repeating: [], count: 256)
+            for kw in counterLabelBytes { byLast[Int(kw[kw.count - 1])].append(kw) }
+            counterByLast = byLast
             rules = BuiltIn.allCases.reduce(into: UInt16(0)) {
                 if !omitting.contains($1) { $0 |= HighlightScanner.bit(of: $1) }
             }
@@ -226,6 +250,15 @@ nonisolated enum HighlightScanner {
             table[Int(0x32)] |= maskBit // '2' may start 255.x.x.x
             table[Int(0x2F)] = cidrBit  // '/'
             table[Int(0x3A)] = v6Bit    // ':' (::1)
+            // A timestamp starts on a digit (ISO date, bare clock) or a
+            // month's first letter; a counter is a number that is not zero.
+            let tsBit = bit(of: .timestamp), counterBit = bit(of: .counter)
+            for d: UInt8 in 0x30...0x39 { table[Int(d)] |= tsBit }
+            for d: UInt8 in 0x31...0x39 { table[Int(d)] |= counterBit }
+            for m in "jfmasond".utf8 {
+                table[Int(m)] |= tsBit
+                table[Int(m - 0x20)] |= tsBit
+            }
             for h: UInt8 in 0x61...0x66 {
                 table[Int(h)] |= macBit | v6Bit
                 table[Int(h - 0x20)] |= macBit | v6Bit
@@ -260,14 +293,16 @@ nonisolated enum HighlightScanner {
     /// within each rule (per-rule cursor) — exactly enumerateMatches semantics.
     ///
     /// Returns the matches ordinal-indexed (index == `ordinal(of:)`), always
-    /// 11 entries. Re-keying into a `[BuiltIn: [Range<Int>]]` used to cost
-    /// more than the scan itself on the short text runs that escape-heavy
-    /// output produces, and every caller indexes by ordinal anyway.
+    /// one entry per `BuiltIn`. Re-keying into a `[BuiltIn: [Range<Int>]]`
+    /// used to cost more than the scan itself on the short text runs that
+    /// escape-heavy output produces, and every caller indexes by ordinal anyway.
+    static let ruleCount = BuiltIn.allCases.count
+
     static func scan(_ bytes: [UInt8], enabledMask: UInt16, profile: Profile) -> [[Range<Int>]] {
-        var perRule = [[Range<Int>]](repeating: [], count: 11)
+        var perRule = [[Range<Int>]](repeating: [], count: ruleCount)
         let active = enabledMask & profile.rules
         guard active != 0 else { return perRule }
-        var cursor = [Int](repeating: 0, count: 11)
+        var cursor = [Int](repeating: 0, count: ruleCount)
         let n = bytes.count
         var i = 0
         while i < n {
@@ -299,8 +334,189 @@ nonisolated enum HighlightScanner {
         case 8: return matchState(b, s, p.stateGoodByFirst, negations: p.negationBytes)
         case 9: return matchState(b, s, p.stateWarnByFirst, negations: [])
         case 10: return matchState(b, s, p.stateBadByFirst, negations: [])
+        case 11: return matchTimestamp(b, s)
+        case 12: return matchCounter(b, s, p)
         default: return nil
         }
+    }
+
+    // MARK: - timestamp
+
+    /// Three alternatives, tried in the pattern's order, first one wins:
+    ///
+    ///   1. `\b\d{4}[-/]\d{2}[-/]\d{2}(?:[t ]TIME|END)`  — ISO / FortiOS date, time optional
+    ///   2. `\b(?:jan|…|dec)[ \t]+\d{1,2}(?:[ \t]+\d{4})?[ \t]+TIME` — syslog
+    ///   3. `(?<![0-9a-f:])TIME` — a bare clock
+    ///
+    /// with `TIME = \d{2}:\d{2}:\d{2}(?:\.\d{1,6}ZONE(?![0-9a-z_])|ZONE END)`,
+    /// `ZONE = (?:z|[+-]\d{2}:\d{2})?` and `END = (?![0-9a-z_:])` (case-insensitive).
+    /// The hex/colon guards are what keep `12:34:56` inside a MAC or an IPv6
+    /// address out of it; after a fraction a colon is allowed again (Cisco
+    /// prints `14:37:24.123:`). Backtracking in the optional tails is replayed
+    /// as a fixed list of candidates — see `timeTail`.
+    static func matchTimestamp(_ b: [UInt8], _ s: Int) -> Int? {
+        let n = b.count
+        @inline(__always) func digits(_ p: Int, _ count: Int) -> Bool {
+            guard p + count <= n else { return false }
+            for i in 0..<count where !isDigit(b[p + i]) { return false }
+            return true
+        }
+        /// `hh:mm:ss` at p — nil when not there.
+        func timeCore(_ p: Int) -> Int? {
+            guard digits(p, 2), p + 2 < n, b[p + 2] == 0x3A,
+                  digits(p + 3, 2), p + 5 < n, b[p + 5] == 0x3A,
+                  digits(p + 6, 2) else { return nil }
+            return p + 8
+        }
+        func end(_ e: Int) -> Bool { e == n || !(isWord(b[e]) || b[e] == 0x3A) }
+        func endAfterFraction(_ e: Int) -> Bool { e == n || !isWord(b[e]) }
+        /// `(?:\.\d{1,6})?(?:z|[+-]\d{2}:\d{2})?END` after a time core. The
+        /// regex tries fraction+zone, fraction, zone, neither — a shorter
+        /// fraction is always followed by a digit, so only the maximal one
+        /// can ever pass END, and the four candidates are the whole search.
+        func timeTail(_ p: Int) -> Int? {
+            var frac: Int? = nil
+            if p < n, b[p] == 0x2E {
+                var q = p + 1
+                var d = 0
+                while q < n, isDigit(b[q]), d < 6 { q += 1; d += 1 }
+                if d >= 1 { frac = q }
+            }
+            func zone(_ q: Int) -> Int? {
+                guard q < n else { return nil }
+                if lower(b[q]) == 0x7A { return q + 1 }                       // z
+                if b[q] == 0x2B || b[q] == 0x2D, digits(q + 1, 2), q + 3 < n, b[q + 3] == 0x3A, digits(q + 4, 2) {
+                    return q + 6
+                }
+                return nil
+            }
+            if let f = frac {
+                if let z = zone(f), endAfterFraction(z) { return z }
+                if endAfterFraction(f) { return f }
+            }
+            if let z = zone(p), end(z) { return z }
+            if end(p) { return p }
+            return nil
+        }
+
+        // 1. date, optional time
+        if boundaryBefore(b, s), digits(s, 4), s + 4 < n, b[s + 4] == 0x2D || b[s + 4] == 0x2F,
+           digits(s + 5, 2), s + 7 < n, b[s + 7] == b[s + 4], digits(s + 8, 2) {
+            let dateEnd = s + 10
+            if dateEnd < n, lower(b[dateEnd]) == 0x74 || b[dateEnd] == 0x20,
+               let core = timeCore(dateEnd + 1), let e = timeTail(core) {
+                return e
+            }
+            if end(dateEnd) { return dateEnd }
+            return nil
+        }
+        // 2. month day [year] time. The blank after the month is checked
+        // FIRST: every `d`, `s`, `a`… at a word boundary lands here, and
+        // "down"/"state"/"aabb" are rejected on one byte instead of twelve
+        // month compares.
+        if boundaryBefore(b, s), s + 4 < n, b[s + 3] == 0x20 || b[s + 3] == 0x09, let _ = monthIndex(b, s) {
+            var p = s + 3
+            let sp1 = p
+            while p < n, b[p] == 0x20 || b[p] == 0x09 { p += 1 }
+            guard p > sp1 else { return nil }
+            var d = 0
+            while p + d < n, isDigit(b[p + d]) { d += 1 }
+            guard d >= 1, d <= 2 else { return nil }
+            p += d
+            let sp2 = p
+            while p < n, b[p] == 0x20 || b[p] == 0x09 { p += 1 }
+            guard p > sp2 else { return nil }
+            // Year path: exactly four digits, then blanks, then the time.
+            var y = 0
+            while p + y < n, isDigit(b[p + y]) { y += 1 }
+            if y == 4 {
+                var q = p + 4
+                let sp3 = q
+                while q < n, b[q] == 0x20 || b[q] == 0x09 { q += 1 }
+                if q > sp3, let core = timeCore(q), let e = timeTail(core) { return e }
+            }
+            if let core = timeCore(p), let e = timeTail(core) { return e }
+            return nil
+        }
+        // 3. bare clock
+        if s == 0 || !(isHex(b[s - 1]) || b[s - 1] == 0x3A), let core = timeCore(s), let e = timeTail(core) {
+            return e
+        }
+        return nil
+    }
+
+    static let monthBytes: [[UInt8]] = ["jan", "feb", "mar", "apr", "may", "jun",
+                                        "jul", "aug", "sep", "oct", "nov", "dec"].map { Array($0.utf8) }
+
+    /// Months by first letter, so a lookup tries at most three.
+    static let monthsByFirst: [[(index: Int, bytes: [UInt8])]] = {
+        var table = [[(index: Int, bytes: [UInt8])]](repeating: [], count: 256)
+        for (i, m) in monthBytes.enumerated() { table[Int(m[0])].append((i, m)) }
+        return table
+    }()
+
+    /// Which month name starts at s (lower-cased compare), if any.
+    static func monthIndex(_ b: [UInt8], _ s: Int) -> Int? {
+        guard s + 3 <= b.count else { return nil }
+        let l1 = lower(b[s + 1]), l2 = lower(b[s + 2])
+        for (i, m) in monthsByFirst[Int(lower(b[s]))] where m[1] == l1 && m[2] == l2 { return i }
+        return nil
+    }
+
+    // MARK: - counter
+
+    /// `\b[1-9]\d*(?![./:-])(?=[ \t]+(?:LABELS)\b)` — the number before its
+    /// label (`12 CRC`), or
+    /// `(?<=\b(?:LABELS)[ \t]{0,4}:?[ \t]{1,8})[1-9]\d*\b(?![./:-])` — after it
+    /// (`CRC errors: 12`, `Rx Errors : 12`). Both colour the NUMBER only, and
+    /// both span exactly the digit run, so which alternative fires does not
+    /// change the result. Zero is never a counter worth a colour.
+    static func matchCounter(_ b: [UInt8], _ s: Int, _ p: Profile) -> Int? {
+        let n = b.count
+        guard b[s] >= 0x31, b[s] <= 0x39, boundaryBefore(b, s) else { return nil }
+        var e = s
+        while e < n, isDigit(b[e]) { e += 1 }
+        // `(?![./:-])` after the digits — and `\b`, which the second
+        // alternative spells out and the first implies (no digit follows).
+        guard boundaryAfter(b, e) else { return nil }
+        if e < n, b[e] == 0x2E || b[e] == 0x2F || b[e] == 0x3A || b[e] == 0x2D { return nil }
+
+        // 1. label ahead: blanks, then a label with a word boundary after it.
+        var q = e
+        while q < n, b[q] == 0x20 || b[q] == 0x09 { q += 1 }
+        // `(?<![./:-])`: the 5 of `12.5` and the 1 of `1/1/1` are not counts.
+        if q > e, q < n, s == 0 || !(b[s - 1] == 0x2E || b[s - 1] == 0x2F || b[s - 1] == 0x3A || b[s - 1] == 0x2D) {
+            for kw in p.counterByFirst[Int(lower(b[q]))] where q + kw.count <= n {
+                var hit = true
+                for i in 1..<kw.count where lower(b[q + i]) != kw[i] { hit = false; break }
+                if hit, boundaryAfter(b, q + kw.count) { return e }
+            }
+        }
+
+        // 2. label behind: label, 0–4 blanks, optional colon, 1–8 blanks, s.
+        var blanks = 0
+        while s - blanks - 1 >= 0, b[s - blanks - 1] == 0x20 || b[s - blanks - 1] == 0x09 { blanks += 1 }
+        guard blanks >= 1 else { return nil }
+        var labelEnds: [Int] = []
+        // No colon: the whole blank run is the gap, 1…12 long.
+        if blanks <= 12 { labelEnds.append(s - blanks) }
+        // Colon: 1…8 blanks after it, 0…4 before it.
+        if blanks <= 8, s - blanks - 1 >= 0, b[s - blanks - 1] == 0x3A {
+            let colon = s - blanks - 1
+            var before = 0
+            while colon - before - 1 >= 0, b[colon - before - 1] == 0x20 || b[colon - before - 1] == 0x09 { before += 1 }
+            if before <= 4 { labelEnds.append(colon - before) }
+        }
+        for labelEnd in labelEnds where labelEnd > 0 {
+            for kw in p.counterByLast[Int(lower(b[labelEnd - 1]))] where labelEnd - kw.count >= 0 {
+                let start = labelEnd - kw.count
+                guard boundaryBefore(b, start) else { continue }
+                var hit = true
+                for i in 0..<kw.count where lower(b[start + i]) != kw[i] { hit = false; break }
+                if hit { return e }
+            }
+        }
+        return nil
     }
 
     // MARK: - Matchers
@@ -683,6 +899,22 @@ nonisolated extension HighlightScanner {
     /// Word lists shared between families, so a family only spells out what
     /// is actually its own.
     enum Vocab {
+        /// Error and drop counters every box prints in some spelling. A
+        /// number ≥ 1 next to one of these is worth a warning colour; the
+        /// label itself is left alone (it is the NUMBER that changed).
+        static let counterCore = [
+            "input errors", "output errors", "input error", "output error",
+            "crc", "crc errors", "fcs errors", "fcs", "runts", "giants", "throttles",
+            "overrun", "overruns", "underrun", "underruns", "ignored", "jabbers",
+            "collisions", "late collision", "late collisions", "deferred", "babbles",
+            "drops", "drop", "dropped", "discards", "discard", "discarded",
+            "aborts", "abort", "frame", "lost carrier", "no carrier", "no buffer",
+            "watchdog", "pause input", "pause output", "errors", "error",
+            "symbol errors", "alignment errors", "oversize", "undersize",
+            "rx errors", "tx errors", "rx dropped", "tx dropped", "rx crc",
+            "input discards", "output discards", "unknown protocol drops",
+            "output buffer failures", "output buffers swapped out", "interface resets",
+        ]
         /// States that mean the same thing on every box.
         static let goodCore = ["up", "connected", "active", "established", "running",
                                "enabled", "enable", "successful", "success", "forwarding",
@@ -864,7 +1096,7 @@ nonisolated extension HighlightScanner {
 
     /// Key of the catalogue profile — every rule, the union vocabulary. It
     /// is NOT a vendor and is never used to match anything: it carries all
-    /// eleven rule names whatever pack a session happens to be on, which is
+    /// thirteen rule names whatever pack a session happens to be on, which is
     /// what `defaultConfigs` and the tests enumerate. (It used to back a
     /// Settings list and a `highlight-rules.json`; both were removed in 3.0,
     /// and nothing reads that file any more — an old copy left in Application

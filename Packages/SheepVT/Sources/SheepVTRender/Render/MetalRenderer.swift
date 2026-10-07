@@ -42,14 +42,19 @@ public final class MetalRenderer {
 
     public let device: MTLDevice
 
-    /// The font set the glyphs come from. Replacing it drops both caches — the
-    /// view builds a new one when the font or the backing scale changes.
+    /// Everything shared with the other renderers on this device: pipelines,
+    /// atlases, glyph cache, the buffer ring. See `RenderContext`.
+    let context: RenderContext
+
+    /// The font set the glyphs come from. Replacing it drops the row cache
+    /// and moves this renderer's claim on the shared glyph cache to the new
+    /// font — the view builds a new one when the font or the backing scale
+    /// changes.
     public var fontSet: FontSet {
         didSet {
-            glyphCache.fontSet = fontSet
-            glyphCache.reset()
             fontGeneration &+= 1
             invalidateRows()
+            swapFontKey()
         }
     }
 
@@ -61,26 +66,33 @@ public final class MetalRenderer {
     public var fontSmoothing: Bool {
         didSet {
             guard fontSmoothing != oldValue else { return }
-            rasterizer.fontSmoothing = fontSmoothing
-            glyphCache.reset()
             fontGeneration &+= 1
             invalidateRows()
+            swapFontKey()
         }
+    }
+
+    /// The key this renderer currently holds in `context.fontUsers`.
+    private var fontKey: FontKey
+
+    private func swapFontKey() {
+        let next = fontSet.key(smoothing: fontSmoothing)
+        guard next != fontKey else { return }
+        context.retainFont(next)
+        context.releaseFont(fontKey)
+        fontKey = next
     }
 
     public private(set) var lastFrameStats: (rowsRebuilt: Int, rowsCached: Int, glyphsRasterised: Int) = (0, 0, 0)
 
-    private let commandQueue: MTLCommandQueue
-    private let backgroundPipeline: MTLRenderPipelineState
-    private let glyphGrayPipeline: MTLRenderPipelineState
-    private let glyphColorPipeline: MTLRenderPipelineState
-    private let sampler: MTLSamplerState
-    private let grayAtlas: GlyphAtlas
-    private let colorAtlas: GlyphAtlas
-    private let rasterizer: GlyphRasterizer
-    private let glyphCache: GlyphCache
-
     private var rowCache: [Int: RowCacheEntry] = [:]
+    /// The atlas generations the row cache's glyph placements were taken at.
+    /// A cached row carries UVs into the atlases; when the SHARED atlases are
+    /// cleared between frames (`RenderContext.releaseFont`, by some other
+    /// renderer), those UVs point at nothing and the frame must be rebuilt —
+    /// a reset inside a frame is caught by `Frame.atlasReset`, one between
+    /// frames is caught here.
+    private var rowCacheGenerations: (gray: UInt64, color: UInt64) = (0, 0)
     private var paletteGeneration: UInt64 = 0
     private var fontGeneration: UInt64 = 0
     /// `Terminal.defaultColorGeneration` as of the last sync — see `encode`.
@@ -89,9 +101,6 @@ public final class MetalRenderer {
     private var appliedDefaultColorGeneration: UInt64 = 0
     private var appliedPaletteOverrides: [UInt32?] = Array(repeating: nil, count: 256)
 
-    private let frameSemaphore = DispatchSemaphore(value: MetalRenderer.framesInFlight)
-    private var frameSlots: [FrameSlot]
-    private var frameIndex = 0
 
     /// How many frames the CPU may run ahead of the GPU.
     public static let framesInFlight = 3
@@ -100,93 +109,28 @@ public final class MetalRenderer {
 
     // MARK: - init
 
-    public init(device: MTLDevice) throws {
-        self.device = device
-        guard let queue = device.makeCommandQueue() else { throw RendererError.commandQueueUnavailable }
-        self.commandQueue = queue
+    /// A renderer on the device-wide context (one per device, kept for the
+    /// life of the process).
+    public convenience init(device: MTLDevice) throws {
+        self.init(context: try RenderContext.shared(for: device))
+    }
 
-        guard let gray = GlyphAtlas(device: device,
-                                    maxSize: GlyphAtlas.recommendedMaxSize(device: device, format: .grayscale),
-                                    format: .grayscale),
-              let color = GlyphAtlas(device: device,
-                                     maxSize: GlyphAtlas.recommendedMaxSize(device: device, format: .bgra),
-                                     format: .bgra) else {
-            throw RendererError.atlasUnavailable
-        }
-        self.grayAtlas = gray
-        self.colorAtlas = color
-
-        let library: MTLLibrary
-        do {
-            library = try device.makeLibrary(source: Shaders.source, options: nil)
-        } catch {
-            throw RendererError.libraryCompilationFailed("\(error)")
-        }
-        self.backgroundPipeline = try MetalRenderer.pipeline(device: device,
-                                                             library: library,
-                                                             vertex: Shaders.backgroundVertex,
-                                                             fragment: Shaders.backgroundFragment,
-                                                             premultiplied: false)
-        self.glyphGrayPipeline = try MetalRenderer.pipeline(device: device,
-                                                            library: library,
-                                                            vertex: Shaders.glyphVertex,
-                                                            fragment: Shaders.glyphFragmentGray,
-                                                            premultiplied: true)
-        self.glyphColorPipeline = try MetalRenderer.pipeline(device: device,
-                                                             library: library,
-                                                             vertex: Shaders.glyphVertex,
-                                                             fragment: Shaders.glyphFragmentBGRA,
-                                                             premultiplied: true)
-
-        let samplerDesc = MTLSamplerDescriptor()
-        samplerDesc.minFilter = .linear
-        samplerDesc.magFilter = .linear
-        samplerDesc.sAddressMode = .clampToEdge
-        samplerDesc.tAddressMode = .clampToEdge
-        guard let sampler = device.makeSamplerState(descriptor: samplerDesc) else {
-            throw RendererError.samplerUnavailable
-        }
-        self.sampler = sampler
-
+    /// A renderer on a context of the caller's own — the tests use it to see
+    /// what sharing changes.
+    init(context: RenderContext) {
+        self.context = context
+        self.device = context.device
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
         let set = FontSet(font: font, scale: NSScreen.main?.backingScaleFactor ?? 2)
         self.fontSet = set
         self.palette = Palette(colors: .sheepTerm)
         self.fontSmoothing = false
-        self.rasterizer = GlyphRasterizer()
-        self.rasterizer.fontSmoothing = false
-        self.glyphCache = GlyphCache(fontSet: set, rasterizer: rasterizer, gray: gray, color: color)
-        self.frameSlots = (0..<MetalRenderer.framesInFlight).map { _ in FrameSlot() }
+        self.fontKey = set.key(smoothing: false)
+        context.retainFont(fontKey)
     }
 
-    private static func pipeline(device: MTLDevice,
-                                 library: MTLLibrary,
-                                 vertex: String,
-                                 fragment: String,
-                                 premultiplied: Bool) throws -> MTLRenderPipelineState {
-        guard let vfn = library.makeFunction(name: vertex),
-              let ffn = library.makeFunction(name: fragment) else {
-            throw RendererError.pipelineCreationFailed("\(vertex)/\(fragment)")
-        }
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = vfn
-        descriptor.fragmentFunction = ffn
-        let attachment = descriptor.colorAttachments[0]!
-        attachment.pixelFormat = MetalRenderer.pixelFormat
-        attachment.isBlendingEnabled = true
-        attachment.rgbBlendOperation = .add
-        attachment.alphaBlendOperation = .add
-        // Glyph fragments come out premultiplied by their coverage; flat quads
-        // carry a straight alpha so a tint lies over the cell colour.
-        attachment.sourceRGBBlendFactor = premultiplied ? .one : .sourceAlpha
-        attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
-        attachment.sourceAlphaBlendFactor = .one
-        attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        do {
-            return try device.makeRenderPipelineState(descriptor: descriptor)
-        } catch {
-            throw RendererError.pipelineCreationFailed("\(vertex)/\(fragment): \(error)")
-        }
+    isolated deinit {
+        context.releaseFont(fontKey)
     }
 
     // MARK: - public entry points
@@ -279,6 +223,11 @@ public final class MetalRenderer {
             palette.colors = colors        // `palette` didSet drops the row cache
         }
 
+        if rowCacheGenerations.gray != context.grayAtlas.generation
+            || rowCacheGenerations.color != context.colorAtlas.generation {
+            invalidateRows()
+        }
+
         var frameOverlay = overlay
         frameOverlay.cursorVisible = overlay.cursorVisible && terminal.cursorVisible
         if frameOverlay.highlightOverrides == nil, let highlight = overlay.highlight {
@@ -293,24 +242,24 @@ public final class MetalRenderer {
         // drop the caches and build the frame once more with the atlases frozen,
         // so a pathological page loses glyphs instead of spinning.
         if frame.atlasReset {
-            glyphCache.reset()
+            context.glyphCache.reset()
             invalidateRows()
-            grayAtlas.frozen = true
-            colorAtlas.frozen = true
+            context.grayAtlas.frozen = true
+            context.colorAtlas.frozen = true
             frame = buildFrame(terminal: terminal, overlay: frameOverlay, scale: effectiveScale)
-            grayAtlas.frozen = false
-            colorAtlas.frozen = false
+            context.grayAtlas.frozen = false
+            context.colorAtlas.frozen = false
         }
-        frameSemaphore.wait()
+        rowCacheGenerations = (context.grayAtlas.generation, context.colorAtlas.generation)
+        context.frameSemaphore.wait()
         // Atlas uploads happen only once no frame that may sample the old
         // texels is in flight past the ring depth.
-        grayAtlas.flush()
-        colorAtlas.flush()
-        let slot = frameSlots[frameIndex % MetalRenderer.framesInFlight]
-        frameIndex &+= 1
+        context.grayAtlas.flush()
+        context.colorAtlas.flush()
+        let slot = context.takeFrameSlot()
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-            frameSemaphore.signal()
+        guard let commandBuffer = context.commandQueue.makeCommandBuffer() else {
+            context.frameSemaphore.signal()
             return false
         }
         let descriptor = MTLRenderPassDescriptor()
@@ -324,27 +273,27 @@ public final class MetalRenderer {
                                                                   alpha: 1)
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
             commandBuffer.commit()   // an uncommitted buffer counts against the queue's 64
-            frameSemaphore.signal()
+            context.frameSemaphore.signal()
             return false
         }
 
         var viewport = SIMD2<Float>(Float(CGFloat(texture.width) / effectiveScale),
                                     Float(CGFloat(texture.height) / effectiveScale))
-        draw(frame.backgrounds, slot: slot, index: 0, pipeline: backgroundPipeline,
+        draw(frame.backgrounds, slot: slot, index: 0, pipeline: context.backgroundPipeline,
              texture: nil, viewport: &viewport, encoder: encoder)
-        draw(frame.decorations, slot: slot, index: 1, pipeline: backgroundPipeline,
+        draw(frame.decorations, slot: slot, index: 1, pipeline: context.backgroundPipeline,
              texture: nil, viewport: &viewport, encoder: encoder)
-        draw(frame.grayGlyphs, slot: slot, index: 2, pipeline: glyphGrayPipeline,
-             texture: grayAtlas.texture, viewport: &viewport, encoder: encoder)
-        draw(frame.colorGlyphs, slot: slot, index: 3, pipeline: glyphColorPipeline,
-             texture: colorAtlas.texture, viewport: &viewport, encoder: encoder)
+        draw(frame.grayGlyphs, slot: slot, index: 2, pipeline: context.glyphGrayPipeline,
+             texture: context.grayAtlas.texture, viewport: &viewport, encoder: encoder)
+        draw(frame.colorGlyphs, slot: slot, index: 3, pipeline: context.glyphColorPipeline,
+             texture: context.colorAtlas.texture, viewport: &viewport, encoder: encoder)
 
         encoder.endEncoding()
         present?(commandBuffer)
         // Built in a nonisolated context: under this target's default MainActor
         // isolation an inline closure would be inferred main-actor and trap when
         // Metal's completion thread runs it.
-        commandBuffer.addCompletedHandler(MetalRenderer.completion(signalling: frameSemaphore))
+        commandBuffer.addCompletedHandler(MetalRenderer.completion(signalling: context.frameSemaphore))
         commandBuffer.commit()
         afterCommit?(commandBuffer)
         if present == nil && afterCommit == nil { commandBuffer.waitUntilCompleted() }
@@ -375,11 +324,14 @@ public final class MetalRenderer {
         let buffer = terminal.buffer
         let cols = terminal.cols
         let rows = terminal.rows
-        let grayGeneration = grayAtlas.generation
-        let colorGeneration = colorAtlas.generation
-        let rasterisedBefore = glyphCache.rasterised
+        let grayGeneration = context.grayAtlas.generation
+        let colorGeneration = context.colorAtlas.generation
+        let rasterisedBefore = context.glyphCache.rasterised
+        // The shared cache rasterises with whatever font the LAST renderer
+        // told it about; this frame's glyphs are ours.
+        context.glyphCache.use(fontSet: fontSet, key: fontKey)
 
-        let builder = RowBuilder(palette: palette, metrics: fontSet.metrics, glyphs: glyphCache)
+        let builder = RowBuilder(palette: palette, metrics: fontSet.metrics, glyphs: context.glyphCache)
         let cellH = Float(fontSet.metrics.height)
         // Search tints for the visible lines, built once per frame instead of
         // scanning every match for every row (O(matches) per row was the
@@ -387,6 +339,7 @@ public final class MetalRenderer {
         let firstLine = buffer.lineNumber(ofViewportRow: 0)
         let lastLine = buffer.lineNumber(ofViewportRow: Swift.max(rows - 1, 0))
         let searchMap = searchMap(overlay: overlay, cols: cols, firstLine: firstLine, lastLine: lastLine)
+        let echoMap = matchMap(overlay.echoMatches, current: nil, cols: cols, firstLine: firstLine, lastLine: lastLine)
         var overlay = overlay
         // Installed even when the map came back empty. An empty map is not
         // "no answer", it is the answer "no match is on screen" — and a search
@@ -396,6 +349,7 @@ public final class MetalRenderer {
         // 0.003 s for 40 rows x 50 rounds, Release. The fallback is for callers
         // that never compute a map at all (`RowBuilder` used directly).
         overlay.searchTints = { line in (searchMap[line] ?? []).map { ($0.lo..<$0.hi, $0.current) } }
+        overlay.echoTints = { line in (echoMap[line] ?? []).map { $0.lo..<$0.hi } }
         // Where the cursor sits in the viewport (it may be scrolled out of it).
         let cursorViewportRow = buffer.ybase + buffer.y - buffer.ydisp
         let cursorCol = Swift.min(Swift.max(buffer.x, 0), Swift.max(cols - 1, 0))
@@ -424,6 +378,7 @@ public final class MetalRenderer {
                              reverseVideo: overlay.reverseVideo,
                              selection: overlay.selection?.columnRange(onLine: line),
                              searches: searchMap[line] ?? [],
+                             echoes: echoMap[line] ?? [],
                              highlight: overlay.highlightOverrides?(line),
                              cursor: cursor.map { CursorKey(col: $0.col,
                                                             style: $0.style.rawValue,
@@ -451,6 +406,7 @@ public final class MetalRenderer {
                     if k.reverseVideo != key.reverseVideo { why.append("reverse") }
                     if k.selection != key.selection { why.append("selection") }
                     if k.searches != key.searches { why.append("searches") }
+                    if k.echoes != key.echoes { why.append("echoes") }
                     if k.highlight != key.highlight { why.append("highlight") }
                     if k.cursor != key.cursor { why.append("cursor \(String(describing: k.cursor))->\(String(describing: key.cursor))") }
                     FileHandle.standardError.write("[cache] line \(line) screenRow \(screenRow) miss: \(why.isEmpty ? "no field differs?!" : why.joined(separator: ", "))\n".data(using: .utf8)!)
@@ -476,21 +432,28 @@ public final class MetalRenderer {
             rowCache = rowCache.filter { visible.contains($0.key) }
         }
 
-        frame.glyphsRasterised = glyphCache.rasterised - rasterisedBefore
-        frame.atlasReset = grayAtlas.generation != grayGeneration || colorAtlas.generation != colorGeneration
+        frame.glyphsRasterised = context.glyphCache.rasterised - rasterisedBefore
+        frame.atlasReset = context.grayAtlas.generation != grayGeneration
+            || context.colorAtlas.generation != colorGeneration
         return frame
     }
 
     /// The search tints touching a line, as the row-cache key sees them.
     /// line → tints, for the lines in the viewport only. O(matches + rows).
     private func searchMap(overlay: FrameOverlay, cols: Int, firstLine: Int, lastLine: Int) -> [Int: [SearchKeyEntry]] {
-        guard !overlay.searchMatches.isEmpty, firstLine <= lastLine else { return [:] }
+        matchMap(overlay.searchMatches, current: overlay.currentMatch, cols: cols, firstLine: firstLine, lastLine: lastLine)
+    }
+
+    /// The same bucketing for any match list — the selection echo uses it too.
+    private func matchMap(_ matches: [SearchMatch], current currentMatch: SearchMatch?,
+                          cols: Int, firstLine: Int, lastLine: Int) -> [Int: [SearchKeyEntry]] {
+        guard !matches.isEmpty, firstLine <= lastLine else { return [:] }
         var map: [Int: [SearchKeyEntry]] = [:]
-        for match in overlay.searchMatches {
+        for match in matches {
             let lo = Swift.max(match.start.line, firstLine)
             let hi = Swift.min(match.end.line, lastLine)
             guard lo <= hi else { continue }
-            let current = overlay.currentMatch == match
+            let current = currentMatch == match
             for line in lo...hi {
                 let a = line == match.start.line ? match.start.col : 0
                 let b = line == match.end.line ? match.end.col + 1 : cols
@@ -514,6 +477,20 @@ public final class MetalRenderer {
     /// Drop the presentation surfaces (a hidden tab); `render` recreates them.
     public func releaseSurfaces() { surfaces.release() }
 
+    /// Free the surfaces no frame has used for `interval` (see
+    /// `SurfacePresenter.trimIdle`). The view calls it from its tick and
+    /// once more after the display link has stopped.
+    @discardableResult
+    public func trimIdleSurfaces(now: CFTimeInterval, olderThan interval: CFTimeInterval) -> Int {
+        surfaces.trimIdle(now: now, olderThan: interval)
+    }
+
+    /// Surfaces in the ring right now — for the tests.
+    public var surfaceSlotCount: Int { surfaces.slotCount }
+
+    /// Rows held in the cache — for the tests.
+    public var rowCacheCount: Int { rowCache.count }
+
     // MARK: - drawing
 
     private func draw<T>(_ instances: [T],
@@ -530,7 +507,7 @@ public final class MetalRenderer {
         encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
         if let texture {
             encoder.setFragmentTexture(texture, index: 0)
-            encoder.setFragmentSamplerState(sampler, index: 0)
+            encoder.setFragmentSamplerState(context.sampler, index: 0)
         }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: instances.count * 6)
     }
@@ -570,6 +547,8 @@ nonisolated struct RowKey: Equatable, Sendable {
     var reverseVideo: Bool
     var selection: Range<Int>?
     var searches: [SearchKeyEntry]
+    /// Selection-echo ranges on this line (`current` is always false here).
+    var echoes: [SearchKeyEntry] = []
     var highlight: [UInt32]?
     var cursor: CursorKey?
 }
@@ -584,7 +563,7 @@ nonisolated struct RowCacheEntry: Sendable {
 /// One slot of the three-deep ring: four growable buffers, reused for as long as
 /// they are big enough. A slot is only touched again after the semaphore admits
 /// the frame that owns it, so nothing here needs a lock.
-private final class FrameSlot {
+final class FrameSlot {
     private var buffers: [MTLBuffer?] = [nil, nil, nil, nil]
 
     func buffer<T>(_ index: Int, instances: [T], device: MTLDevice) -> MTLBuffer? {
@@ -606,10 +585,13 @@ private final class FrameSlot {
 // MARK: - the glyph cache
 
 /// `GlyphSource` over agent A's rasteriser and atlases. Keyed on the text (one
-/// scalar, or a whole grapheme cluster) plus bold/italic; an entry is stale as
-/// soon as its atlas bumps its generation.
-private final class GlyphCache: GlyphSource {
+/// scalar, or a whole grapheme cluster) plus bold/italic AND the font it was
+/// drawn with (the cache is shared by every renderer on the device, see
+/// `RenderContext`); an entry is stale as soon as its atlas bumps its
+/// generation.
+final class GlyphCache: GlyphSource {
     private struct Key: Hashable {
+        var font: FontKey
         var text: String
         var bold: Bool
         var italic: Bool
@@ -621,7 +603,10 @@ private final class GlyphCache: GlyphSource {
         var format: GlyphAtlasFormat
     }
 
-    var fontSet: FontSet
+    /// The font the next lookups rasterise with. Set by the renderer at the
+    /// start of every frame (`use`); nil until the first one.
+    private var fontSet: FontSet?
+    private var fontKey = FontKey(name: "", pointSize: 0, scale: 0, smoothing: false)
     private let rasterizer: GlyphRasterizer
     private let gray: GlyphAtlas
     private let color: GlyphAtlas
@@ -629,21 +614,29 @@ private final class GlyphCache: GlyphSource {
     /// Total glyphs rasterised since creation (the renderer reports deltas).
     private(set) var rasterised = 0
 
-    init(fontSet: FontSet, rasterizer: GlyphRasterizer, gray: GlyphAtlas, color: GlyphAtlas) {
-        self.fontSet = fontSet
+    init(rasterizer: GlyphRasterizer, gray: GlyphAtlas, color: GlyphAtlas) {
         self.rasterizer = rasterizer
         self.gray = gray
         self.color = color
     }
 
+    /// Point the cache at a renderer's font for the frame it is about to
+    /// build. Cheap: two references and a flag.
+    func use(fontSet: FontSet, key: FontKey) {
+        self.fontSet = fontSet
+        self.fontKey = key
+        rasterizer.fontSmoothing = key.smoothing
+    }
+
     func reset() { cache.removeAll(keepingCapacity: true) }
 
     func glyph(_ scalar: Unicode.Scalar, bold: Bool, italic: Bool) -> GlyphPlacement? {
-        lookup(Key(text: String(scalar), bold: bold, italic: italic), scalar: scalar)
+        lookup(Key(font: fontKey, text: String(scalar), bold: bold, italic: italic), scalar: scalar)
     }
 
     func glyph(cluster: String, span: Int, bold: Bool, italic: Bool) -> GlyphPlacement? {
-        lookup(Key(text: cluster, bold: bold, italic: italic, span: Swift.max(1, Swift.min(2, span))), scalar: nil)
+        lookup(Key(font: fontKey, text: cluster, bold: bold, italic: italic,
+                   span: Swift.max(1, Swift.min(2, span))), scalar: nil)
     }
 
     private func lookup(_ key: Key, scalar: Unicode.Scalar?) -> GlyphPlacement? {
@@ -659,6 +652,7 @@ private final class GlyphCache: GlyphSource {
     }
 
     private func rasterise(key: Key, scalar: Unicode.Scalar?) -> Entry? {
+        guard let fontSet else { return nil }
         let metrics = fontSet.metrics
         let scale = Swift.max(metrics.scale, 1)
         var bitmap: GlyphBitmap?

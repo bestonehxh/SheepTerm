@@ -97,6 +97,26 @@ nonisolated enum Vendor: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The command that turns the device's pager off for this session, sent
+    /// once after the shell is up when the host asks for it (Edit Host →
+    /// "Disable paging on connect"). nil = nothing is sent: Auto cannot
+    /// know, Linux has no pager of its own, and FortiOS's only switch
+    /// (`config system console … set output standard`) is a CONFIG change
+    /// that outlives the session — auto-page (View → Auto-page) covers it
+    /// without touching the box.
+    var disablePagingCommand: String? {
+        switch self {
+        case .auto, .linux, .fortios: return nil
+        case .cisco: return "terminal length 0"
+        case .arubaCX, .arubaOS: return "no page"
+        case .huawei: return "screen-length 0 temporary"
+        case .comware: return "screen-length disable"
+        case .juniper: return "set cli screen-length 0"
+        case .panos: return "set cli pager off"
+        case .gaia: return "set clienv rows 0"
+        }
+    }
+
     /// Short form for the status bar and the tab context menu.
     var badge: String {
         switch self {
@@ -171,6 +191,15 @@ struct Host: Identifiable, Codable, Hashable {
     /// `agentForward`; a missing key means `.auto`, so hosts saved before
     /// this existed keep the union behaviour they were coloured with.
     var vendor: Vendor? = nil
+    /// Send the family's pager-off command once the SSH shell is up (see
+    /// `Vendor.disablePagingCommand`). Optional like the others: a file
+    /// written before the field existed reads as nil = off. Travels in a
+    /// `.sheepterm` — it is about the device, not about this Mac.
+    var disablePaging: Bool? = nil
+    /// Connect through this saved SSH host first (ProxyJump), by its id.
+    /// nil = straight there. A dangling id (the bastion was deleted) is
+    /// reported at connect time, never silently bypassed.
+    var jumpHostID: UUID? = nil
 
     /// The pack to actually highlight with — `vendor` with the nil hole filled.
     var highlightVendor: Vendor { vendor ?? .auto }
@@ -224,6 +253,8 @@ struct Host: Identifiable, Codable, Hashable {
         if filled.cipherMode == nil { filled.cipherMode = match.cipherMode }
         if filled.agentForward == nil { filled.agentForward = match.agentForward }
         if filled.vendor == nil { filled.vendor = match.vendor }
+        if filled.disablePaging == nil { filled.disablePaging = match.disablePaging }
+        if filled.jumpHostID == nil { filled.jumpHostID = match.jumpHostID }
         return filled
     }
 }
@@ -3225,6 +3256,10 @@ final class HostStore: ObservableObject {
             // the host on the same test, so even answering Replace kept the
             // old family.
             && a.highlightVendor == b.highlightVendor
+            // Same reasoning: a file that changes only this must raise the
+            // conflict, or Replace would silently keep the old answer.
+            && (a.disablePaging ?? false) == (b.disablePaging ?? false)
+            && a.jumpHostID == b.jumpHostID
     }
 
     /// Applies an import after the dialog decided the outcome (0.4).
@@ -3481,6 +3516,8 @@ final class HostStore: ObservableObject {
             recents[index].cipherMode = new.cipherMode
             recents[index].agentForward = new.agentForward
             recents[index].vendor = new.vendor
+            recents[index].disablePaging = new.disablePaging
+            recents[index].jumpHostID = new.jumpHostID
             changed = true
         }
         guard changed else { return }

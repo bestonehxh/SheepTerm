@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SheepVTRender
+import SheepJumphost
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -122,6 +123,11 @@ final class AppModel: ObservableObject {
     @Published var showCredentials = false
     /// File → Known Hosts… (and the HOST KEY CHANGED offer, pre-filtered).
     @Published var knownHostsRequest: KnownHostsRequest?
+    /// File → Search Logs… (4.2 (4)).
+    @Published var showLogSearch = false
+    /// Snippets → Edit Snippets… / Broadcast to Tabs… (4.2 (4)).
+    @Published var showSnippets = false
+    @Published var showBroadcast = false
     @Published var showReorderGroups = false
     @Published var addHostsRequest: AddHostsRequest?
     @Published var groupCredentialRequest: GroupCredentialRequest?
@@ -133,6 +139,13 @@ final class AppModel: ObservableObject {
     @Published var autoReconnect = true {
         didSet { UserDefaults.standard.set(autoReconnect, forKey: "autoReconnect") }
     }
+    /// View → Auto-page: answer a device's `--More--` with a space so a long
+    /// `show` runs to the end by itself. Read by the SSH/serial controllers on
+    /// every drained chunk (`PagerDetector`).
+    @Published var autoPage = true {
+        didSet { UserDefaults.standard.set(autoPage, forKey: "autoPage") }
+    }
+
     @Published var safePasteEnabled = true {
         didSet {
             UserDefaults.standard.set(safePasteEnabled, forKey: "safePasteEnabled")
@@ -221,6 +234,8 @@ final class AppModel: ObservableObject {
 
     let store = HostStore()
     let credentialStore = CredentialStore()
+    /// Snippets (4.2 (4)): saved commands behind the Snippets menu.
+    let snippetStore = SnippetStore()
     private var dataWarningSubscriptions = Set<AnyCancellable>()
     /// Session-lifetime memory of passwords that worked (keyed
     /// user@host:port) so reconnects don't ask again. Never written to disk.
@@ -237,6 +252,7 @@ final class AppModel: ObservableObject {
         sessionLogging = UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = UserDefaults.standard.object(forKey: "autoReconnect") as? Bool ?? true
         safePasteEnabled = UserDefaults.standard.object(forKey: "safePasteEnabled") as? Bool ?? true
+        autoPage = UserDefaults.standard.object(forKey: "autoPage") as? Bool ?? true
         // DARK, always, and nothing to choose (4.0 (5)). The chrome colours,
         // the terminal themes and every 10 pt secondary caption in the app
         // were picked and measured against a dark ground; the light halves
@@ -324,6 +340,7 @@ final class AppModel: ObservableObject {
         sidebarWidth = width == 0 ? 232 : min(max(width, 200), 320)
         store.reloadFromDisk()
         credentialStore.reloadFromDisk()
+        snippetStore.reloadFromDisk()
     }
 
     /// Team Share (LAN sharing + vault + team passphrase) was removed after
@@ -756,6 +773,12 @@ final class AppModel: ObservableObject {
         if incoming.highlightVendor != existing.highlightVendor {
             diffs.append("device family: \(existing.highlightVendor.label) → \(incoming.highlightVendor.label)")
         }
+        if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
+            diffs.append("disable paging: \((existing.disablePaging ?? false) ? "on" : "off") → \((incoming.disablePaging ?? false) ? "on" : "off")")
+        }
+        if incoming.jumpHostID != existing.jumpHostID {
+            diffs.append("jump host: \(existing.jumpHostID == nil ? "none" : "set") → \(incoming.jumpHostID == nil ? "none" : "set")")
+        }
         return diffs.isEmpty
             ? "The two entries differ."
             : "Differences (yours → file):\n" + diffs.joined(separator: "\n")
@@ -817,6 +840,56 @@ final class AppModel: ObservableObject {
     /// Clear Scrollback, not a reset).
     func clearScrollback() {
         activeTerminalView?.clearScrollback()
+    }
+
+    /// Snippets menu: type a saved command into the current tab, the way a
+    /// paste does (Safe Paste asks about a multi-line one).
+    func sendSnippet(_ snippet: Snippet) {
+        guard let view = activeTerminalView else { NSSound.beep(); return }
+        view.pasteText(snippet.payload)
+    }
+
+    /// Broadcast: one payload per ticked tab (`BroadcastPlan.sends`). Returns
+    /// how many tabs took it — a tab that closed between the tick and the
+    /// Send is simply skipped.
+    @discardableResult
+    func broadcast(_ sends: [(id: UUID, payload: String)]) -> Int {
+        var count = 0
+        for send in sends {
+            guard let tab = tabs.first(where: { $0.id == send.id }) else { continue }
+            switch tab.content {
+            case .local: continue
+            case .ssh(let controller): controller.terminalView.pasteText(send.payload)
+            case .serial(let controller): controller.terminalView.pasteText(send.payload)
+            }
+            count += 1
+        }
+        return count
+    }
+
+    /// Edit → Previous / Next Command (⌘↑ / ⌘↓): scroll to the marked command
+    /// lines (`TerminalView.scrollToPreviousCommand`). Nothing happens when
+    /// there is none in that direction.
+    func scrollToPreviousCommand() { activeTerminalView?.scrollToPreviousCommand() }
+    func scrollToNextCommand() { activeTerminalView?.scrollToNextCommand() }
+
+    /// Edit → Copy Last Output (⌘⇧C): the text the last command printed.
+    func copyLastOutput() {
+        guard let view = activeTerminalView, !view.copyLastOutput() else { return }
+        NSSound.beep()
+    }
+
+    /// Edit → Send Break (⌃⌥B). Serial consoles only: a break is a line
+    /// condition, and SSH and a local shell have no line to put it on.
+    func sendBreak() {
+        guard case .serial(let controller)? = selectedTab?.content else { return }
+        controller.sendBreak()
+    }
+
+    /// Whether the menu item above has anything to act on.
+    var canSendBreak: Bool {
+        if case .serial? = selectedTab?.content { return true }
+        return false
     }
 
     /// SSH/serial tabs that are still up — what a quit would actually cut.
@@ -889,7 +962,28 @@ final class AppModel: ObservableObject {
             let password = overridePassword
                 ?? credential.flatMap { credentialStore.password(for: $0) }
                 ?? passwordCache["\(host.username)@\(host.address):\(host.port)"]
-            let controller = SSHTerminalController(host: host, password: password, reusingLogger: reusingLogger)
+            // Jump host (4.2 (4)): the bastion's login is resolved the same
+            // way — its credential names the user, its password comes from
+            // the Keychain or the session cache, else the worker prompts.
+            var jump: JumpHop?
+            var jumpUnresolved = false
+            if let jumpID = host.jumpHostID, jumpID != host.id {
+                if var bastion = store.groups.flatMap(\.hosts).first(where: { $0.id == jumpID && $0.kind == .ssh }) {
+                    let bastionCredential = bastion.credentialID.flatMap { credentialStore.credential(for: $0) }
+                    if let bastionCredential, !bastionCredential.username.isEmpty {
+                        bastion.username = bastionCredential.username
+                    }
+                    let bastionPassword = bastionCredential.flatMap { credentialStore.password(for: $0) }
+                        ?? passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"]
+                    jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
+                                   password: bastionPassword,
+                                   cipherPolicy: JumpHop.CipherPolicy(rawValue: (bastion.cipherMode ?? .auto).rawValue) ?? .auto)
+                } else {
+                    jumpUnresolved = true
+                }
+            }
+            let controller = SSHTerminalController(host: host, password: password, jump: jump,
+                                                   jumpUnresolved: jumpUnresolved, reusingLogger: reusingLogger)
             let tab = SessionTab(content: .ssh(controller), title: host.name)
             tab.highlightVendor = host.highlightVendor
             // A saved host with an explicit family is the user's choice —
@@ -1146,6 +1240,13 @@ final class AppModel: ObservableObject {
         }
         if incoming.highlightVendor != existing.highlightVendor {
             changes.append("device family: \(existing.highlightVendor.label) → \(incoming.highlightVendor.label)")
+        }
+        if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
+            let label = { (on: Bool) in on ? "on" : "off" }
+            changes.append("disable paging: \(label(existing.disablePaging ?? false)) → \(label(incoming.disablePaging ?? false))")
+        }
+        if incoming.jumpHostID != existing.jumpHostID {
+            changes.append("jump host: \(existing.jumpHostID == nil ? "none" : "set") → \(incoming.jumpHostID == nil ? "none" : "set")")
         }
         return changes
     }

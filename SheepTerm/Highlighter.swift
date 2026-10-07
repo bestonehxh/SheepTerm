@@ -171,12 +171,12 @@ nonisolated enum Highlighter {
 
     // MARK: - Rule packs
 
-    /// All eleven rule names with the union vocabulary behind them.
+    /// All thirteen rule names with the union vocabulary behind them.
     ///
     /// This is a CATALOGUE, not a pack: no session ever matches with it —
     /// matching always goes through the vendor's own pack. It exists so the
     /// full set of rule names stays nameable in one place (the tests assert
-    /// against it) even though no single pack carries all eleven.
+    /// against it) even though no single pack carries all thirteen.
     static var canonicalConfigs: [HighlightRuleConfig] {
         packs[HighlightScanner.catalogueKey]!
     }
@@ -193,8 +193,10 @@ nonisolated enum Highlighter {
     }()
 
     /// Order = priority: earlier rules claim their ranges first.
-    ///   vlan → interface → cx-port → mask → cidr → ipv4 → mac → ipv6
-    ///        → state-good → state-warn → state-bad
+    ///   timestamp → vlan → interface → counter → cx-port → mask → cidr → ipv4
+    ///        → mac → ipv6 → state-good → state-warn → state-bad
+    /// `timestamp` leads so a clock is never torn into an address; `counter`
+    /// sits after `interface` so `Gi1/0/1` keeps its digits.
     /// Patterns aligned with BeeSheep's BestTextLog grammar.
     static func defaultConfigs(for vendor: Vendor) -> [HighlightRuleConfig] {
         packs[vendor.rawValue] ?? packs[Vendor.auto.rawValue]!
@@ -228,6 +230,26 @@ nonisolated enum Highlighter {
             p.rules & HighlightScanner.bit(of: rule) != 0
         }
         var out: [HighlightRuleConfig] = []
+
+        // First: a log line's clock is the least interesting thing on it, so
+        // it is dimmed — and claimed before anything else can read `14:37:24`
+        // as part of an address or `2026` as a counter. Hand-translated in
+        // `HighlightScanner.matchTimestamp`; the two must stay in step.
+        if uses(.timestamp) {
+            // After a fraction a colon may follow (Cisco: `14:37:24.123:`);
+            // after a bare clock it may not, or `12:34:56` inside a MAC would
+            // be a clock.
+            let zone = #"(?:z|[+-]\d{2}:\d{2})?"#
+            let time = #"\d{2}:\d{2}:\d{2}(?:\.\d{1,6}"# + zone + #"(?![0-9a-z_])|"# + zone + #"(?![0-9a-z_:]))"#
+            let end = #"(?![0-9a-z_:])"#
+            out.append(HighlightRuleConfig(
+                name: "timestamp",
+                pattern: #"\b\d{4}[-/]\d{2}[-/]\d{2}(?:(?:[t ]"# + time + #")|"# + end + ")"
+                    + #"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[ \t]+\d{1,2}(?:[ \t]+\d{4})?[ \t]+"# + time
+                    + #"|(?<![0-9a-f:])"# + time,
+                colorHex: "8A8F98", caseInsensitive: true
+            ))
+        }
 
         // Before "interface": "vlan 1,10,225-227" (spaced list) is the vlan
         // keyword; "Vlan10" (attached) stays an interface name.
@@ -271,6 +293,19 @@ nonisolated enum Highlighter {
                     colorHex: "F0A860", caseInsensitive: true
                 ))
             }
+        }
+        // After "interface" (its digits are port numbers, not counters):
+        // an error/drop counter that is not zero, in either spelling order.
+        // Only the NUMBER is coloured. Hand-translated in
+        // `HighlightScanner.matchCounter`.
+        if uses(.counter), !p.counterLabels.isEmpty {
+            let labels = alternation(p.counterLabels)
+            out.append(HighlightRuleConfig(
+                name: "counter",
+                pattern: #"(?<![./:-])\b[1-9]\d*(?![./:-])(?=[ \t]+(?:"# + labels + #")\b)"#
+                    + #"|(?<=\b(?:"# + labels + #")[ \t]{0,4}:?[ \t]{1,8})[1-9]\d*\b(?![./:-])"#,
+                colorHex: "E0B568", bold: true, caseInsensitive: true
+            ))
         }
         if uses(.cxPort) {
             out.append(HighlightRuleConfig(

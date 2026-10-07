@@ -35,7 +35,7 @@ public final class SSHConnection {
         case agentChannelOpened(UInt32)
     }
 
-    enum Kind { case session, agent }
+    enum Kind { case session, agent, direct }
 
     final class Channel {
         let local: UInt32
@@ -106,6 +106,28 @@ public final class SSHConnection {
         w.writeUInt32(channel.local)
         w.writeUInt32(UInt32(Self.windowSize))
         w.writeUInt32(UInt32(Self.maxPacket))
+        try send(w.bytes)
+        return channel.local
+    }
+
+    /// Opens a "direct-tcpip" channel (RFC 4254 §7.2): the server connects
+    /// to `host:port` and the channel carries that TCP stream — the jump
+    /// host's half of SheepTerm's ProxyJump. `.channelOpened(id)` or
+    /// `.channelOpenFailed` follows; data/EOF/close are the same events a
+    /// session gets. The originator is nominal (RFC: "the connection's
+    /// originating address", which here is this client itself).
+    public func openDirectTCPIP(host: String, port: Int) throws(ConnectionError) -> UInt32 {
+        let channel = allocate(.direct)
+        var w = SSHWriter()
+        w.writeByte(90)                         // CHANNEL_OPEN
+        w.writeString("direct-tcpip")
+        w.writeUInt32(channel.local)
+        w.writeUInt32(UInt32(Self.windowSize))
+        w.writeUInt32(UInt32(Self.maxPacket))
+        w.writeString(host)
+        w.writeUInt32(UInt32(clamping: port))
+        w.writeString("127.0.0.1")
+        w.writeUInt32(0)
         try send(w.bytes)
         return channel.local
     }
