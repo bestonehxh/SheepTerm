@@ -102,16 +102,6 @@ public final class Row {
     /// No `bump()`: nothing painted changes when this flips.
     @exclusivity(unchecked) public var wrapGapBefore: Bool = false
 
-    /// Command mark (4.2 (4)): the user pressed Return on this row, so it
-    /// holds a prompt and the command typed at it. Set by
-    /// `Terminal.markCommandLine`, cleared with the row when the ring recycles
-    /// it (`LineRing.reset`). Reflow keeps the Row object, so the mark rides
-    /// along with the first row of its logical line. Painted as a hairline
-    /// above the row; `commandLines()` and `lastCommandOutput()` read it.
-    @exclusivity(unchecked) public var commandMark: Bool = false {
-        didSet { if commandMark != oldValue { bump() } }
-    }
-
     /// Bumped on every mutation through the public API.
     @exclusivity(unchecked) public private(set) var generation: UInt64 = 0
 
@@ -306,9 +296,6 @@ public final class Row {
 
     /// Fill `[from, to)` with `cell`, dropping any side-table entries in the range.
     public func fill(_ cell: Cell, from: Int = 0, to: Int? = nil) {
-        // Erasing the whole row erases the command that was on it: no
-        // hairline on a blank line, no stop for ⌘↓ (ED 2, DECALN, a recycle).
-        if from == 0, to == nil || to! >= cols { commandMark = false }
         let lo = Swift.max(from, 0)
         let hi = Swift.min(to ?? cols, cols)
         guard lo < hi else { return }

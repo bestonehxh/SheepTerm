@@ -304,7 +304,9 @@ nonisolated enum Highlighter {
                 name: "counter",
                 pattern: #"(?<![./:-])\b[1-9]\d*(?![./:-])(?=[ \t]+(?:"# + labels + #")\b)"#
                     + #"|(?<=\b(?:"# + labels + #")[ \t]{0,4}:?[ \t]{1,8})[1-9]\d*\b(?![./:-])"#,
-                colorHex: "E0B568", bold: true, caseInsensitive: true
+                // Colour only, not bold: a bold digit in a column of counters
+                // changed the look of every statistics page (4.2 (6)).
+                colorHex: "E0B568", caseInsensitive: true
             ))
         }
         if uses(.cxPort) {

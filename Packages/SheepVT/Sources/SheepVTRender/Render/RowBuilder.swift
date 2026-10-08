@@ -233,16 +233,6 @@ public struct RowBuilder {
                                                       color: bg))
         }
 
-        // 1b — a command mark: a hairline across the top of the row, in the
-        // foreground colour at a quiet alpha, so the eye finds where each
-        // command began without the text itself changing.
-        if row?.commandMark == true {
-            var color = palette.rgba(palette.colors.foreground)
-            color.w = palette.colors.commandMarkAlpha
-            let t = 1 / Swift.max(metrics.scale, 1)
-            out.decorations.append(BackgroundInstance(x: 0, y: top, width: CGFloat(cols) * cellW, height: t, color: color))
-        }
-
         // 2 — selection, then search tints, over the cell colours.
         if let range = overlay.selection?.columnRange(onLine: line), !range.isEmpty {
             out.backgrounds.append(tint(range: range, top: top,

@@ -625,61 +625,10 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         // working after every Enter in that mode.
         lastKeyWasPrintable = bytes.count <= 4
             && bytes.allSatisfy { $0 == 0x0D || $0 == 0x0A || ($0 >= 0x20 && $0 != 0x7F) }
-        // Return: the row the cursor is on holds the prompt and the command
-        // just typed. Marked before the bytes go out, so the mark sits on the
-        // command and not on whatever the device prints next.
-        if commandMarksEnabled, bytes == [0x0D] || bytes == [0x0D, 0x0A] {
-            terminal.markCommandLine()
-        }
         delegate?.userTyped(self)
         delegate?.send(self, bytes: bytes)
     }
 
-    // MARK: - Command marks (4.2 (4))
-
-    /// Whether Return marks the cursor's row (see `Terminal.markCommandLine`).
-    public var commandMarksEnabled = true
-
-    /// Scroll so the previous marked command (above the top of the viewport)
-    /// sits at the top. Returns false when there is none.
-    @discardableResult
-    public func scrollToPreviousCommand() -> Bool {
-        let b = terminal.buffer
-        let top = b.lineNumber(ofViewportRow: 0)
-        guard let line = terminal.commandLines().last(where: { $0 < top }) else { return false }
-        return scrollViewport(toLine: line)
-    }
-
-    /// Scroll so the next marked command (below the top of the viewport)
-    /// sits at the top. Returns false when there is none.
-    @discardableResult
-    public func scrollToNextCommand() -> Bool {
-        let b = terminal.buffer
-        let top = b.lineNumber(ofViewportRow: 0)
-        guard let line = terminal.commandLines().first(where: { $0 > top }) else { return false }
-        return scrollViewport(toLine: line)
-    }
-
-    private func scrollViewport(toLine line: Int) -> Bool {
-        let b = terminal.buffer
-        guard let index = b.index(ofLine: line) else { return false }
-        let target = Swift.min(index, b.ybase)
-        guard target != b.ydisp else { return false }
-        terminal.scrollViewport(by: target - b.ydisp)
-        setNeedsFrame()
-        delegate?.scrolled(self)
-        return true
-    }
-
-    /// Put the output of the last command on the pasteboard. Returns false
-    /// (and leaves the pasteboard alone) when there is nothing to copy.
-    @discardableResult
-    public func copyLastOutput() -> Bool {
-        guard let text = terminal.lastCommandOutput() else { return false }
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        return true
-    }
     private var lastKeySentTime: CFTimeInterval = 0
     private var lastKeyWasPrintable = false
 

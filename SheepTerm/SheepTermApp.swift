@@ -339,18 +339,6 @@ struct SheepTermCommands: Commands {
             Button("Use Selection for Find") { model.useSelectionForFind() }
                 .keyboardShortcut("e", modifiers: .command)
                 .disabled(model.selectedTab == nil)
-            Divider()
-            // Command marks (4.2 (4)): every Return marks its row, so the
-            // scrollback has a structure to move through and copy from.
-            Button("Previous Command") { model.scrollToPreviousCommand() }
-                .keyboardShortcut(.upArrow, modifiers: .command)
-                .disabled(model.selectedTab == nil)
-            Button("Next Command") { model.scrollToNextCommand() }
-                .keyboardShortcut(.downArrow, modifiers: .command)
-                .disabled(model.selectedTab == nil)
-            Button("Copy Last Output") { model.copyLastOutput() }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(model.selectedTab == nil)
         }
 
         CommandGroup(after: .sidebar) {

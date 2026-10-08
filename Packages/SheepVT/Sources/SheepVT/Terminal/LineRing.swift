@@ -186,7 +186,6 @@ public final class LineRing {
         if let r = slots[slot] {
             r.fill(fill)
             r.wrapped = false
-            r.commandMark = false
         } else if fill != .empty {
             slots[slot] = Row(cols: cols, fill: fill)
         }

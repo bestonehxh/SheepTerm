@@ -902,18 +902,35 @@ nonisolated extension HighlightScanner {
         /// Error and drop counters every box prints in some spelling. A
         /// number ≥ 1 next to one of these is worth a warning colour; the
         /// label itself is left alone (it is the NUMBER that changed).
+        ///
+        /// The CORE is the names that are unmistakably interface statistics
+        /// on any box. Generic words (`error`, `frame`, `abort`, `drop`) are
+        /// NOT here — they made every "5 errors found" and "1 frame" a
+        /// counter — and live in the family lists below, where the family
+        /// really prints them that way (Cisco's `0 frame, 0 overrun`).
         static let counterCore = [
-            "input errors", "output errors", "input error", "output error",
-            "crc", "crc errors", "fcs errors", "fcs", "runts", "giants", "throttles",
-            "overrun", "overruns", "underrun", "underruns", "ignored", "jabbers",
-            "collisions", "late collision", "late collisions", "deferred", "babbles",
-            "drops", "drop", "dropped", "discards", "discard", "discarded",
-            "aborts", "abort", "frame", "lost carrier", "no carrier", "no buffer",
-            "watchdog", "pause input", "pause output", "errors", "error",
-            "symbol errors", "alignment errors", "oversize", "undersize",
+            "input errors", "output errors", "crc", "crc errors", "fcs", "fcs errors",
+            "runts", "giants", "overrun", "overruns", "underrun", "underruns", "jabbers",
+            "collisions", "late collision", "late collisions",
+            "drops", "discards", "input discards", "output discards",
             "rx errors", "tx errors", "rx dropped", "tx dropped", "rx crc",
-            "input discards", "output discards", "unknown protocol drops",
-            "output buffer failures", "output buffers swapped out", "interface resets",
+            "alignment errors", "symbol errors", "oversize", "undersize",
+            "pause input", "pause output",
+        ]
+        /// `show interfaces` on IOS/IOS-XE/NX-OS, spelled the way the box does.
+        static let ciscoCounters = [
+            "frame", "ignored", "abort", "watchdog", "babbles", "deferred", "throttles",
+            "lost carrier", "no carrier", "no buffer", "input queue drops",
+            "unknown protocol drops", "output buffer failures",
+            "output buffers swapped out", "interface resets",
+        ]
+        /// VRP / Comware `display interface`: singular labels with a colon.
+        static let vrpCounters = ["input error", "output error", "discard", "aborts", "frames"]
+        /// Junos `show interfaces extensive`: `Errors: 0, Drops: 0, Framing errors: 0 …`.
+        static let junosCounters = [
+            "errors", "framing errors", "policed discards", "l3 incompletes",
+            "l2 channel errors", "l2 mismatch timeouts", "fifo errors", "resource errors",
+            "carrier transitions", "mtu errors", "aged packets", "bucket drops",
         ]
         /// States that mean the same thing on every box.
         static let goodCore = ["up", "connected", "active", "established", "running",
@@ -1001,13 +1018,17 @@ nonisolated extension HighlightScanner {
             interface: [],
             stateGood: Vocab.goodCore,
             stateBad: Vocab.badCore,
-            omitting: [.interface, .cxPort]
+            // No timestamp dimming in Auto either: it recolours a whole
+            // column on every log page, which a user who never picked a
+            // family did not ask for. Pick a family to get it.
+            omitting: [.interface, .cxPort, .timestamp]
         ),
         "cisco": Profile(
             interface: Vocab.cisco,
             stateGood: Vocab.goodCore + Vocab.policyGood,
             stateBad: Vocab.badCore + Vocab.policyBad + Vocab.switchBad,
             negations: ["no"],
+            counters: Vocab.counterCore + Vocab.ciscoCounters,
             omitting: [.cxPort]
         ),
         "arubaCX": Profile(
@@ -1032,6 +1053,7 @@ nonisolated extension HighlightScanner {
             stateBad: Vocab.badCore + Vocab.policyBad + Vocab.switchBad + Vocab.vrpBad,
             negations: ["no", "undo"],
             digitSpeedPorts: true, vlanRanges: true, macDashGroups: true,
+            counters: Vocab.counterCore + Vocab.vrpCounters,
             omitting: [.cxPort]
         ),
         "comware": Profile(
@@ -1040,6 +1062,7 @@ nonisolated extension HighlightScanner {
             stateBad: Vocab.badCore + Vocab.policyBad + Vocab.switchBad + Vocab.vrpBad,
             negations: ["undo", "no"],
             digitSpeedPorts: true, vlanRanges: true, macDashGroups: true,
+            counters: Vocab.counterCore + Vocab.vrpCounters,
             omitting: [.cxPort]
         ),
         // cx-port off is the whole point here: `\d{1,2}/\d{1,2}/\d{1,2}` was
@@ -1048,6 +1071,7 @@ nonisolated extension HighlightScanner {
             interface: Vocab.juniper,
             stateGood: Vocab.goodCore,
             stateBad: Vocab.badCore + ["inactive", "flapping"],
+            counters: Vocab.counterCore + Vocab.junosCounters,
             omitting: [.cxPort]
         ),
         "panos": Profile(
@@ -1084,7 +1108,8 @@ nonisolated extension HighlightScanner {
             stateWarn: Vocab.cxWarn,
             negations: ["no", "undo"],
             digitSpeedPorts: true, vlanRanges: true, macDashGroups: true,
-            macSixHexGroups: true
+            macSixHexGroups: true,
+            counters: Vocab.counterCore + Vocab.ciscoCounters + Vocab.vrpCounters + Vocab.junosCounters
         ),
         "linux": Profile(
             interface: Vocab.linux, bare: ["lo"],

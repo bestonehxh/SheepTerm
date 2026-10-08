@@ -141,8 +141,9 @@ final class AppModel: ObservableObject {
     }
     /// View → Auto-page: answer a device's `--More--` with a space so a long
     /// `show` runs to the end by itself. Read by the SSH/serial controllers on
-    /// every drained chunk (`PagerDetector`).
-    @Published var autoPage = true {
+    /// every drained chunk (`PagerDetector`). OFF by default (the user's
+    /// call, 4.2 (6)): the app sends nothing on its own unless asked to.
+    @Published var autoPage = false {
         didSet { UserDefaults.standard.set(autoPage, forKey: "autoPage") }
     }
 
@@ -252,7 +253,7 @@ final class AppModel: ObservableObject {
         sessionLogging = UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = UserDefaults.standard.object(forKey: "autoReconnect") as? Bool ?? true
         safePasteEnabled = UserDefaults.standard.object(forKey: "safePasteEnabled") as? Bool ?? true
-        autoPage = UserDefaults.standard.object(forKey: "autoPage") as? Bool ?? true
+        autoPage = UserDefaults.standard.object(forKey: "autoPage") as? Bool ?? false
         // DARK, always, and nothing to choose (4.0 (5)). The chrome colours,
         // the terminal themes and every 10 pt secondary caption in the app
         // were picked and measured against a dark ground; the light halves
@@ -870,18 +871,6 @@ final class AppModel: ObservableObject {
             if terminalHost(of: tab)?.sendCommand(send.payload) == true { count += 1 }
         }
         return count
-    }
-
-    /// Edit → Previous / Next Command (⌘↑ / ⌘↓): scroll to the marked command
-    /// lines (`TerminalView.scrollToPreviousCommand`). Nothing happens when
-    /// there is none in that direction.
-    func scrollToPreviousCommand() { activeTerminalView?.scrollToPreviousCommand() }
-    func scrollToNextCommand() { activeTerminalView?.scrollToNextCommand() }
-
-    /// Edit → Copy Last Output (⌘⇧C): the text the last command printed.
-    func copyLastOutput() {
-        guard let view = activeTerminalView, !view.copyLastOutput() else { return }
-        NSSound.beep()
     }
 
     /// Edit → Send Break (⌃⌥B). Serial consoles only: a break is a line
