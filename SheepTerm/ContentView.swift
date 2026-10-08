@@ -221,12 +221,14 @@ struct DetailPane: View {
                 // Only the selected tab's terminal view is attached; hidden
                 // tabs keep their scrollback in the Terminal model but hold
                 // no full-size backing store and skip all drawing.
-                if let tab = model.selectedTab {
-                    SessionContentView(tab: tab, isActive: true)
+                // The selected WORKSPACE: one pane, or several split
+                // (4.2 (7)). Hidden workspaces hold no views at all.
+                if let workspace = model.selectedWorkspace {
+                    WorkspaceView(workspace: workspace, selectedSession: model.selectedID)
                         .padding(.leading, 10)
                         .padding(.trailing, 4)
                         .padding(.top, 6)
-                        .id(tab.id)
+                        .id(workspace.id)
                 } else {
                     EmptyPaneView()
                 }
@@ -426,21 +428,6 @@ extension TopBarView {
     }
 }
 
-struct SessionContentView: View {
-    @ObservedObject var tab: SessionTab
-    let isActive: Bool
-
-    var body: some View {
-        switch tab.content {
-        case .local(let controller):
-            TerminalViewRepresentable(host: controller.terminalHost, isActive: isActive)
-        case .ssh(let controller):
-            TerminalViewRepresentable(host: controller.terminalHost, isActive: isActive)
-        case .serial(let controller):
-            TerminalViewRepresentable(host: controller.terminalHost, isActive: isActive)
-        }
-    }
-}
 
 /// Line-art sheep in the icon-D style: scalloped wool ring with the ❯_ face,
 /// strokes only — no background tile.

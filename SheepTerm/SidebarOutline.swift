@@ -1242,6 +1242,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 self?.parent.model.open(host: host)
                 self?.parent.model.collapseSidebar()
             }
+            add(menu, "Open in Split") { [weak self] in
+                self?.parent.model.openInSplit(host: host)
+                self?.parent.model.collapseSidebar()
+            }
             add(menu, "Edit Host…") { [weak self] in self?.parent.onEditHost(host) }
             menu.addItem(.separator())
             menu.addItem(sectionSubmenu(for: [host]))
@@ -1844,6 +1848,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession,
                      willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
         isDragging = true
+        // The pane tree and the tab strip accept `host:<uuid>` only for the
+        // rows THIS drag carries (see `InternalDrag`).
+        InternalDrag.hosts = Set(draggedItems.compactMap { ($0 as? SidebarItem)?.host?.id })
         session.enumerateDraggingItems(options: [], for: outlineView,
                                        classes: [NSPasteboardItem.self],
                                        searchOptions: [:]) { item, index, _ in
@@ -1880,6 +1887,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession,
                      endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         isDragging = false
+        InternalDrag.hosts = []
         stopAutoscroll()
         guard pendingRebuild else { return }
         pendingRebuild = false

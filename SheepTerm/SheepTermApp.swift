@@ -293,7 +293,7 @@ struct SheepTermCommands: Commands {
             Button("New Serial Console…") { model.openQuickConnect(.serial) }
             // Main window only — while Settings is key, ⌘⇧W must not close
             // a terminal tab in the background.
-            Button("Close Tab") { model.closeCurrentTab() }
+            Button("Close Tab") { model.closeCurrentWorkspace() }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(!mainWindowKey.isKey)
             Divider()
@@ -470,6 +470,38 @@ struct SheepTermCommands: Commands {
         }
 
         CommandMenu("Tabs") {
+            // Split panes (4.2 (7)). ⌘W (the key monitor) closes the focused
+            // pane, or the tab when it is the last one; ⌘⇧W closes the tab.
+            // Main window only, like Close Tab: ⌘D behind Settings or Search
+            // Logs must not start a second login to the focused device.
+            Button("Split Right") { model.splitFocusedPane(.right) }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+            Button("Split Down") { model.splitFocusedPane(.down) }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+            Button("Close Pane") { model.closeCurrentTab() }
+                .disabled(model.selectedTab == nil)
+            // Also by dragging the pane's header onto the empty tab strip.
+            Button("Move Pane to New Tab") { model.moveFocusedPaneToNewTab() }
+                .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
+            Menu("Focus Pane") {
+                Button("Left") { model.focusPane(.left) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                Button("Right") { model.focusPane(.right) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                Button("Up") { model.focusPane(.up) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                Button("Down") { model.focusPane(.down) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            }
+            .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
+            Button("Zoom Pane") { model.toggleZoomFocusedPane() }
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
+                .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
+            Button("Even Out Panes") { model.evenOutCurrentPanes() }
+                .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
+            Divider()
             Button("Next Tab") { model.selectAdjacentTab(offset: 1) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
             Button("Previous Tab") { model.selectAdjacentTab(offset: -1) }

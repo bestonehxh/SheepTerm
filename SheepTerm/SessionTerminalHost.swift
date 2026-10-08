@@ -164,6 +164,10 @@ final class SessionTerminalHost {
     private weak var pastePromptWindow: NSWindow?
     private static let pasteDelayChoices = [50, 100, 200, 300, 500, 1_000]
 
+    /// The session's name for the Safe Paste sheet (set by `AppModel.attach`):
+    /// with split panes the sheet is modal for the window, not the pane.
+    var sessionLabel: String?
+
     init(safePaste: Bool) {
         safePasteAvailable = safePaste
         terminalView = TerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 480),
@@ -278,7 +282,8 @@ final class SessionTerminalHost {
         let alert = SheepAlert()
         alert.alertStyle = .informational
         alert.messageText = "Safe Multi-line Paste"
-        alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending."
+        let target = sessionLabel.map { " to \($0)" } ?? ""
+        alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending\(target)."
         alert.addButton(withTitle: "Send Line by Line")
         alert.addButton(withTitle: "Paste Immediately")
         alert.addButton(withTitle: "Cancel")

@@ -1042,6 +1042,7 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
             lastBlinkToggle = CACurrentMediaTime()
             if terminal.modes.focusEvents { send(KeyEncoder.focus(true), keystroke: false) }
             setNeedsFrame()
+            delegate?.focusChanged(self, focused: true)
         }
         return ok
     }
@@ -1051,6 +1052,7 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         if ok {
             if terminal.modes.focusEvents { send(KeyEncoder.focus(false), keystroke: false) }
             setNeedsFrame()
+            delegate?.focusChanged(self, focused: false)
         }
         return ok
     }

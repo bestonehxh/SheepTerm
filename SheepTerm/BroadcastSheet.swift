@@ -58,6 +58,12 @@ struct BroadcastSheet: View {
                     Button("Tick All") { ticked = Set(eligible.map(\.id)) }
                     Button("Tick None") { ticked.removeAll() }
                         .disabled(ticked.isEmpty)
+                    // Split panes: the sessions side by side in the current tab.
+                    if let panes = model.selectedWorkspace?.sessions, panes.count > 1 {
+                        Button("Tick This Tab's Panes") {
+                            ticked = Set(eligible.map(\.id)).intersection(panes)
+                        }
+                    }
                     Spacer()
                     Text("\(plan.count) of \(eligible.count) selected")
                         .font(.system(size: 11))

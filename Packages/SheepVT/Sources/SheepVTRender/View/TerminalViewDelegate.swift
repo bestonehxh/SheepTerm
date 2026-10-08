@@ -69,6 +69,11 @@ public protocol TerminalViewDelegate: AnyObject {
     /// mouse report, a paste or the terminal's own reply, which also arrive
     /// through `send`. Called just before that `send`.
     func userTyped(_ view: TerminalView)
+
+    /// The view became (`true`) or stopped being (`false`) the window's first
+    /// responder. A host with several views in one window (split panes) uses
+    /// it to know which one the keyboard is in.
+    func focusChanged(_ view: TerminalView, focused: Bool)
 }
 
 public extension TerminalViewDelegate {
@@ -82,4 +87,5 @@ public extension TerminalViewDelegate {
     func openLink(_ view: TerminalView, url: String) {}
     func shouldPaste(_ view: TerminalView, text: String) -> Bool { true }
     func userTyped(_ view: TerminalView) {}
+    func focusChanged(_ view: TerminalView, focused: Bool) {}
 }

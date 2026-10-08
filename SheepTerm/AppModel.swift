@@ -109,7 +109,44 @@ final class AppModel: ObservableObject {
     static let shared = AppModel()
 
     @Published var tabs: [SessionTab] = []
-    @Published var selectedID: UUID?
+    /// The session that has the keyboard. Its workspace is the selected tab.
+    @Published var selectedID: UUID? {
+        didSet { if let id = selectedID { book.focus(id) } }
+    }
+    /// Split panes (4.2 (7)): which sessions share a tab and how they are
+    /// laid out. `tabs` stays the flat list of sessions; this is the tab
+    /// strip's view of them.
+    @Published var book = WorkspaceBook()
+    var workspaces: [WorkspaceState] { book.workspaces }
+    var selectedWorkspace: WorkspaceState? { selectedID.flatMap { book.workspace(containing: $0) } }
+    /// Where the next session goes; consumed by `attach`. Set by the split
+    /// actions and by `reconnect` right before they open a session.
+    private var pendingPlacement: PanePlacement = .newTab
+
+    /// Every new session comes through here: into `tabs` and into a tab.
+    /// Returns whether the new session should be selected: always, except a
+    /// reconnect of a pane that was NOT selected — an auto-reconnect in a
+    /// background tab used to make that tab's focused pane the reconnected
+    /// one for good (review finding).
+    @discardableResult
+    private func attach(_ tab: SessionTab) -> Bool {
+        self.tabs.append(tab)
+        var select = true
+        if case .replacing(let old) = pendingPlacement { select = selectedID == old }
+        book.attach(tab.id, pendingPlacement)
+        pendingPlacement = .newTab
+        // With several panes visible, the Safe Paste sheet must say which
+        // session it is about.
+        terminalHost(ofSession: tab.id)?.sessionLabel = tab.title
+        return select
+    }
+
+    func tab(id: UUID) -> SessionTab? { tabs.first { $0.id == id } }
+
+    /// The Safe Paste owner / terminal view of a session, by id.
+    func terminalHost(ofSession id: UUID) -> SessionTerminalHost? {
+        tab(id: id).flatMap { terminalHost(of: $0) }
+    }
     // Launch clean like Terminal.app — the sidebar opens with ⌘0 or the
     // toolbar button when needed.
     @Published var sidebarShown = false
@@ -912,14 +949,15 @@ final class AppModel: ObservableObject {
         let tab = SessionTab(content: .local(controller), title: "\(shellName) — This Mac")
         controller.onTitleChange = { [weak tab] title in
             guard let tab, !title.isEmpty else { return }
-            tab.title = title
+            // An OSC title can be as long as the parser's payload cap; the
+            // chip and every pane header measure it on each layout.
+            tab.title = String(title.prefix(256))
         }
         controller.onExit = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
             self.close(tab: tab)
         }
-        tabs.append(tab)
-        selectedID = tab.id
+        if attach(tab) { selectedID = tab.id }
         controller.start()
     }
 
@@ -1032,8 +1070,7 @@ final class AppModel: ObservableObject {
                     self?.scheduleAutoReconnect(for: tab)
                 }
             }
-            tabs.append(tab)
-            selectedID = tab.id
+            if attach(tab) { selectedID = tab.id }
             controller.start()
         case .serial:
             let controller = SerialTerminalController(host: host, reusingLogger: reusingLogger)
@@ -1084,8 +1121,7 @@ final class AppModel: ObservableObject {
                     self?.scheduleAutoReconnect(for: tab)
                 }
             }
-            tabs.append(tab)
-            selectedID = tab.id
+            if attach(tab) { selectedID = tab.id }
             controller.start()
         }
     }
@@ -1266,9 +1302,33 @@ final class AppModel: ObservableObject {
             controller.stop()
         }
         tabs.remove(at: index)
+        // A reconnect keeps the pane: the successor takes the place.
+        if case .replacing(let old) = pendingPlacement, old == tab.id { return }
+        let next = book.remove(tab.id)
         if selectedID == tab.id {
-            selectedID = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
+            selectedID = next
+            // No `focusActiveTerminal` here: a shell exiting while the sidebar
+            // search field or a find bar has the keyboard must not hand the
+            // rest of the typing to the next pane's device. The pane tree
+            // focuses its pane with the NSTextView/NSOutlineView guard.
         }
+    }
+
+    /// Close every pane of a tab (the tab strip's ×, File → Close Tab).
+    func close(workspace id: UUID) {
+        for session in book.sessions(ofWorkspace: id) {
+            if let tab = tab(id: session) { close(tab: tab) }
+        }
+    }
+
+    func closeCurrentWorkspace() {
+        if let ws = selectedWorkspace { close(workspace: ws.id) }
+    }
+
+    func select(workspace id: UUID) {
+        guard let ws = book.workspace(id: id) else { return }
+        selectedID = ws.focused
+        DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
     }
 
     /// The policy lives in `ReconnectBudget` (Models) so it can be tested
@@ -1366,6 +1426,8 @@ final class AppModel: ObservableObject {
         let carriedAuto = !oldManual && oldVendor != .auto
         if carriedAuto { host.vendor = .auto }
         let index = tabs.firstIndex { $0.id == tab.id }
+        // The successor takes this pane's place (`attach` reads it).
+        pendingPlacement = .replacing(tab.id)
         close(tab: tab)
         // `.complete`: the controller's host is the one this session actually
         // connected with, completed once already if it was ever a target.
@@ -1374,6 +1436,13 @@ final class AppModel: ObservableObject {
         // reconnect (recheck finding 3); the password it authenticated with is
         // in `passwordCache`, keyed on this very host.
         open(host: host, completeness: .complete, serialLog: serialLog, reusingLogger: handedLogger)
+        // `attach` consumed the placement; if nothing was opened, the old
+        // pane must not linger in the book.
+        if case .replacing(let old) = pendingPlacement {
+            pendingPlacement = .newTab
+            let next = book.remove(old)
+            if selectedID == old { selectedID = next }
+        }
         if let newTab = tabs.last {
             newTab.vendorManuallyChosen = oldManual
             // An explicit choice (including an explicit .auto) must keep
@@ -1423,12 +1492,8 @@ final class AppModel: ObservableObject {
     }
 
     func selectTab(number: Int) {
-        let index = number - 1
-        if tabs.indices.contains(index) {
-            selectedID = tabs[index].id
-            // ⌘1–9 must hand keyboard focus to the newly shown terminal.
-            // The view attaches on the next SwiftUI pass, so focus one
-            // runloop tick later — same pattern as the sidebar rows.
+        if let session = book.focusedSession(ofWorkspaceNumber: number) {
+            selectedID = session
             DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
         }
     }
@@ -1436,25 +1501,147 @@ final class AppModel: ObservableObject {
     /// Drag-and-drop in the tab strip: `gap` is counted before the tab is
     /// removed (see `TabOrder`). Selection follows the tab id, so it never
     /// changes here.
+    /// Tab strip drag: `id` is a WORKSPACE id.
     func moveTab(id: UUID, toGap gap: Int) {
-        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return }
-        let reordered = TabOrder.moved(tabs, from: from, toGap: gap)
-        if reordered.map(\.id) != tabs.map(\.id) { tabs = reordered }
+        book.move(workspace: id, toGap: gap)
     }
 
     /// Tabs → Move Tab Left/Right (⌃⌘← / ⌃⌘→) on the visible tab.
     func moveSelectedTab(right: Bool) {
-        guard let id = selectedID, let from = tabs.firstIndex(where: { $0.id == id }),
-              let gap = TabOrder.gap(movingOneStep: from, right: right, count: tabs.count) else { return }
-        moveTab(id: id, toGap: gap)
+        guard let ws = selectedWorkspace, let from = book.workspaces.firstIndex(where: { $0.id == ws.id }),
+              let gap = TabOrder.gap(movingOneStep: from, right: right, count: book.workspaces.count) else { return }
+        moveTab(id: ws.id, toGap: gap)
     }
 
     func selectAdjacentTab(offset: Int) {
-        guard !tabs.isEmpty else { return }
-        let current = tabs.firstIndex { $0.id == selectedID } ?? 0
-        let next = (current + offset + tabs.count) % tabs.count
-        selectedID = tabs[next].id
+        guard let current = selectedID ?? tabs.first?.id,
+              let next = book.focusedSession(ofWorkspaceAdjacentTo: current, offset: offset) else { return }
+        selectedID = next
         DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
+    }
+
+    // MARK: - Split panes (4.2 (7))
+
+    /// A click (or Tab-focus) landed in a pane's terminal: that session is
+    /// the one the menus and the status bar talk about now.
+    func noteFocus(view: TerminalView) {
+        guard let tab = tabs.first(where: { terminalHost(of: $0)?.terminalView === view }) else { return }
+        if selectedID != tab.id { selectedID = tab.id }
+    }
+
+    /// ⌘D / ⌘⇧D: a second session on the focused pane's host, beside it.
+    /// A serial console cannot be opened twice (the port is exclusive).
+    func splitFocusedPane(_ direction: PaneDirection) {
+        guard let tab = selectedTab, let ws = selectedWorkspace else { NSSound.beep(); return }
+        guard ws.paneCount < PaneLayout.maxPanes else { NSSound.beep(); return }
+        pendingPlacement = .split(beside: tab.id, direction)
+        switch tab.content {
+        case .local:
+            newLocalTab()
+        case .ssh(let controller):
+            // Same as `reconnect`: a family the FINGERPRINT chose is written
+            // onto `controller.host`; opening with it would read as a saved
+            // choice and switch detection off on the new pane for good.
+            var host = controller.host
+            if !tab.vendorManuallyChosen && tab.highlightVendor != .auto { host.vendor = .auto }
+            open(host: host, completeness: .complete)
+        case .serial:
+            NSSound.beep()
+        }
+        pendingPlacement = .newTab
+    }
+
+    /// Sidebar → Open in Split: `host` to the right of the focused pane (or
+    /// its own tab when there is none).
+    func openInSplit(host: Host) {
+        if let focused = selectedID, let ws = selectedWorkspace, ws.paneCount < PaneLayout.maxPanes {
+            pendingPlacement = .split(beside: focused, .right)
+        }
+        open(host: host)
+        pendingPlacement = .newTab
+    }
+
+    /// ⌥⌘ arrows: the keyboard to the neighbouring pane.
+    func focusPane(_ direction: PaneDirection) {
+        guard let focused = selectedID, let ws = selectedWorkspace,
+              let next = ws.layout.neighbor(of: focused, direction) else { NSSound.beep(); return }
+        selectedID = next
+        DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
+    }
+
+    /// ⇧⌘↵: the focused pane alone, and back.
+    func toggleZoomFocusedPane() {
+        guard let focused = selectedID else { return }
+        book.toggleZoom(focused)
+    }
+
+    func evenOutPanes(workspace id: UUID) { book.equalize(workspace: id) }
+    func evenOutCurrentPanes() { if let ws = selectedWorkspace { evenOutPanes(workspace: ws.id) } }
+
+    func moveDivider(workspace id: UUID, split: UUID, index: Int, to position: CGFloat) {
+        book.moveDivider(workspace: id, split: split, index: index, to: position)
+    }
+
+    // MARK: - Pane drag and drop (pane headers, tab chips, sidebar hosts)
+
+    /// A tab chip being dragged below the strip, over the panes: the strip
+    /// hands the pointer to `activePaneTree` (the selected tab's tree, which
+    /// registers itself), the tree draws the zone and writes it back to
+    /// `chipDropZone`, the strip reads that on release. Neither is published:
+    /// a `@Published` point re-rendered every menu, the sidebar and the
+    /// status bar on each mouse move (review finding).
+    weak var activePaneTree: PaneTreeView?
+    var chipDropZone: (pane: UUID, direction: PaneDirection)?
+
+    /// After a successful drag: the moved session has the keyboard.
+    private func focusMoved(_ session: UUID) {
+        selectedID = session
+        DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
+    }
+
+    /// A pane header dropped on another pane's edge.
+    func movePane(_ session: UUID, beside target: UUID, _ direction: PaneDirection) {
+        guard book.move(session: session, beside: target, direction) else { NSSound.beep(); return }
+        focusMoved(session)
+    }
+
+    /// A tab chip dropped on a pane's edge: every pane of that tab joins this one.
+    func mergeWorkspace(_ id: UUID, beside target: UUID, _ direction: PaneDirection) {
+        guard book.merge(workspace: id, beside: target, direction),
+              let focused = book.workspace(containing: target)?.focused else { NSSound.beep(); return }
+        focusMoved(focused)
+    }
+
+    /// A pane header dropped on a tab chip.
+    func movePane(_ session: UUID, toWorkspace id: UUID) {
+        guard book.move(session: session, toWorkspace: id) else { NSSound.beep(); return }
+        focusMoved(session)
+    }
+
+    /// A pane header dropped on the empty strip, or Tabs → Move Pane to New Tab.
+    func movePaneToNewTab(_ session: UUID) {
+        guard book.detach(session: session) != nil else { NSSound.beep(); return }
+        focusMoved(session)
+    }
+
+    func moveFocusedPaneToNewTab() {
+        guard let focused = selectedID else { NSSound.beep(); return }
+        movePaneToNewTab(focused)
+    }
+
+    /// A sidebar host dropped on a pane's edge: a new session there.
+    func dropHost(_ host: Host, beside target: UUID, _ direction: PaneDirection) {
+        guard let ws = book.workspace(containing: target), ws.paneCount < PaneLayout.maxPanes else {
+            NSSound.beep(); return
+        }
+        pendingPlacement = .split(beside: target, direction)
+        open(host: host)
+        pendingPlacement = .newTab
+    }
+
+    /// The saved host behind a `host:<uuid>` drag from the sidebar.
+    func savedHost(id: UUID) -> Host? {
+        store.groups.lazy.flatMap(\.hosts).first { $0.id == id }
     }
 
     /// ⌘⇧H — flips display highlighting for the active SSH/serial session.

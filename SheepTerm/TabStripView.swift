@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Session tabs, rendered inside the window toolbar next to the + button.
 struct TabStripView: View {
@@ -24,10 +25,20 @@ struct TabStripView: View {
     @State private var dragSourceIndex: Int?
     @State private var dragTargetIndex: Int?
     @State private var chipFrames: [UUID: CGRect] = [:]
+    /// Chip frames in the scroll view's own space (they move as it
+    /// scrolls) — what a drop location is compared against.
+    @State private var chipDropFrames: [UUID: CGRect] = [:]
+    /// Where a pane header (or a sidebar host) dragged over the strip would
+    /// land, for the highlight.
+    @State private var dropSpot: StripDropSpot?
+    @State private var dropConcluded = false
+    /// The dragged chip is below the strip, over the panes.
+    @State private var chipOverPanes = false
 
     private static let chipSpacing: CGFloat = 4
 
     private static let space = "tabstrip"
+    private static let dropSpace = "tabstrip-drop"
 
     var body: some View {
         // ScrollViewReader so a newly created or ⌘-selected tab is brought
@@ -45,37 +56,46 @@ struct TabStripView: View {
             // above the row the eye actually reads — the one the traffic
             // lights sit on. Measured against them, not against the frame.
             HStack(spacing: Self.chipSpacing) {
-                ForEach(model.tabs) { tab in
+                // One chip per WORKSPACE (a tab of one or more panes): the
+                // focused pane's title and the pane count.
+                ForEach(model.workspaces) { workspace in
+                    if let tab = model.tab(id: workspace.focused) {
                     // Chips get plain values/closures — observing the whole
                     // AppModel per chip would re-render every chip on any
                     // @Published change.
                     TabItemView(
                         tab: tab,
-                        isSelected: model.selectedID == tab.id,
+                        paneCount: workspace.paneCount,
+                        isSelected: model.selectedWorkspace?.id == workspace.id,
+                        isDropTarget: dropSpot == .chip(workspace.id),
                         onSelect: {
-                            model.selectedID = tab.id
+                            model.select(workspace: workspace.id)
                             model.collapseSidebar()
                         },
-                        onClose: { model.close(tab: tab) },
+                        onClose: { model.close(workspace: workspace.id) },
                         onReconnect: { model.reconnect(tab: tab) }
                     )
                     .background(GeometryReader { proxy in
-                        Color.clear.preference(key: TabChipFrames.self,
-                                               value: [tab.id: proxy.frame(in: .named(Self.space))])
+                        Color.clear
+                            .preference(key: TabChipFrames.self,
+                                        value: [workspace.id: proxy.frame(in: .named(Self.space))])
+                            .preference(key: TabChipDropFrames.self,
+                                        value: [workspace.id: proxy.frame(in: .named(Self.dropSpace))])
                     })
-                    .offset(x: dragOffset(for: tab.id))
-                    .zIndex(dragID == tab.id ? 10 : 0)
+                    .offset(x: dragOffset(for: workspace.id))
+                    .zIndex(dragID == workspace.id ? 10 : 0)
                     // The dragged chip tracks the pointer exactly; only the
                     // neighbours' slide is animated (updateDragTarget).
-                    .transaction { t in if dragID == tab.id { t.animation = nil } }
+                    .transaction { t in if dragID == workspace.id { t.animation = nil } }
                     // minimumDistance keeps a click a click: the chip's tap
                     // gesture still selects, the × button still closes.
                     .gesture(
                         DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
-                            .onChanged { value in handleDrag(tab.id, value) }
+                            .onChanged { value in handleDrag(workspace.id, value) }
                             .onEnded { _ in finishDrag() }
                     )
-                    .id(tab.id)
+                    .id(workspace.id)
+                    }
                 }
             }
             // Pointer over the chips = the window is not movable, or the
@@ -91,9 +111,26 @@ struct TabStripView: View {
         // centred against the buttons either side of them instead of against
         // a box that is shorter than the bar.
         .frame(maxHeight: .infinity)
-        .onChange(of: model.selectedID) { _, id in
-            guard dragID == nil, let id else { return }
+        // Pane headers dropped here (4.2 (7)): on a chip = into that tab, on
+        // the empty strip = a tab of its own. One drop target for the whole
+        // strip, resolved against the chip frames, so a chip and the strip
+        // behind it never compete for the same drop.
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(dropSpot == .strip ? Theme.controlFill.opacity(0.6) : Color.clear)
+        )
+        .coordinateSpace(name: Self.dropSpace)
+        .onPreferenceChange(TabChipDropFrames.self) { chipDropFrames = $0 }
+        .onDrop(of: [.utf8PlainText], delegate: StripDropDelegate(frames: chipDropFrames, spot: $dropSpot, concluded: $dropConcluded))
+        .onChange(of: model.selectedID) { _, _ in
+            guard dragID == nil, let id = model.selectedWorkspace?.id else { return }
             withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
+        }
+        // The dragged tab closed under the pointer (its shell exited):
+        // SwiftUI never sends onEnded for a gesture whose view is gone, and
+        // the drop zone stayed on screen (review finding).
+        .onChange(of: model.workspaces.map(\.id)) { _, ids in
+            if let dragID, !ids.contains(dragID) { resetDrag() }
         }
         }
     }
@@ -116,11 +153,29 @@ struct TabStripView: View {
         if dragID == nil {
             dragID = id
             dragStartFrames = chipFrames
-            dragStartOrder = model.tabs.map(\.id)
+            dragStartOrder = model.workspaces.map(\.id)
             dragSourceIndex = dragStartOrder.firstIndex(of: id)
             dragTargetIndex = dragSourceIndex
         }
         dragTranslation = value.translation.width
+        // Pulled down out of the strip, over the panes (4.2 (7)): the pane
+        // tree draws where the tab would merge; the order stays as it was.
+        let stripBottom = (dragStartFrames[id]?.maxY ?? 26) + 8
+        if value.location.y > stripBottom {
+            chipOverPanes = true
+            // Straight to the tree, synchronously: the zone it writes to
+            // `chipDropZone` is current when the mouse goes up.
+            model.activePaneTree?.showChipDrag(ChipDrag(workspace: id, screenPoint: NSEvent.mouseLocation))
+            if dragTargetIndex != dragSourceIndex {
+                withAnimation(.snappy(duration: 0.14)) { dragTargetIndex = dragSourceIndex }
+            }
+            return
+        }
+        if chipOverPanes {
+            chipOverPanes = false
+            model.activePaneTree?.showChipDrag(nil)
+            model.chipDropZone = nil
+        }
         guard let target = TabOrder.dragTarget(order: dragStartOrder, frames: dragStartFrames,
                                                dragged: id, translation: dragTranslation),
               target != dragTargetIndex else { return }
@@ -128,19 +183,33 @@ struct TabStripView: View {
     }
 
     private func finishDrag() {
+        // Released over a pane's drop zone: the whole tab joins that pane.
+        let merge = chipOverPanes ? model.chipDropZone : nil
+        model.activePaneTree?.showChipDrag(nil)
+        model.chipDropZone = nil
+        chipOverPanes = false
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            if let id = dragID, let source = dragSourceIndex, let target = dragTargetIndex {
+            if let id = dragID, let merge {
+                model.mergeWorkspace(id, beside: merge.pane, merge.direction)
+            } else if let id = dragID, let source = dragSourceIndex, let target = dragTargetIndex {
                 model.moveTab(id: id, toGap: TabOrder.gap(forFinalIndex: target, from: source))
             }
-            dragID = nil
-            dragTranslation = 0
-            dragStartFrames = [:]
-            dragStartOrder = []
-            dragSourceIndex = nil
-            dragTargetIndex = nil
+            resetDrag()
         }
+    }
+
+    private func resetDrag() {
+        model.activePaneTree?.showChipDrag(nil)
+        model.chipDropZone = nil
+        chipOverPanes = false
+        dragID = nil
+        dragTranslation = 0
+        dragStartFrames = [:]
+        dragStartOrder = []
+        dragSourceIndex = nil
+        dragTargetIndex = nil
     }
 }
 
@@ -195,6 +264,105 @@ private struct NonWindowDraggingArea: NSViewRepresentable {
     func updateNSView(_ nsView: View, context: Context) {}
 }
 
+private struct TabChipDropFrames: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// Where a drop on the strip lands.
+nonisolated enum StripDropSpot: Equatable, Sendable {
+    /// Into this tab (a workspace id).
+    case chip(UUID)
+    /// The empty strip: a tab of its own.
+    case strip
+}
+
+/// Pane headers (`pane:<uuid>`) and sidebar hosts (`host:<uuid>`) dropped
+/// on the strip. A pane on a chip joins that tab beside its focused pane; a
+/// pane on the empty strip gets a tab of its own. A host on a chip opens
+/// beside that tab's focused pane; on the empty strip, in a tab of its own.
+/// The pasteboard says which; the pane's own tab is not a target.
+private struct StripDropDelegate: DropDelegate {
+    let frames: [UUID: CGRect]
+    @Binding var spot: StripDropSpot?
+    /// Set by performDrop, cleared by the next dropEntered.
+    @Binding var concluded: Bool
+
+    private func resolve(_ location: CGPoint) -> StripDropSpot? {
+        let model = AppModel.shared
+        guard let hit = frames.first(where: { $0.value.contains(location) }) else { return .strip }
+        guard let workspace = model.book.workspace(id: hit.key) else { return nil }
+        // A pane dropped on its own tab's chip would go nowhere; a full tab
+        // takes nothing more.
+        if let dragged = PaneHeaderView.draggingSession, workspace.layout.contains(dragged) { return nil }
+        if workspace.paneCount >= PaneLayout.maxPanes { return nil }
+        return .chip(hit.key)
+    }
+
+    /// Only a drag that started inside the app (a pane header, a sidebar
+    /// row) and carries exactly one item: text from another app that happens
+    /// to read `host:<uuid>` must not open a saved host, and a multi-row
+    /// sidebar drag has no single host to mean.
+    func validateDrop(info: DropInfo) -> Bool {
+        info.itemProviders(for: [.utf8PlainText]).count == 1
+            && (InternalDrag.pane != nil || InternalDrag.hosts.count == 1)
+    }
+
+    func dropEntered(info: DropInfo) {
+        concluded = false
+        spot = resolve(info.location)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        // SwiftUI sends one more update ~300 ms after performDrop (measured,
+        // 4.2 (7)); taking it at face value left the strip highlighted.
+        guard !concluded else { spot = nil; return nil }
+        spot = resolve(info.location)
+        return DropProposal(operation: spot == nil ? .forbidden : .move)
+    }
+
+    func dropExited(info: DropInfo) { spot = nil }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let target = resolve(info.location)
+        spot = nil
+        concluded = true
+        let providers = info.itemProviders(for: [.utf8PlainText])
+        guard let target, providers.count == 1, let provider = providers.first else { return false }
+        // Read now, while the drag is still "ours": the load completes after
+        // the dragging session has ended and `InternalDrag` is cleared.
+        let pane = InternalDrag.pane, hosts = InternalDrag.hosts
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let string = object as? String, let payload = PaneDragPayload(string) else { return }
+            switch payload {
+            case .pane(let id): guard pane == id else { return }
+            case .host(let id): guard hosts == [id] else { return }
+            }
+            Task { @MainActor in StripDropDelegate.apply(payload, at: target) }
+        }
+        return true
+    }
+
+    @MainActor
+    private static func apply(_ payload: PaneDragPayload, at target: StripDropSpot) {
+        let model = AppModel.shared
+        switch (payload, target) {
+        case (.pane(let session), .chip(let workspace)):
+            model.movePane(session, toWorkspace: workspace)
+        case (.pane(let session), .strip):
+            model.movePaneToNewTab(session)
+        case (.host(let id), .chip(let workspace)):
+            guard let host = model.savedHost(id: id), let ws = model.book.workspace(id: workspace) else { NSSound.beep(); return }
+            model.dropHost(host, beside: ws.focused, .right)
+        case (.host(let id), .strip):
+            guard let host = model.savedHost(id: id) else { NSSound.beep(); return }
+            model.open(host: host)
+        }
+    }
+}
+
 private struct TabChipFrames: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
@@ -204,7 +372,11 @@ private struct TabChipFrames: PreferenceKey {
 
 struct TabItemView: View {
     @ObservedObject var tab: SessionTab
+    /// Panes in this tab; the chip says so when there is more than one.
+    var paneCount: Int = 1
     let isSelected: Bool
+    /// A pane header is being dragged over this chip.
+    var isDropTarget = false
     let onSelect: () -> Void
     let onClose: () -> Void
     let onReconnect: () -> Void
@@ -231,7 +403,7 @@ struct TabItemView: View {
             Circle()
                 .fill(indicatorColor)
                 .frame(width: 7, height: 7)
-            Text(tab.title)
+            Text(paneCount > 1 ? "\(tab.title) · \(paneCount)" : tab.title)
                 .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
                 .frame(maxWidth: 190)
@@ -254,7 +426,8 @@ struct TabItemView: View {
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Theme.tabActive : (hovering ? Theme.tabActive.opacity(0.5) : Color.clear))
+                .fill(isDropTarget ? Theme.controlFill
+                      : isSelected ? Theme.tabActive : (hovering ? Theme.tabActive.opacity(0.5) : Color.clear))
         )
         .foregroundStyle(isSelected ? Theme.tabText : Theme.dimText)
         .contentShape(Rectangle())

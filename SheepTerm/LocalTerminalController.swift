@@ -96,6 +96,11 @@ extension LocalTerminalController: LocalProcessDelegate {
 }
 
 extension LocalTerminalController: TerminalViewDelegate {
+    /// Split panes: the pane the keyboard went to is the selected session.
+    func focusChanged(_ view: TerminalView, focused: Bool) {
+        if focused { AppModel.shared.noteFocus(view: view) }
+    }
+
     func send(_ view: TerminalView, bytes: [UInt8]) {
         process.send(bytes)
     }

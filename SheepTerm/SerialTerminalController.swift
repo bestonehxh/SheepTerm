@@ -385,6 +385,11 @@ extension SerialTerminalController: TerminalViewDelegate {
     // The view calls every one of these on the main actor, from inside its own
     // event handling — no nonisolated hops, no assumeIsolated.
 
+    /// Split panes: the pane the keyboard went to is the selected session.
+    func focusChanged(_ view: TerminalView, focused: Bool) {
+        if focused { AppModel.shared.noteFocus(view: view) }
+    }
+
     func send(_ view: TerminalView, bytes: [UInt8]) {
         // A refused write means the worker took nothing: keep the answer so
         // a paced paste can end on it instead of counting the line as sent.

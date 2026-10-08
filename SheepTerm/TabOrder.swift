@@ -9,7 +9,7 @@ import Foundation
 /// in the order BEFORE the dragged tab is removed — the same convention as the
 /// sidebar's group reorder, whose index-past-the-end crash (ARCHITECTURE §11)
 /// is why every input here is clamped instead of trusted.
-enum TabOrder {
+nonisolated enum TabOrder {
     /// The index the moved element ends up at, or nil when the move is a
     /// no-op (dropped into either gap that touches its own position, or a
     /// `from` that is not in range).
