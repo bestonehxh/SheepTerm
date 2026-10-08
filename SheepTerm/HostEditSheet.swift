@@ -85,6 +85,8 @@ struct HostEditSheet: View {
             Text("Edit Host")
                 .font(.headline)
 
+            // Explanations are tooltips (`.help`), not captions under the
+            // controls: the user found the form cluttered (2026-10-08).
             Form {
                 TextField("Name", text: $name)
                 if original.kind == .ssh {
@@ -121,16 +123,12 @@ struct HostEditSheet: View {
                             Text(effectiveUsername.isEmpty ? "—" : effectiveUsername)
                                 .font(.system(size: 12, design: .monospaced))
                         }
-                        Text("Comes from “\(credential.name)” — a credential's username and its password are one login. Pick “None (enter manually)” to type a different name.")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                        .help("Comes from “\(credential.name)” — a credential's username and its password are one login. Pick “None (enter manually)” to type a different name.")
                     } else {
                         TextField("Username", text: $username)
                             .onChange(of: username) { usernameEdited = true }
                         RevealableSecureField(title: "Password", text: $password)
-                        Text("Passwords live in the Keychain — filling this saves it as a new credential for this host.")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                            .help("Passwords live in the Keychain — filling this saves it as a new credential for this host.")
                     }
                     Picker("Cipher mode", selection: $cipherMode) {
                         ForEach(CipherMode.allCases) { mode in
@@ -138,9 +136,7 @@ struct HostEditSheet: View {
                         }
                     }
                     Toggle("Forward SSH agent", isOn: $agentForward)
-                    Text("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .help("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
                     Picker("Via jump host", selection: $jumpHostID) {
                         Text("None (direct)").tag(UUID?.none)
                         ForEach(jumpCandidates) { candidate in
@@ -153,9 +149,7 @@ struct HostEditSheet: View {
                             Text("Missing jump host — pick another or None").tag(UUID?.some(dangling))
                         }
                     }
-                    Text("Logs into the chosen host first and tunnels this connection through it (ProxyJump). That host needs TCP forwarding allowed; this device sees the connection coming from it.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                    .help("Logs into the chosen host first and tunnels this connection through it (ProxyJump). That host needs TCP forwarding allowed; this device sees the connection coming from it.")
                 } else if original.kind == .serial {
                     TextField("Device path", text: $address)
                     Picker("Baud rate", selection: $baud) {
@@ -169,14 +163,13 @@ struct HostEditSheet: View {
                         Text(family.label).tag(family)
                     }
                 }
-                Text("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                .help("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
                 if original.kind == .ssh {
+                    // Greyed out, not explained: a family with no paging
+                    // command (Auto, FortiOS) has nothing to send.
                     Toggle("Disable paging on connect", isOn: $disablePaging)
-                    Text(disablePagingCaption)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .disabled(vendor.disablePagingCommand == nil)
+                        .help(disablePagingCaption)
                 }
             }
             .textFieldStyle(.roundedBorder)

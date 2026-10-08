@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 import SheepVTRender
-import SheepJumphost
+import SheepJump
 import SwiftUI
 import UniformTypeIdentifiers
 

@@ -151,9 +151,7 @@ struct AddHostsSheet: View {
                             .tag(UUID?.some(credential.id))
                     }
                 }
-                Text("Used by every row that leaves its Credential cell empty. A cell holding text that names no saved credential is that host's username instead — it does not fall back to this. Only the reference is saved — passwords stay in the Keychain.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                .help("Used by every row that leaves its Credential cell empty. A cell holding text that names no saved credential is that host's username instead — it does not fall back to this. Only the reference is saved — passwords stay in the Keychain.")
             }
             .textFieldStyle(.roundedBorder)
 

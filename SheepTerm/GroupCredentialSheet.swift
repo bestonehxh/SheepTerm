@@ -43,12 +43,9 @@ struct GroupCredentialSheet: View {
                         .tag(HostStore.GroupCredentialChoice.credential(credential.id))
                 }
             }
+            .help("Only the reference is stored — passwords stay in the Keychain. Serial consoles in the group are left alone.")
 
             Text(effectDescription)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Only the reference is stored — passwords stay in the Keychain. Serial consoles in the group are left alone.")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

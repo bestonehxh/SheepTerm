@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import SheepVTRender
-import SheepJumphost
+import SheepJump
 import Synchronization
 
 /// Owns one SSH session tab: the SheepVT view plus the SSH worker.

@@ -1,7 +1,7 @@
 import Foundation
 import Network
 import SheepSSH
-import SheepJumphost
+import SheepJump
 import Synchronization
 
 struct SSHConfig: Sendable {
@@ -16,7 +16,7 @@ struct SSHConfig: Sendable {
     /// hop from there can use our keys. Off unless the host asks for it —
     /// anyone with root on the far end can use the socket while we sit there.
     var agentForward: Bool = false
-    /// Reach the host through this bastion (ProxyJump, `SheepJumphost`);
+    /// Reach the host through this bastion (ProxyJump, `SheepJump`);
     /// nil = straight there.
     var jump: JumpHop? = nil
 }
@@ -2666,7 +2666,7 @@ nonisolated final class SSHLink {
     /// owned here and polled through the tunnelled link's `step`.
     final class Tunnel {
         let bastion: SSHLink
-        /// The channel ↔ transport adapter (`SheepJumphost`).
+        /// The channel ↔ transport adapter (`SheepJump`).
         let adapter: ChannelTunnel
         /// How the bastion is named in messages.
         let label: String
