@@ -462,6 +462,10 @@ final class SSHTerminalController: NSObject {
     private func showProgress(after prompt: ConnectionPrompt) {
         guard !stopped else { return }
         pendingProgress?.cancel()
+        // The password is the last question: the card stays on it until the
+        // shell (card closes) or a failure / another question replaces it —
+        // no "Authenticating…" page at the end (the user, 5.0 (3)).
+        guard prompt.stage != .password else { pendingProgress = nil; return }
         let text = prompt.stage == .hostKey ? "Connecting…" : "Authenticating…"
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.stopped else { return }
