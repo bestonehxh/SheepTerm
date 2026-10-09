@@ -28,6 +28,21 @@ public enum GoogleOAuth {
     public static let authorizationEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     public static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
     public static let revokeEndpoint = URL(string: "https://oauth2.googleapis.com/revoke")!
+    /// Who is signed in, for a Mac that holds a sign-in but not the address
+    /// (the state file was lost, or the sign-in came from elsewhere).
+    public static let userInfoEndpoint = URL(string: "https://openidconnect.googleapis.com/v1/userinfo")!
+
+    public struct Profile: Equatable, Sendable {
+        public var email: String?
+        public var picture: URL?
+    }
+
+    public static func parseUserInfo(_ data: Data) -> Profile? {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let picture = (object["picture"] as? String).flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
+        let profile = Profile(email: object["email"] as? String, picture: picture)
+        return profile.email == nil && profile.picture == nil ? nil : profile
+    }
     /// The narrowest Drive scope there is: a hidden folder only this Google
     /// client can see — not the user's files. Plus the address and the
     /// profile picture, to show who is signed in.

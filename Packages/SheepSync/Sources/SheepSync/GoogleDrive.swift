@@ -55,6 +55,16 @@ public actor GoogleAccount {
         }
     }
 
+    /// The signed-in account's address and photo (`userinfo`), or nil.
+    public func profile() async -> GoogleOAuth.Profile? {
+        guard let token = try? await token() else { return nil }
+        var request = URLRequest(url: GoogleOAuth.userInfoEndpoint)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return GoogleOAuth.parseUserInfo(data)
+    }
+
     /// After a 401: the next `token()` asks Google again.
     public func invalidate() { accessToken = nil; expiry = .distantPast }
 

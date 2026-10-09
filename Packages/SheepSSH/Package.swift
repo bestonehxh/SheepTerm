@@ -8,7 +8,7 @@ import PackageDescription
 // test vectors. On Linux — used only to run the test suite in CI-like
 // containers — `Crypto` from swift-crypto stands in for CryptoKit with the
 // same API. It is never linked into the macOS app. Windows (the SheepTerm
-// Windows port in Windows/) uses the same stand-in.
+// Windows port in ../SheepTerm-Windows) uses the same stand-in.
 #if os(Linux) || os(Windows)
 let linuxDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),

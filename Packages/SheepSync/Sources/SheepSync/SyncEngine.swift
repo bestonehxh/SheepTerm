@@ -253,6 +253,7 @@ public final class SyncEngine {
     /// Call once the app is up: resumes where the last launch left off.
     public func start() {
         watchNetwork()
+        Task { await fillInProfileIfMissing() }
         switch phase {
         case .ready: becameReady()
         case .checkingVault: Task { await checkVault() }
@@ -280,6 +281,23 @@ public final class SyncEngine {
         case .checkingVault: Task { await checkVault() }
         default: break
         }
+    }
+
+    /// Signed in, but this Mac does not know who as (no address in the state
+    /// file): ask Google once, so the account card shows the address and
+    /// photo instead of a placeholder.
+    func fillInProfileIfMissing() async {
+        guard account == nil, let googleAccount else { return }
+        let started = epoch
+        guard let profile = await googleAccount.profile(), epoch == started, self.googleAccount === googleAccount
+        else { return }
+        if let email = profile.email {
+            state.account = email
+            account = email
+        }
+        state.picture = profile.picture
+        accountPicture = profile.picture
+        saveState()
     }
 
     // MARK: Sign-in

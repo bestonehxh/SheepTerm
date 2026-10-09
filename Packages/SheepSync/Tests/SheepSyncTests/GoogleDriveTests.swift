@@ -49,6 +49,9 @@ final class GoogleDriveTests: XCTestCase {
         static func handle(_ request: URLRequest) -> (Int, Data) {
             let url = request.url!
             let method = request.httpMethod ?? "GET"
+            if url.host == "openidconnect.googleapis.com" {
+                return (200, json(["sub": "1", "email": "sheep@example.com", "picture": "https://lh3.googleusercontent.com/p"]))
+            }
             if url.host == "oauth2.googleapis.com" {
                 return (200, json(["access_token": "t", "expires_in": 3600]))
             }
@@ -197,5 +200,16 @@ final class GoogleDriveTests: XCTestCase {
             XCTAssertEqual(error as? GoogleOAuth.OAuthError, .invalidGrant)
         }
         XCTAssertTrue(stored.claim(), "no rotated token was stored (the fake never rotates)")
+    }
+
+    /// A Mac holding a sign-in but not the address asks Google who it is.
+    func testProfileFromUserInfo() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FakeDrive.self]
+        let account = GoogleAccount(client: GoogleClient(clientID: "x.apps.googleusercontent.com", clientSecret: nil),
+                                    refreshToken: "r", session: URLSession(configuration: configuration))
+        let profile = await account.profile()
+        XCTAssertEqual(profile?.email, "sheep@example.com")
+        XCTAssertEqual(profile?.picture?.absoluteString, "https://lh3.googleusercontent.com/p")
     }
 }

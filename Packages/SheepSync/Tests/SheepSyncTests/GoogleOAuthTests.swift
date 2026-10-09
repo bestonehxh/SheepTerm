@@ -73,6 +73,15 @@ final class GoogleOAuthTests: XCTestCase {
         XCTAssertEqual(GoogleOAuth.redirectParameters(requestLine: "GET /favicon.ico HTTP/1.1"), [:])
     }
 
+    func testUserInfoParsing() {
+        let p = GoogleOAuth.parseUserInfo(Data(#"{"sub":"1","email":"a@b.c","picture":"https://lh3.googleusercontent.com/x"}"#.utf8))
+        XCTAssertEqual(p?.email, "a@b.c")
+        XCTAssertEqual(p?.picture?.host, "lh3.googleusercontent.com")
+        XCTAssertNil(GoogleOAuth.parseUserInfo(Data(#"{"sub":"1"}"#.utf8)))
+        XCTAssertNil(GoogleOAuth.parseUserInfo(Data("<html>".utf8)))
+        XCTAssertNil(GoogleOAuth.parseUserInfo(Data(#"{"picture":"http://insecure/x"}"#.utf8)))
+    }
+
     func testClientConfiguredOnlyWithARealID() {
         XCTAssertTrue(client.isConfigured)
         XCTAssertFalse(GoogleClient(clientID: "", clientSecret: nil).isConfigured)
