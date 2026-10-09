@@ -14,3 +14,16 @@
 // it is not trivially reusable from the source.)
 SHEEPSYNC_GOOGLE_CLIENT_SECRET =
 #include? "Secrets.xcconfig"
+
+// Code signing (5.0 (10)). Every release is signed with ONE stable identity
+// so macOS recognises each update as the same app: an ad-hoc signature is
+// recognised only by its hash, which changes with every build, and the
+// Keychain then asked again for every saved password after every update.
+// The identity ("Sheep Apps Signing", a self-signed code-signing certificate
+// in the login keychain, shared by the Sheep apps) is named in the gitignored
+// Signing.xcconfig; without that file — a public clone — the build is
+// ad-hoc-signed as before. release.sh refuses to ship anything else
+// (CODESIGN_AUTHORITY in .ship.conf).
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -
+#include? "Signing.xcconfig"

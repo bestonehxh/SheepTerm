@@ -7,3 +7,4 @@ tests-scratch/
 .build/
 .claude/settings.local.json
 Secrets.xcconfig
+Signing.xcconfig
