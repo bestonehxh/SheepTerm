@@ -48,5 +48,7 @@ struct ReorderGroupsSheet: View {
         .padding(18)
         .frame(width: 320, height: 380)
         .sheepSheetChrome()
+        // Esc closes it, as Esc closes any Mac sheet (Done holds Return).
+        .onExitCommand { dismiss() }
     }
 }

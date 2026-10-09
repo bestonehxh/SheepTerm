@@ -990,9 +990,11 @@ final class AppModel: ObservableObject {
         alert.messageText = "Remove command history for “\(tab.title)”?"
         alert.informativeText = count == 0 ? "There is nothing saved for this host."
             : "\(count) saved command\(count == 1 ? "" : "s") for this host will be removed. Other hosts are not touched."
-        alert.addButton(withTitle: "Remove History")
+        // Cancel first, so Return cannot remove the history by accident (the
+        // rule every other delete alert here follows).
         alert.addButton(withTitle: "Cancel")
-        guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
+        alert.addButton(withTitle: "Remove History")
+        guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
         historyStore.clear(key)
     }
 

@@ -65,6 +65,8 @@ struct SnippetsSheet: View {
         .padding(20)
         .frame(width: 560)
         .sheepSheetChrome()
+        // Esc closes it, as Esc closes any Mac sheet (Done holds Return).
+        .onExitCommand { dismiss() }
     }
 
     private func row(_ snippet: Snippet) -> some View {

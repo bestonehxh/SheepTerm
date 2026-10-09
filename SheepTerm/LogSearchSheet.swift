@@ -56,6 +56,8 @@ struct LogSearchSheet: View {
         .padding(20)
         .frame(width: 720)
         .sheepSheetChrome()
+        // Esc closes it, as Esc closes any Mac sheet (Done holds Return).
+        .onExitCommand { dismiss() }
         .onChange(of: text) { search(now: false) }
         .onChange(of: regex) { search(now: true) }
         .onChange(of: caseSensitive) { search(now: true) }

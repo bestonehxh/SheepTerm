@@ -104,18 +104,22 @@ struct SyncSettingsSection: View {
                     RevealableSecureField(title: "Current passphrase", text: $passphrase)
                     RevealableSecureField(title: "New passphrase", text: $newPassphrase)
                     RevealableSecureField(title: "Confirm new passphrase", text: $confirmation)
+                    // Apple's order: trailing, Cancel left of the action;
+                    // Return = Change, Esc = Cancel.
                     HStack {
+                        Spacer()
+                        Button("Cancel") { changingPassphrase = false; clearFields() }
+                            .keyboardShortcut(.cancelAction)
+                            .disabled(working)
                         Button("Change Passphrase") {
                             run {
                                 try await engine.changePassphrase(current: passphrase, new: newPassphrase)
                                 changingPassphrase = false
                             }
                         }
+                        .keyboardShortcut(.defaultAction)
                         .disabled(working || passphrase.isEmpty || newPassphrase.count < Self.minimumPassphrase
                                   || newPassphrase != confirmation)
-                        Button("Cancel") { changingPassphrase = false; clearFields() }
-                            .disabled(working)
-                        Spacer()
                     }
                     if !confirmation.isEmpty, newPassphrase != confirmation {
                         Text("Passphrases don't match").font(.system(size: 11)).foregroundStyle(.red)

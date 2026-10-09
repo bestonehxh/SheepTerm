@@ -80,7 +80,8 @@ struct CommandHistorySheet: View {
             }
 
             HStack {
-                Button("Remove History for This Host", role: .destructive) {
+                // "…": a confirmation follows.
+                Button("Remove History for This Host…", role: .destructive) {
                     dismiss()
                     DispatchQueue.main.async { model.clearCommandHistoryForCurrentHost() }
                 }
@@ -89,7 +90,10 @@ struct CommandHistorySheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                // Drawn as the default (Return already types it, from the
+                // search field and the list).
                 Button("Type It") { pick(at: selection, in: lines) }
+                    .buttonStyle(.borderedProminent)
                     .disabled(lines.isEmpty)
                     .help("Types the line into the session; press Return there to run it")
             }

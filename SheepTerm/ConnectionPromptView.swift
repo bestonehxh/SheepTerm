@@ -450,11 +450,12 @@ struct ConnectionCardContent: View {
                 EntryPage(model: model, prompt: prompt)
             }
         case .failure(_, _, _, let offersKnownHosts):
+            // Apple's order: the dismiss left of the action.
             CardPage(content: { EmptyView() }, buttons: {
+                CardButton("Close", role: .neutral, help: "Close this message") { model.send(.close) }
                 if offersKnownHosts {
                     CardButton("Open Known Hosts…", role: .accent, help: "Review the saved key") { model.send(.openKnownHosts) }
                 }
-                CardButton("Close", role: .neutral, help: "Close this message") { model.send(.close) }
             })
         }
     }
@@ -577,13 +578,16 @@ private struct HostKeyPage: View {
         CardPage(content: {
             FingerprintBlock(keyType: HostKeyPromptView.keyTypeLabel(question.keyType), fingerprint: base64, oneLine: true)
         }, buttons: {
-            // Cancel · Connect Once · Trust & Connect. Trust is green and
-            // takes a deliberate click — Return and Escape answer Cancel (the
-            // card's keyDown) and no button takes the keyboard's focus.
-            CardButton("Cancel", role: .neutral,
-                       help: "Don't trust this key — the connection is cancelled and nothing is saved (Return / Esc)") { model.send(.answer(.cancel)) }
+            // Apple's order (the user's call, 2026-10-10): the alternative
+            // (Connect Once) at the far left, then Cancel immediately left of
+            // the main action (Trust & Connect). Trust is green and takes a
+            // deliberate click — Return and Escape answer Cancel (the card's
+            // keyDown) and no button takes the keyboard's focus.
             CardButton("Connect Once", role: .caution,
                        help: "Connect this time only — the key is not saved and the next connection asks again") { model.send(.answer(.trustOnce)) }
+            Spacer(minLength: 16)
+            CardButton("Cancel", role: .neutral,
+                       help: "Don't trust this key — the connection is cancelled and nothing is saved (Return / Esc)") { model.send(.answer(.cancel)) }
             CardButton("Trust & Connect", role: .green, help: "Save this key to known_hosts and connect") { model.send(.answer(.trust)) }
         })
     }

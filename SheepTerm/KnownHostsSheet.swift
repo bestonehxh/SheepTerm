@@ -87,6 +87,8 @@ struct KnownHostsSheet: View {
         .padding(20)
         .frame(width: 560)
         .sheepSheetChrome()
+        // Esc closes it, as Esc closes any Mac sheet (Done holds Return).
+        .onExitCommand { dismiss() }
         .onAppear(perform: reload)
         // Selection is by line index, which only means something for the
         // rows on screen: a new filter starts a new selection.

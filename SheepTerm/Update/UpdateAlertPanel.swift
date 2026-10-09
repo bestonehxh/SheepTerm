@@ -126,7 +126,10 @@ final class UpdateAlertPanel: NSObject {
         }
         let half = (width - 10) / 2
         let pairFits = buttons.count == 2 && buttons.allSatisfy { $0.fittingSize.width + 16 <= half }
-        let buttonStack = NSStackView(views: buttons)
+        // Apple's order: a side-by-side pair puts the main action (the first
+        // button) on the RIGHT, the dismiss on its left; a stack keeps the
+        // main action on top.
+        let buttonStack = NSStackView(views: pairFits ? Array(buttons.reversed()) : buttons)
         buttonStack.orientation = pairFits ? .horizontal : .vertical
         buttonStack.distribution = .fillEqually
         buttonStack.spacing = pairFits ? 10 : 8

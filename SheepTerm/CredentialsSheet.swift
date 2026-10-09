@@ -115,6 +115,8 @@ struct CredentialsSheet: View {
         .padding(20)
         .frame(width: 400)
         .sheepSheetChrome()
+        // Esc closes it, as Esc closes any Mac sheet (Done holds Return).
+        .onExitCommand { dismiss() }
         .noAutoFill()
         .onAppear {
             AuthPrompt.forceASCIIKeyboard()

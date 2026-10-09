@@ -133,9 +133,11 @@ final class SheepAlert: NSObject {
         finish(NSApplication.ModalResponse(rawValue: sender.tag))
     }
 
-    /// Escape with no Escape button: press "Cancel" if there is one.
+    /// Escape with no Escape button: press the dismiss button — Cancel, or
+    /// the Later / Back / Close / Keep… an alert uses instead (those used to
+    /// leave Esc doing nothing).
     fileprivate func cancel() {
-        if let cancel = buttons.first(where: Self.isCancel) {
+        if let cancel = buttons.first(where: Self.isEscape) {
             cancel.performClick(nil)
         }
     }
@@ -177,6 +179,13 @@ final class SheepAlert: NSObject {
     }
 
     static func isCancel(_ button: NSButton) -> Bool { button.title.hasPrefix("Cancel") }
+
+    /// The button Esc presses and the row puts next to the action: Cancel,
+    /// or the dismiss an alert names otherwise.
+    static func isEscape(_ button: NSButton) -> Bool {
+        isCancel(button) || escapeTitles.contains(button.title) || button.title.hasPrefix("Keep ")
+    }
+    static let escapeTitles: Set<String> = ["Later", "Back", "Close", "Not Now"]
 
     /// The soft blue macOS 26 gives an alert's default button in a dark
     /// window (sampled from the system Quit alert the user liked, 4.2 (2)) —
@@ -279,8 +288,7 @@ final class SheepAlert: NSObject {
         //  • Cancel is never painted as the default: where Cancel answers
         //    Return, the panel maps Return to it instead of the button's
         //    key equivalent (which is what turns a button blue);
-        //  • Cancel sits last — right of a pair, bottom of a stack. Only the
-        //    ORDER ON SCREEN changes; response codes follow addButton order.
+        //  • the order on screen is Apple's — see the layout below.
         for button in buttons where Self.isCancel(button) && button.keyEquivalent == "\r" {
             button.keyEquivalent = ""
             panel.returnButton = button
@@ -314,35 +322,62 @@ final class SheepAlert: NSObject {
         // macOS sheet does; stretching them to 620 pt read as bars (the
         // user, 2026-10-09).
         let wide = width > Self.contentWidth
-        let ordered = wide
-            ? buttons.filter(Self.isCancel) + Array(buttons.filter { !Self.isCancel($0) }.reversed())
-            : buttons.filter { !Self.isCancel($0) } + buttons.filter(Self.isCancel)
-        let buttonStack = NSStackView(views: ordered)
-        if wide {
+        // Apple's order (macOS HIG, the user's call 2026-10-10 — replacing
+        // the 4.2 (2) "Cancel last" rule): in a ROW the action is rightmost,
+        // the dismiss (Cancel / Later / Back / Close / Keep…) immediately to
+        // its left, and any further alternative at the far left behind a
+        // gap. In a STACK (macOS 26 alerts) the first action is on top and
+        // the dismiss at the bottom. Only the order on screen changes:
+        // response codes still follow addButton order, and Return still goes
+        // to whichever button the call site made the default.
+        let dismiss = buttons.filter(Self.isEscape)
+        let actions = buttons.filter { !Self.isEscape($0) }
+        // The button the row ends with: the first action added (the one a
+        // Cancel-first destructive alert adds second is still its action).
+        let main = actions.first
+        let alternatives = Array(actions.dropFirst())
+        let half = (width - 10) / 2
+        let pairFits = !wide && buttons.count == 2
+            && buttons.allSatisfy { $0.attributedTitle.size().width + 32 <= half }
+        if wide || pairFits {
+            var row: [NSView] = []
+            if wide {
+                row += alternatives.reversed() as [NSView]
+                let gap = NSView()
+                gap.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                row.append(gap)
+                row += dismiss as [NSView]
+                if let main { row.append(main) }
+            } else {
+                // A pair: [dismiss][action], or [second][first] with no dismiss.
+                row = dismiss.isEmpty ? Array(buttons.reversed()) : dismiss + actions
+            }
+            let buttonStack = NSStackView(views: row)
             buttonStack.orientation = .horizontal
             buttonStack.spacing = 10
             buttonStack.translatesAutoresizingMaskIntoConstraints = false
-            for button in buttons {
-                button.widthAnchor.constraint(equalToConstant: 176).isActive = true
+            if wide {
+                for button in buttons {
+                    button.widthAnchor.constraint(equalToConstant: 176).isActive = true
+                }
+                buttonStack.distribution = .fill      // the gap takes the slack
+                buttonStack.widthAnchor.constraint(equalToConstant: width).isActive = true
+            } else {
+                buttonStack.distribution = .fillEqually
+                buttonStack.widthAnchor.constraint(equalToConstant: width).isActive = true
             }
             rows.append(buttonStack)
         } else {
-        // A pair sits side by side only while both titles fit their half
-        // with room to spare ("Open Known Hosts…" in bold did not); else stack.
-        let half = (width - 10) / 2
-        let pairFits = buttons.count == 2
-            && buttons.allSatisfy { $0.attributedTitle.size().width + 32 <= half }
-        buttonStack.orientation = pairFits ? .horizontal : .vertical
-        buttonStack.distribution = .fillEqually
-        buttonStack.spacing = pairFits ? 10 : 8
-        buttonStack.translatesAutoresizingMaskIntoConstraints = false
-        buttonStack.widthAnchor.constraint(equalToConstant: width).isActive = true
-        if buttonStack.orientation == .vertical {
+            let buttonStack = NSStackView(views: actions + dismiss)
+            buttonStack.orientation = .vertical
+            buttonStack.distribution = .fillEqually
+            buttonStack.spacing = 8
+            buttonStack.translatesAutoresizingMaskIntoConstraints = false
+            buttonStack.widthAnchor.constraint(equalToConstant: width).isActive = true
             for button in buttons {
                 button.widthAnchor.constraint(equalToConstant: width).isActive = true
             }
-        }
-        rows.append(buttonStack)
+            rows.append(buttonStack)
         }
 
         let column = NSStackView(views: rows)
