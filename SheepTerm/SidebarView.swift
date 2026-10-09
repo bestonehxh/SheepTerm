@@ -376,19 +376,69 @@ struct SidebarView: View {
         }
     }
 
-    /// The bottom button bar, in three widths. The sidebar is 200–320 pt and a
-    /// FOURTH control (Add Hosts) no longer fits beside a spelled-out
-    /// "New Group": left to itself the row pushed the folder icon off the left
-    /// edge. `ViewThatFits` drops the labels instead of the buttons — widest
-    /// variant first, and the help text carries the name once the word is gone.
+    /// The bottom bar (5.0 (7)): the Sync account at the left (Sign In, or
+    /// the user's avatar), and everything else behind one ≡ menu at the
+    /// right — New Group, Add Hosts, Reorder, Expand/Collapse all. Two
+    /// controls fit at the 200 pt minimum width without dropping labels.
     private var bottomBar: some View {
-        ViewThatFits(in: .horizontal) {
-            bottomControls(nameNewGroup: true, nameAddHosts: true, spacing: 14)
-            // Tighter before anything loses its word: at the 200 pt minimum
-            // the icon + "+Hosts" row measures within a point of the space
-            // there is, and 14 pt of air is not worth a label.
-            bottomControls(nameNewGroup: false, nameAddHosts: true, spacing: 10)
-            bottomControls(nameNewGroup: false, nameAddHosts: false, spacing: 10)
+        HStack(spacing: 10) {
+            SyncAccountButton()
+            Spacer()
+            Menu {
+                Button {
+                    showNewGroup = true
+                } label: {
+                    Label("New Group", systemImage: "folder.badge.plus")
+                }
+                Button {
+                    model.openAddHost()
+                } label: {
+                    Label("Add Host…", systemImage: "plus")
+                }
+                Button {
+                    model.showAddHosts()
+                } label: {
+                    Label("Add Hosts…", systemImage: "tablecells")
+                }
+                Divider()
+                Button {
+                    model.showReorderGroups = true
+                } label: {
+                    Label("Reorder Groups…", systemImage: "arrow.up.arrow.down")
+                }
+                Button {
+                    // One click, the whole tree: sections AND groups. Both sets
+                    // still go through their own @State (the one writer that
+                    // persists each), so nothing else has to know about this.
+                    if everythingCollapsed {
+                        collapsedGroups = []
+                        collapsedHostSections = []
+                    } else {
+                        collapsedGroups = Set(store.groups.map(\.id))
+                        collapsedHostSections = allSectionKeys
+                    }
+                } label: {
+                    // The glyph and the words flip with the state.
+                    Label(everythingCollapsed ? "Expand All" : "Collapse All",
+                          systemImage: everythingCollapsed
+                              ? "arrow.up.left.and.arrow.down.right"
+                              : "arrow.down.right.and.arrow.up.left")
+                }
+            } label: {
+                // Drawn, not the SF Symbol: line.3.horizontal at this size
+                // packs its three strokes ~2 pt apart and reads as one block.
+                // An image (template) because a Menu label shows only text
+                // and images — shapes in it are dropped.
+                Image(nsImage: Self.menuGlyph)
+                    .frame(width: 26, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .help("Groups and hosts")
+            .accessibilityLabel("Groups and Hosts")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -400,99 +450,20 @@ struct SidebarView: View {
         }
     }
 
-    private func bottomControls(nameNewGroup: Bool, nameAddHosts: Bool,
-                                spacing: CGFloat) -> some View {
-        HStack(spacing: spacing) {
-            Button {
-                showNewGroup = true
-            } label: {
-                if nameNewGroup {
-                    Label("New Group", systemImage: "folder.badge.plus")
-                        .font(.system(size: 11))
-                        // One line, always: the label wrapped to three lines
-                        // the first time a fourth control joined this row.
-                        .lineLimit(1)
-                        .fixedSize()
-                } else {
-                    Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 11, weight: .regular))
-                        .frame(width: 24, height: 22)
-                        .contentShape(Rectangle())
-                }
+    /// Three 14 × 1.5 pt strokes with 4 pt of air between them (2 pt read
+    /// as too heavy beside the other bar glyphs).
+    private static let menuGlyph: NSImage = {
+        let image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { _ in
+            NSColor.black.setFill()
+            for y in [0.75, 6.25, 11.75] {
+                NSBezierPath(roundedRect: NSRect(x: 0, y: y, width: 14, height: 1.5),
+                             xRadius: 0.75, yRadius: 0.75).fill()
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("New Group")
-            .accessibilityLabel("New Group")
-            Spacer()
-            Button {
-                model.showAddHosts()
-            } label: {
-                // "+Hosts": the sign at the weight of the icons beside it, the
-                // word at the size of the "New Group" label.
-                // One optical weight across all four controls in this bar: the
-                // plus and the folder read heavier than the two arrow glyphs
-                // at `.medium`, and a row of buttons that do not match looks
-                // like one of them is selected.
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .regular))
-                    if nameAddHosts {
-                        Text("Hosts")
-                            .font(.system(size: 11))
-                            .lineLimit(1)
-                    }
-                }
-                .frame(minWidth: 24, minHeight: 22)
-                .fixedSize()
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Add Hosts…")
-            // At the narrowest width this button is a bare "+" — which
-            // VoiceOver reads as "plus", beside a "+" that makes a group.
-            .accessibilityLabel("Add Hosts")
-            Button {
-                model.showReorderGroups = true
-            } label: {
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 12, weight: .regular))
-                    .frame(width: 24, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Reorder groups")
-            .accessibilityLabel("Reorder Groups")
-            Button {
-                // One click, the whole tree: sections AND groups. Both sets
-                // still go through their own @State (the one writer that
-                // persists each), so nothing else has to know about this.
-                if everythingCollapsed {
-                    collapsedGroups = []
-                    collapsedHostSections = []
-                } else {
-                    collapsedGroups = Set(store.groups.map(\.id))
-                    collapsedHostSections = allSectionKeys
-                }
-            } label: {
-                Image(systemName: everythingCollapsed
-                      ? "arrow.up.left.and.arrow.down.right"
-                      : "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 12, weight: .regular))
-                    .frame(width: 24, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help(everythingCollapsed ? "Expand all" : "Collapse all")
-            // The glyph flips with the state, so the label has to as well —
-            // "Collapse all" read out over a button that expands is worse
-            // than no label at all.
-            .accessibilityLabel(everythingCollapsed ? "Expand All" : "Collapse All")
+            return true
         }
-    }
+        image.isTemplate = true
+        return image
+    }()
 
     private var searchField: some View {
         HStack(spacing: 6) {

@@ -10,10 +10,12 @@
 		5EEB00000000000000000040 /* SheepVTRender in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000051 /* SheepVTRender */; };
 		5EEB00000000000000000041 /* SheepSSH in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000053 /* SheepSSH */; };
 		5EEB00000000000000000042 /* SheepJump in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000055 /* SheepJump */; };
+		5EEB00000000000000000043 /* SheepSync in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000057 /* SheepSync */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		5EEB00000000000000000020 /* SheepTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SheepTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5EEB00000000000000000070 /* SheepTerm.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = SheepTerm.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -45,6 +47,7 @@
 				5EEB00000000000000000040 /* SheepVTRender in Frameworks */,
 				5EEB00000000000000000041 /* SheepSSH in Frameworks */,
 				5EEB00000000000000000042 /* SheepJump in Frameworks */,
+				5EEB00000000000000000043 /* SheepSync in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -55,6 +58,7 @@
 			isa = PBXGroup;
 			children = (
 				5EEB00000000000000000021 /* SheepTerm */,
+				5EEB00000000000000000070 /* SheepTerm.xcconfig */,
 				5EEB00000000000000000023 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,6 +94,7 @@
 				5EEB00000000000000000051 /* SheepVTRender */,
 				5EEB00000000000000000053 /* SheepSSH */,
 				5EEB00000000000000000055 /* SheepJump */,
+				5EEB00000000000000000057 /* SheepSync */,
 			);
 			productName = SheepTerm;
 			productReference = 5EEB00000000000000000020 /* SheepTerm.app */;
@@ -123,6 +128,7 @@
 				5EEB00000000000000000050 /* XCLocalSwiftPackageReference "Packages/SheepVT" */,
 				5EEB00000000000000000052 /* XCLocalSwiftPackageReference "Packages/SheepSSH" */,
 				5EEB00000000000000000054 /* XCLocalSwiftPackageReference "Packages/SheepJump" */,
+				5EEB00000000000000000056 /* XCLocalSwiftPackageReference "Packages/SheepSync" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5EEB00000000000000000023 /* Products */;
@@ -281,12 +287,13 @@
 		};
 		5EEB00000000000000000012 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5EEB00000000000000000070 /* SheepTerm.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -312,12 +319,13 @@
 		};
 		5EEB00000000000000000013 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5EEB00000000000000000070 /* SheepTerm.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -377,6 +385,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/SheepJump;
 		};
+		5EEB00000000000000000056 /* XCLocalSwiftPackageReference "Packages/SheepSync" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SheepSync;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -393,6 +405,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5EEB00000000000000000054 /* XCLocalSwiftPackageReference "Packages/SheepJump" */;
 			productName = SheepJump;
+		};
+		5EEB00000000000000000057 /* SheepSync */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5EEB00000000000000000056 /* XCLocalSwiftPackageReference "Packages/SheepSync" */;
+			productName = SheepSync;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

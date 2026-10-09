@@ -116,6 +116,8 @@ struct GeneralSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            SyncSettingsSection()
+
             Section("Libraries") {
                 // No third-party code left to track: both halves of a session
                 // are ours, and the only crypto underneath is Apple's.

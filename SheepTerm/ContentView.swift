@@ -244,7 +244,7 @@ struct DetailPane: View {
         // chrome OVER the tab bar living in that row.
         .background(Theme.chrome, ignoresSafeAreaEdges: [])
         .sheet(item: $model.quickConnect) { request in
-            QuickConnectSheet(kind: request.kind)
+            QuickConnectSheet(kind: request.kind, addOnly: request.addOnly)
         }
         .sheet(isPresented: $model.showCredentials) {
             CredentialsSheet()

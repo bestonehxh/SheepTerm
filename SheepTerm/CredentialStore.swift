@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import LocalAuthentication
 import Security
 
 struct Credential: Identifiable, Codable, Hashable {
@@ -36,10 +37,21 @@ final class CredentialStore: ObservableObject {
     /// write leaves a .bak behind.
     private var suppressWritesAfterCorruptLoad = false
 
+    /// False while the list is what a failed load left (empty, writes held):
+    /// then it says nothing about which credentials exist, and Sync must not
+    /// read a password's absence from it as "deleted".
+    /// Unlike the write suppression, this does NOT clear on the user's next
+    /// edit: one credential added after a quarantine must not be uploaded as
+    /// "the whole list" and tombstone every password on every Mac. Cleared
+    /// by the next clean reload (a restore, or Sync bringing the list down).
+    var isTrusted: Bool { !quarantinedSinceLoad }
+    private var quarantinedSinceLoad = false
+
     init() {
         let (loaded, warning) = Self.load()
         credentials = loaded
         suppressWritesAfterCorruptLoad = warning != nil
+        quarantinedSinceLoad = warning != nil
         // Deferred: this runs from `AppModel.init`, i.e. while the SwiftUI
         // `App` is still being constructed and no window exists. A modal
         // there is the same mistake as the one in the Apple Event callback
@@ -59,6 +71,7 @@ final class CredentialStore: ObservableObject {
         let (loaded, warning) = Self.load()
         credentials = loaded
         suppressWritesAfterCorruptLoad = warning != nil
+        quarantinedSinceLoad = warning != nil
         if let warning { DispatchQueue.main.async { Self.reportCorruptLoad(warning) } }
     }
 
@@ -363,6 +376,43 @@ enum Keychain {
 
     static func password(for id: UUID) -> String? {
         get(baseQuery: baseQuery(for: id))
+    }
+
+    /// For Sync's background reads: never put up a Keychain access prompt
+    /// (an item the system wants to confirm reads as "unavailable" instead
+    /// of interrupting the user every five minutes).
+    static func passwordWithoutPrompt(for id: UUID) -> String? {
+        get(baseQuery: noPromptQuery(for: id))
+    }
+
+    private static func noPromptQuery(for id: UUID) -> [String: Any] {
+        var query = baseQuery(for: id)
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
+        // The login (file) keychain's access-list prompt is not covered by
+        // the context above; this older flag is what refuses it there.
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        return query
+    }
+
+    /// Sync's write: never a prompt. An item the system wants confirmed is
+    /// reported as not written (Sync retries later) instead of putting up a
+    /// dialog every five minutes. A NEW item never needs confirming.
+    static func setPasswordWithoutPrompt(_ password: String, for id: UUID) -> Bool {
+        let status = SecItemUpdate(noPromptQuery(for: id) as CFDictionary,
+                                   [kSecValueData as String: Data(password.utf8)] as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
+        var attributes = baseQuery(for: id)
+        attributes[kSecValueData as String] = Data(password.utf8)
+        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// Sync's delete: never a prompt (see above).
+    static func deletePasswordWithoutPrompt(for id: UUID) -> Bool {
+        let status = SecItemDelete(noPromptQuery(for: id) as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     /// Reports success so the caller can tell the user: a refused delete

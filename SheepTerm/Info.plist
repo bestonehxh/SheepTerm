@@ -20,6 +20,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>SheepSyncGoogleClientID</key>
+	<string>526035609682-hf9p1tcvq3rasdcme921ueci1pna7v9b.apps.googleusercontent.com</string>
+	<key>SheepSyncGoogleClientSecret</key>
+	<string>$(SHEEPSYNC_GOOGLE_CLIENT_SECRET)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSHighResolutionCapable</key>

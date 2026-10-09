@@ -77,6 +77,9 @@ final class SessionTab: ObservableObject, Identifiable {
 struct QuickConnectRequest: Identifiable {
     let id = UUID()
     let kind: ConnectionKind
+    /// The sidebar's ≡ → Add Host…: the same form, but it SAVES one host to
+    /// a group and opens nothing.
+    var addOnly = false
 }
 
 /// One showing of the "Add Hosts…" sheet. `groupID` is the group it was
@@ -390,7 +393,11 @@ final class AppModel: ObservableObject {
     /// written a restored configuration over the live files. The window
     /// stays put and open sessions keep running — only the configuration
     /// changes underneath them.
-    func reloadAfterRestore() {
+    /// `files`: the configuration files that changed (nil = all of them, a
+    /// restore). Sync passes only what it wrote, so a settings-only change
+    /// does not re-read every store — and re-raise a corrupt-file alert for
+    /// a file it never touched.
+    func reloadAfterRestore(files: Set<String>? = nil) {
         // Posted FIRST, before the stores reload. Fold state (collapsedGroups
         // / collapsedHostSections) lives in `SidebarView`'s @State, seeded
         // once from UserDefaults at init — so a restore that wrote those keys
@@ -416,9 +423,9 @@ final class AppModel: ObservableObject {
         statusShowClock = defaults.object(forKey: "statusShowClock") as? Bool ?? true
         let width = defaults.double(forKey: "sidebarWidth")
         sidebarWidth = width == 0 ? 232 : min(max(width, 200), 320)
-        store.reloadFromDisk()
-        credentialStore.reloadFromDisk()
-        snippetStore.reloadFromDisk()
+        if files == nil || files!.contains("hosts.json") { store.reloadFromDisk() }
+        if files == nil || files!.contains("credentials.json") { credentialStore.reloadFromDisk() }
+        if files == nil || files!.contains("snippets.json") { snippetStore.reloadFromDisk() }
     }
 
     /// Team Share (LAN sharing + vault + team passphrase) was removed after
@@ -1274,6 +1281,28 @@ final class AppModel: ObservableObject {
         quickConnect = QuickConnectRequest(kind: kind)
     }
 
+    /// ≡ → Add Host…: one SSH host into a group, no session.
+    func openAddHost() {
+        quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true)
+    }
+
+    /// Saves without connecting (Add Host…). Same door as Quick Connect's
+    /// "Save session to group", so the duplicate rule is the same.
+    struct NewCredential {
+        var name: String
+        var username: String
+        var password: String
+    }
+
+    func addHost(_ host: Host, toGroupNamed groupName: String, newCredential: NewCredential? = nil) {
+        let make: (() -> UUID?)? = newCredential.map { pending in
+            { [weak self] in
+                self?.credentialStore.add(name: pending.name, username: pending.username, password: pending.password).id
+            }
+        }
+        saveSession(host: host, toGroupNamed: groupName, addOnly: true, makeCredential: make)
+    }
+
     /// Opens the Known Hosts sheet, optionally filtered (a host name finds
     /// hashed entries too — see `KnownHostsEditor.matches`).
     func openKnownHosts(search: String = "") {
@@ -1309,7 +1338,11 @@ final class AppModel: ObservableObject {
     /// the kind of accident that stops being harmless quietly. `sameConnection`
     /// (Models) is the one definition of "same target" in this app — the same
     /// one recents dedup by — and it includes the kind.
-    private func saveSession(host: Host, toGroupNamed groupName: String) {
+    /// `makeCredential` (Add Host): creates the credential a typed password
+    /// becomes — called only on the paths that really add or update.
+    private func saveSession(host: Host, toGroupNamed groupName: String, addOnly: Bool = false,
+                             makeCredential: (() -> UUID?)? = nil) {
+        var host = host
         // Saving from Quick Connect is a user action, so it has to re-arm
         // writes the same way every HostStore mutator does — this path
         // reaches into `groups` directly and used to skip that, which
@@ -1327,6 +1360,7 @@ final class AppModel: ObservableObject {
         // a raw append made a "Branch⟨U+2028⟩BKK" group that the next launch
         // cleaned to "Branch BKK" — and the same text then made a second one.
         guard let index = store.quickConnectGroupIndex(for: groupName) else {
+            if let makeCredential { host.credentialID = makeCredential() }
             store.noteExplicitUserMutation()
             store.groups.append(HostGroup(name: HostStore.quickConnectGroupName(groupName),
                                           hosts: [host],
@@ -1335,6 +1369,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard let existing = store.groups[index].hosts.first(where: { $0.sameConnection(as: host) }) else {
+            if let makeCredential { host.credentialID = makeCredential() }
             store.noteExplicitUserMutation()
             store.groups[index].hosts.append(host)
             if host.sectionName != nil {
@@ -1355,10 +1390,26 @@ final class AppModel: ObservableObject {
         // renames a saved host: nobody ticks "save to group" expecting
         // “Core Switch” to become 10.0.0.1.
         if isGeneratedName(host) { updated.name = existing.name }
-        let changes = Self.savedHostChanges(from: existing, to: updated)
+        var changes = Self.savedHostChanges(from: existing, to: updated)
+        if makeCredential != nil {
+            changes.append("credential: \(existing.credentialID == nil ? "none" : "saved credential") → new saved credential")
+        }
         // Nothing differs — the common "connect again to a host I already
         // saved" case. Silence is the right answer only HERE.
-        guard !changes.isEmpty else { return }
+        guard !changes.isEmpty else {
+            // Add Host opens nothing, so silence would look like the click
+            // did nothing at all.
+            if addOnly {
+                DispatchQueue.main.async {
+                    let alert = SheepAlert()
+                    alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”"
+                    alert.informativeText = "Nothing was added — the saved host already has these settings."
+                    alert.addButton(withTitle: "OK")
+                    alert.sheepStyled().runModal()
+                }
+            }
+            return
+        }
         // Deferred a turn, for the reason SidebarView.reportNameTaken is:
         // this runs from the sheet's Connect button while the sheet is still
         // on screen, and an alert stacked on a sheet is a mess.
@@ -1366,12 +1417,16 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             let alert = SheepAlert()
             alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”"
-            alert.informativeText = "This session connects to the same target with different settings.\n\n"
+            alert.informativeText = (addOnly ? "A saved host already points at this target, with different settings.\n\n"
+                                             : "This session connects to the same target with different settings.\n\n")
                 + changes.joined(separator: "\n")
-                + "\n\nUpdate rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered."
+                + (addOnly ? "\n\nUpdate rewrites the saved host with what you entered; Keep leaves it as it is and adds nothing."
+                           : "\n\nUpdate rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered.")
             alert.addButton(withTitle: "Update Saved Host")
             alert.addButton(withTitle: "Keep Saved Host")
             guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
+            var updated = updated
+            if let makeCredential { updated.credentialID = makeCredential() }
             // updateHost finds the entry by id, carries matching recents over,
             // re-arms writes and saves.
             self.store.updateHost(updated)

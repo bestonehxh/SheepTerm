@@ -18,11 +18,15 @@ final class SnippetStore: ObservableObject {
     }
 
     private var suppressWritesAfterCorruptLoad = false
+    /// Sync: snippets.json failed to load; stays set until a clean reload
+    /// (see `CredentialStore.isTrusted`).
+    private(set) var quarantinedSinceLoad = false
 
     init() {
         let (loaded, warning) = Self.load()
         snippets = loaded
         suppressWritesAfterCorruptLoad = warning != nil
+        quarantinedSinceLoad = warning != nil
         if let warning { DispatchQueue.main.async { Self.reportCorruptLoad(warning) } }
     }
 
@@ -31,6 +35,7 @@ final class SnippetStore: ObservableObject {
         let (loaded, warning) = Self.load()
         snippets = loaded
         suppressWritesAfterCorruptLoad = warning != nil
+        quarantinedSinceLoad = warning != nil
         if let warning { DispatchQueue.main.async { Self.reportCorruptLoad(warning) } }
     }
 

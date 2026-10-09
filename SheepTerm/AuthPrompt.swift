@@ -149,6 +149,20 @@ enum AuthPrompt {
             TISSelectInputSource(source)
         }
     }
+
+    /// Posted (distributed) whenever the user switches keyboard — ⌃Space,
+    /// the menu bar, Caps Lock as a switch.
+    static let inputSourceChanged = Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String)
+
+    /// Switches back to an ASCII keyboard if the current one is not (Thai,
+    /// Japanese…). For a field that must stay English while it has focus.
+    @MainActor
+    static func keepASCIIKeyboard() {
+        guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(current, kTISPropertyInputSourceIsASCIICapable) else { return }
+        let capable = Unmanaged<CFBoolean>.fromOpaque(raw).takeUnretainedValue()
+        if !CFBooleanGetValue(capable) { forceASCIIKeyboard() }
+    }
 }
 
 struct AuthPromptView: View {

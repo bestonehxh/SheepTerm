@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 extension View {
@@ -27,6 +28,13 @@ struct RevealableSecureField: View {
         case secure, plain
     }
     @FocusState private var focusedField: Field?
+    /// A field keeps its focus while its window is in the background; only
+    /// the KEY window's field may hold the keyboard to English, or Thai
+    /// would be unusable everywhere else in the app (the terminal included).
+    @Environment(\.controlActiveState) private var activeState
+    /// `.inactive` = the window is in the background; a popover's content
+    /// reports `.active`/`.key` while it is the one being typed into.
+    private var holdsKeyboard: Bool { focusedField != nil && activeState != .inactive }
 
     /// Recomputed from the current value, so the warning clears itself as
     /// soon as the text is clean again — nothing latches.
@@ -56,6 +64,16 @@ struct RevealableSecureField: View {
                     if focusedField != nil {
                         AuthPrompt.forceASCIIKeyboard()
                     }
+                }
+                // ALWAYS English while the caret is here, not just on arrival:
+                // switching to Thai mid-password (⌃Space, the revealed form is
+                // a plain TextField with no secure-input lock) is switched
+                // straight back. Leaving the field leaves the keyboard alone.
+                .onReceive(DistributedNotificationCenter.default().publisher(for: AuthPrompt.inputSourceChanged)) { _ in
+                    if holdsKeyboard { AuthPrompt.keepASCIIKeyboard() }
+                }
+                .onChange(of: text) {
+                    if holdsKeyboard { AuthPrompt.keepASCIIKeyboard() }
                 }
                 Button {
                     // Only follow the focus if the field HAD it. Clicking the

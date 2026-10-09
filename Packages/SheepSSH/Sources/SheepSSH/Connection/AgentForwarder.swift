@@ -6,9 +6,16 @@ import Foundation
 #if canImport(Glibc)
 import Glibc
 #else
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Glibc)
+import Glibc
+#endif
 #endif
 
+#if canImport(Darwin) || canImport(Glibc)
 public final class AgentForwarder {
     enum Throttle { case window, unsent }
 
@@ -79,7 +86,9 @@ public final class AgentForwarder {
             try connection.close(channel)
             return
         }
+        #if canImport(Darwin) || canImport(Glibc)
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        #endif
         tunnels[channel] = Tunnel(channel: channel, fd: fd)
     }
 
@@ -187,3 +196,22 @@ public final class AgentForwarder {
     static func closeFD(_ fd: Int32) -> Int32 { Darwin.close(fd) }
 #endif
 }
+
+#else
+// Agent forwarding needs POSIX socket semantics (poll/read/shutdown); the
+// Windows path is a polite stub: channels open and close at once.
+public final class AgentForwarder {
+    public let socketPath: String
+    public init(socketPath: String) { self.socketPath = socketPath }
+    deinit {}
+    public func owns(_ channel: UInt32) -> Bool { false }
+    public func channelOpened(_ channel: UInt32, connection: SSHConnection) throws(ConnectionError) {
+        try connection.close(channel)
+    }
+    public func received(_ channel: UInt32, _ bytes: [UInt8], connection: SSHConnection) -> Bool { false }
+    public func channelEOF(_ channel: UInt32) {}
+    public func channelClosed(_ channel: UInt32) {}
+    public func pump(connection: SSHConnection, unsentBytes: () -> Int = { 0 }) {}
+    public func closeAll() {}
+}
+#endif

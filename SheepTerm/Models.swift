@@ -2439,7 +2439,7 @@ enum BulkHostParser {
 
 @MainActor
 final class HostStore: ObservableObject {
-    @Published var groups: [HostGroup] { didSet { revision &+= 1 } }
+    @Published var groups: [HostGroup] { didSet { revision &+= 1; hasUnsavedGroups = true } }
     @Published var recents: [Host] { didSet { revision &+= 1 } }
     /// Bumped on every change to either list. The sidebar compares this
     /// instead of rebuilding every SidebarItem and joining a String from
@@ -2503,6 +2503,18 @@ final class HostStore: ObservableObject {
     /// was fine, and a connect's recent never reached the disk.
     private var suppressHostsWrites = false
     private var suppressRecentsWrites = false
+    /// Sync (5.0 (7)): hosts.json failed to load at launch (or the last
+    /// reload). Unlike `suppressHostsWrites` this does NOT clear on the user's
+    /// next edit — a near-empty list after a quarantine must not be uploaded
+    /// over every Mac's hosts. Cleared by the next clean reload (a restore,
+    /// or Sync bringing the cloud copy down).
+    private(set) var hostsQuarantined = false
+    /// Sync: `groups` changed in memory and has not reached hosts.json yet
+    /// (a refused write keeps it in memory "for the next save"). Sync then
+    /// neither uploads the stale file nor writes over the change. Set by
+    /// the assignment itself, cleared by a write that landed or a load — so
+    /// a mutator that touches only recents cannot leave it stuck.
+    private(set) var hasUnsavedGroups = false
     /// A recent that `noteRecent` could not write (writes held) and that the
     /// next real save has to carry to disk — `noteRecent` is not a user
     /// mutation, so nothing else would.
@@ -2534,6 +2546,8 @@ final class HostStore: ObservableObject {
         if !warnings.isEmpty { dataLoadWarning = warnings.joined(separator: "\n") }
         suppressHostsWrites = groupsLoad.warning != nil
         suppressRecentsWrites = recentsLoad.warning != nil
+        hostsQuarantined = groupsLoad.warning != nil
+        hasUnsavedGroups = false
         knownGroupsMtime = Self.mtime(of: Self.fileURL)
         knownRecentsMtime = Self.mtime(of: Self.recentsURL)
     }
@@ -2612,6 +2626,8 @@ final class HostStore: ObservableObject {
         dataLoadWarning = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
         suppressHostsWrites = groupsLoad.warning != nil
         suppressRecentsWrites = recentsLoad.warning != nil
+        hostsQuarantined = groupsLoad.warning != nil
+        hasUnsavedGroups = false
         knownGroupsMtime = Self.mtime(of: Self.fileURL)
         knownRecentsMtime = Self.mtime(of: Self.recentsURL)
         // The dataset was replaced wholesale, so what this session had deleted
@@ -2762,6 +2778,7 @@ final class HostStore: ObservableObject {
         mergeGroupsFromDiskIfNeeded()
         if write(groups, to: Self.fileURL) {
             knownGroupsMtime = Self.mtime(of: Self.fileURL)
+            hasUnsavedGroups = false
         }
         // A user edit re-armed writes; recents that a connect could not write
         // while they were held go now, or a quit before the next recents

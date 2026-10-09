@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// few seconds after launch, then daily while the app stays open.
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppUpdater.shared.start()
+        SheepTermSync.shared.start()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

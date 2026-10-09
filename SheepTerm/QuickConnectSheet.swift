@@ -6,6 +6,8 @@ import SwiftUI
 /// and an optional "save session" toggle.
 struct QuickConnectSheet: View {
     let kind: ConnectionKind
+    /// Add Host… (sidebar ≡): save to a group, connect nothing. SSH only.
+    var addOnly = false
 
     @EnvironmentObject var model: AppModel
     /// Observed explicitly: `credentials` is @Published on CredentialStore,
@@ -30,6 +32,7 @@ struct QuickConnectSheet: View {
     @State private var username = ""
     @State private var password = ""
     @State private var saveCredential = false
+    @State private var autoTickedCredential = false
     @State private var credentialName = ""
     @State private var cipherMode: CipherMode = .auto
     @State private var agentForward = false
@@ -75,7 +78,7 @@ struct QuickConnectSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(kind == .ssh ? "New SSH Connection" : "New Serial Console")
+            Text(addOnly ? "Add Host" : kind == .ssh ? "New SSH Connection" : "New Serial Console")
                 .font(.headline)
 
             Form {
@@ -177,8 +180,10 @@ struct QuickConnectSheet: View {
                 Divider()
 
                 if kind == .ssh {
-                    Toggle("Save session to group", isOn: $saveSession)
-                    if saveSession {
+                    if !addOnly {
+                        Toggle("Save session to group", isOn: $saveSession)
+                    }
+                    if saveSession || addOnly {
                         Picker("Group", selection: $groupSelection) {
                             ForEach(groupNames, id: \.self) { name in
                                 Text(name).tag(name)
@@ -200,7 +205,7 @@ struct QuickConnectSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Connect") { connect() }
+                Button(addOnly ? "Add" : "Connect") { connect() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!isValid)
             }
@@ -209,6 +214,16 @@ struct QuickConnectSheet: View {
         .frame(width: 400)
         .sheepSheetChrome()
         .noAutoFill()
+        // Add Host opens nothing, so a typed password has no session to go
+        // to: it is kept as a credential (shown ticked), never dropped.
+        .onChange(of: password) {
+            // Ticked ONCE, when a password first appears — after that the
+            // toggle is the user's: unticking it means "don't keep it".
+            if addOnly, !autoTickedCredential, credentialSelection == nil, !password.isEmpty {
+                autoTickedCredential = true
+                saveCredential = true
+            }
+        }
         .onAppear {
             guard kind == .ssh else {
                 // The serial form has no text field at all, so there is
@@ -357,7 +372,7 @@ struct QuickConnectSheet: View {
     }
 
     private var targetGroup: String? {
-        guard kind == .ssh, saveSession else { return nil }
+        guard kind == .ssh, saveSession || addOnly else { return nil }
         if groupSelection == Self.newGroupTag {
             // The store's group-name pass, not just a trim: a pasted U+2028
             // survived `trimmingCharacters` and made a raw group, and a
@@ -392,7 +407,7 @@ struct QuickConnectSheet: View {
 
             if let selected = model.credentialStore.credential(for: credentialSelection) {
                 hostUsername = selected.username
-            } else if saveCredential, !password.isEmpty {
+            } else if saveCredential, !password.isEmpty, !addOnly {
                 // CredentialStore skips the Keychain write for an empty
                 // password, which left the host bound to a credential that
                 // could never authenticate and prompted on every connect.
@@ -453,6 +468,21 @@ struct QuickConnectSheet: View {
             sessionPassword = password
         } else {
             sessionPassword = nil
+        }
+        if addOnly, let targetGroup {
+            // Nothing is opened, so a password typed beside "Enter manually"
+            // has nowhere to go but a credential — made by `addHost` only
+            // once it knows the host is really added or updated (Keep Saved
+            // Host must not leave a credential nothing uses).
+            var newCredential: AppModel.NewCredential?
+            if kind == .ssh, credentialSelection == nil, saveCredential, !password.isEmpty {
+                let typedName = credentialName.trimmingCharacters(in: .whitespacesAndNewlines)
+                newCredential = .init(name: typedName.isEmpty ? defaultCredentialName : typedName,
+                                      username: effectiveUsername, password: password)
+            }
+            model.addHost(host, toGroupNamed: targetGroup, newCredential: newCredential)
+            dismiss()
+            return
         }
         model.connectQuick(
             host: host,

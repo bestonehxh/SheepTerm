@@ -1,0 +1,16 @@
+// Build settings for the SheepTerm target (5.0 (7)).
+//
+// The Google OAuth client secret for Sync (Settings → Sync) is NOT kept in
+// the repository: it lives in Secrets.xcconfig next to this file, which is
+// gitignored and never exported to the public repo. Without that file the
+// value stays empty, `SheepTermSync` treats Sync as not configured (no
+// sidebar account button, "Not available in this build" in Settings) — a
+// public clone still builds. Secrets.xcconfig holds one line:
+//
+//     SHEEPSYNC_GOOGLE_CLIENT_SECRET = GOCSPX-…
+//
+// (Google treats a Desktop-app secret as not confidential — it ships inside
+// the app — PKCE is what protects the sign-in. It is kept out of git only so
+// it is not trivially reusable from the source.)
+SHEEPSYNC_GOOGLE_CLIENT_SECRET =
+#include? "Secrets.xcconfig"

@@ -63,7 +63,7 @@ enum BackupManager {
     /// Settings carried across — an explicit list on purpose. Copying the
     /// whole UserDefaults domain would also drag window frames and
     /// SwiftUI's own bookkeeping onto the other Mac.
-    private static let settingKeys = [
+    static let settingKeys = [
         // "appearanceMode" is gone (4.0 (5): the app is dark only). An old
         // backup that carries it is not an error — the restore only writes
         // keys that are still on this list, so it is simply not applied.
@@ -85,7 +85,7 @@ enum BackupManager {
         "checkForUpdatesAutomatically",
     ]
 
-    private static var baseDirectory: URL {
+    static var baseDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("SheepTerm", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -384,7 +384,7 @@ enum BackupManager {
     /// The app's settings as the payload stores them. Shared by the backup
     /// itself and by the pre-restore snapshot, which has to capture the same
     /// thing a restore can overwrite.
-    private static func currentSettings() -> [String: Setting] {
+    static func currentSettings() -> [String: Setting] {
         var settings: [String: Setting] = [:]
         let defaults = UserDefaults.standard
         for key in settingKeys {
@@ -417,7 +417,7 @@ enum BackupManager {
     /// Throws when a file that exists could not be copied: the caller then
     /// leaves the configuration alone rather than overwriting what it failed
     /// to preserve.
-    private static func snapshotCurrent() throws -> URL? {
+    static func snapshotCurrent() throws -> URL? {
         let folder = baseDirectory.appendingPathComponent("pre-restore-\(fileStamp("yyyyMMdd-HHmmss"))",
                                                           isDirectory: true)
         var copied = false
@@ -491,7 +491,7 @@ enum BackupManager {
     /// came back empty — with every Keychain item orphaned, because the
     /// UUIDs that name them had just been thrown away — while the restore
     /// dialog said "Configuration restored".
-    private static func validate(_ payload: Payload) throws {
+    static func validate(_ payload: Payload) throws {
         if let hosts = payload.files["hosts.json"] {
             try decodeOrThrow([HostGroup].self, from: hosts, name: "hosts.json")
         }
@@ -519,7 +519,7 @@ enum BackupManager {
     ///
     /// Nothing is dropped — see `ConfigurationHygiene` — and the report is
     /// what the confirmation and the completion sheets show.
-    private static func sanitize(_ payload: inout Payload) throws -> ConfigurationHygiene.Report {
+    static func sanitize(_ payload: inout Payload) throws -> ConfigurationHygiene.Report {
         do {
             return try ConfigurationHygiene.sanitize(configurationFiles: &payload.files)
         } catch let error as ConfigurationHygiene.HygieneError {

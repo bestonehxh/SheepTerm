@@ -4,10 +4,18 @@
 // Blocking, with a timeout — the agent is local, and a hung agent must not
 // hang the connection attempt.
 import Foundation
+// Windows (5.0, the SheepTerm Windows port): no AF_UNIX agent — every agent
+// entry point throws `.agent("… not available on this platform yet")`.
 #if canImport(Glibc)
 import Glibc
 #else
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Glibc)
+import Glibc
+#endif
 #endif
 
 public enum SSHAgent {
@@ -112,6 +120,7 @@ public enum SSHAgent {
     /// read), and `cancel`, checked every 200 ms, ends it early.
     static func roundTrip(_ message: [UInt8], socketPath: String, timeout: TimeInterval,
                           cancel: (@Sendable () -> Bool)? = nil) throws(SignerError) -> [UInt8] {
+#if canImport(Darwin) || canImport(Glibc)
         let fd = try connect(socketPath)
         defer { _ = close(fd) }
         let deadline = Date().addingTimeInterval(timeout)
@@ -122,9 +131,13 @@ public enum SSHAgent {
         let length = Int(UInt32(header[0]) << 24 | UInt32(header[1]) << 16 | UInt32(header[2]) << 8 | UInt32(header[3]))
         guard length >= 1, length <= maximumReply else { throw .agent("agent reply of \(length) bytes") }
         return try readExactly(fd, length, deadline: deadline, cancel: cancel)
+#else
+        throw .agent("ssh-agent is not available on this platform yet")
+#endif
     }
 
     static func connect(_ path: String) throws(SignerError) -> Int32 {
+#if canImport(Darwin) || canImport(Glibc)
 #if canImport(Glibc)
         let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
 #else
@@ -159,9 +172,14 @@ public enum SSHAgent {
             throw .agent("cannot reach ssh-agent at \(path)")
         }
         return fd
+#else
+        _ = path
+        throw .agent("ssh-agent is not available on this platform yet")
+#endif
     }
 
     static func wait(_ fd: Int32, events: Int16, deadline: Date, cancel: (@Sendable () -> Bool)?) throws(SignerError) {
+#if canImport(Darwin) || canImport(Glibc)
         var p = pollfd(fd: fd, events: events, revents: 0)
         while true {
             if cancel?() == true { throw .agent("cancelled") }
@@ -172,9 +190,13 @@ public enum SSHAgent {
             if rc > 0 { return }
             if rc < 0, errno != EINTR { throw .agent("poll failed") }
         }
+#else
+        throw .agent("ssh-agent is not available on this platform yet")
+#endif
     }
 
     static func writeAll(_ fd: Int32, _ bytes: [UInt8], deadline: Date, cancel: (@Sendable () -> Bool)?) throws(SignerError) {
+#if canImport(Darwin) || canImport(Glibc)
         var sent = 0
         while sent < bytes.count {
             try wait(fd, events: Int16(POLLOUT), deadline: deadline, cancel: cancel)
@@ -182,9 +204,13 @@ public enum SSHAgent {
             guard n > 0 else { throw .agent("write to ssh-agent failed") }
             sent += n
         }
+#else
+        throw .agent("ssh-agent is not available on this platform yet")
+#endif
     }
 
     static func readExactly(_ fd: Int32, _ count: Int, deadline: Date, cancel: (@Sendable () -> Bool)?) throws(SignerError) -> [UInt8] {
+#if canImport(Darwin) || canImport(Glibc)
         var out = [UInt8](repeating: 0, count: count)
         var got = 0
         while got < count {
@@ -194,13 +220,16 @@ public enum SSHAgent {
             got += n
         }
         return out
+#else
+        throw .agent("ssh-agent is not available on this platform yet")
+#endif
     }
 }
 
 #if canImport(Glibc)
 private let sheepConnect = Glibc.connect
 private let sendFlags = Int32(MSG_NOSIGNAL)
-#else
+#elseif canImport(Darwin)
 private let sheepConnect = Darwin.connect
 private let sendFlags: Int32 = 0
 #endif

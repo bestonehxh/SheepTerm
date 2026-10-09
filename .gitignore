@@ -6,3 +6,4 @@ Builds/
 tests-scratch/
 .build/
 .claude/settings.local.json
+Secrets.xcconfig
