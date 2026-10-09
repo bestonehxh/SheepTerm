@@ -33,6 +33,9 @@ final class SheepAlert: NSObject {
     var alertStyle: NSAlert.Style = .warning
     var accessoryView: NSView?
     var icon: NSImage?
+    /// The 64 pt icon row; off for a wide working dialog like Safe Paste
+    /// (the user, 2026-10-09: "ไม่ต้องใส่ icon").
+    var showsIcon = true
     private(set) var buttons: [NSButton] = []
 
     private var panel: Panel?
@@ -44,6 +47,16 @@ final class SheepAlert: NSObject {
     static let contentWidth: CGFloat = 288
 
     @discardableResult
+    /// A button painted the caution yellow (Paste Immediately): neither the
+    /// blue default nor a red destructive one — "go, but look first".
+    func markCaution(_ button: NSButton) {
+        button.identifier = NSUserInterfaceItemIdentifier("sheep.caution")
+    }
+
+    private static func isCaution(_ button: NSButton) -> Bool {
+        button.identifier?.rawValue == "sheep.caution"
+    }
+
     func addButton(withTitle title: String) -> NSButton {
         let button = NSButton(title: title, target: self, action: #selector(buttonPressed(_:)))
         button.bezelStyle = .push
@@ -76,13 +89,30 @@ final class SheepAlert: NSObject {
     @discardableResult
     func runModal() -> NSApplication.ModalResponse {
         let panel = build()
-        panel.center()
+        Self.center(panel, over: NSApp.keyWindow ?? NSApp.mainWindow)
         let response = NSApp.runModal(for: panel)
         // orderOut, NOT close(): close() would post the last-window-closed
         // question, and a prompt can be the only window on screen (see
         // AuthPrompt.ask).
         panel.orderOut(nil)
         return response
+    }
+
+    /// Centred on the window the user is looking at (the user's call,
+    /// 2026-10-09: "pop up กลาง window"), not on the screen — on a wide
+    /// display `NSWindow.center()` put the alert well away from a window
+    /// that sits to one side. No window yet (startup errors) → screen centre.
+    static func center(_ panel: NSWindow, over window: NSWindow?) {
+        guard let window, window !== panel, window.isVisible else { panel.center(); return }
+        let host = window.frame
+        let size = panel.frame.size
+        var origin = NSPoint(x: host.midX - size.width / 2, y: host.midY - size.height / 2)
+        // Keep it on the window's screen.
+        if let screen = (window.screen ?? NSScreen.main)?.visibleFrame {
+            origin.x = min(max(origin.x, screen.minX), screen.maxX - size.width)
+            origin.y = min(max(origin.y, screen.minY), screen.maxY - size.height)
+        }
+        panel.setFrameOrigin(origin)
     }
 
     func beginSheetModal(for parent: NSWindow,
@@ -156,6 +186,9 @@ final class SheepAlert: NSObject {
     /// for one family): destructive buttons, and the host-key Trust button.
     static let destructiveRed = NSColor(srgbRed: 0.84, green: 0.45, blue: 0.45, alpha: 1)
     static let confirmGreen = NSColor(srgbRed: 0.42, green: 0.72, blue: 0.52, alpha: 1)
+    /// The same family's yellow: "Connect Once" on the host-key card — a
+    /// caution, between Cancel and the green Trust (the user, 2026-10-09).
+    static let cautionYellow = NSColor(srgbRed: 0.86, green: 0.72, blue: 0.40, alpha: 1)
 
     /// A filled capsule in `color` with white text, the height of a large
     /// push button.
@@ -174,9 +207,13 @@ final class SheepAlert: NSObject {
     private func build() -> Panel {
         if let panel { return panel }
         if buttons.isEmpty { addButton(withTitle: "OK") }
+        // The column is the popup's 288 — or as wide as an accessory that
+        // asks for more (Safe Paste's command preview: configs run long to
+        // the right, so the dialog is landscape and one fixed size).
+        let width = max(Self.contentWidth, accessoryView?.frame.width ?? 0)
 
         let panel = Panel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.contentWidth + 56, height: 200),
+            contentRect: NSRect(x: 0, y: 0, width: width + 56, height: 200),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -201,7 +238,7 @@ final class SheepAlert: NSObject {
             iconView.widthAnchor.constraint(equalToConstant: 64),
             iconView.heightAnchor.constraint(equalToConstant: 64),
         ])
-        rows.append(iconView)
+        if showsIcon { rows.append(iconView) }
 
         let text = NSStackView()
         text.orientation = .vertical
@@ -225,7 +262,7 @@ final class SheepAlert: NSObject {
             let size = accessoryView.frame.size
             accessoryView.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                accessoryView.widthAnchor.constraint(equalToConstant: min(max(size.width, 1), Self.contentWidth)),
+                accessoryView.widthAnchor.constraint(equalToConstant: min(max(size.width, 1), width)),
                 accessoryView.heightAnchor.constraint(equalToConstant: max(size.height, 1)),
             ])
             rows.append(accessoryView)
@@ -268,30 +305,51 @@ final class SheepAlert: NSObject {
         for button in buttons where Self.isDestructive(button) {
             Self.paint(button, Self.destructiveRed)
         }
-        let ordered = buttons.filter { !Self.isCancel($0) } + buttons.filter(Self.isCancel)
+        for button in buttons where Self.isCaution(button) {
+            Self.paint(button, Self.cautionYellow)
+        }
+        // A wide dialog (an accessory asked for more than the 288 column —
+        // Safe Paste) puts its buttons in ONE row of fixed-width capsules,
+        // Cancel on the left and the main action on the right, the way a
+        // macOS sheet does; stretching them to 620 pt read as bars (the
+        // user, 2026-10-09).
+        let wide = width > Self.contentWidth
+        let ordered = wide
+            ? buttons.filter(Self.isCancel) + Array(buttons.filter { !Self.isCancel($0) }.reversed())
+            : buttons.filter { !Self.isCancel($0) } + buttons.filter(Self.isCancel)
         let buttonStack = NSStackView(views: ordered)
+        if wide {
+            buttonStack.orientation = .horizontal
+            buttonStack.spacing = 10
+            buttonStack.translatesAutoresizingMaskIntoConstraints = false
+            for button in buttons {
+                button.widthAnchor.constraint(equalToConstant: 176).isActive = true
+            }
+            rows.append(buttonStack)
+        } else {
         // A pair sits side by side only while both titles fit their half
         // with room to spare ("Open Known Hosts…" in bold did not); else stack.
-        let half = (Self.contentWidth - 10) / 2
+        let half = (width - 10) / 2
         let pairFits = buttons.count == 2
             && buttons.allSatisfy { $0.attributedTitle.size().width + 32 <= half }
         buttonStack.orientation = pairFits ? .horizontal : .vertical
         buttonStack.distribution = .fillEqually
         buttonStack.spacing = pairFits ? 10 : 8
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
-        buttonStack.widthAnchor.constraint(equalToConstant: Self.contentWidth).isActive = true
+        buttonStack.widthAnchor.constraint(equalToConstant: width).isActive = true
         if buttonStack.orientation == .vertical {
             for button in buttons {
-                button.widthAnchor.constraint(equalToConstant: Self.contentWidth).isActive = true
+                button.widthAnchor.constraint(equalToConstant: width).isActive = true
             }
         }
         rows.append(buttonStack)
+        }
 
         let column = NSStackView(views: rows)
         column.orientation = .vertical
         column.alignment = .centerX
         column.spacing = 16
-        column.setCustomSpacing(14, after: iconView)
+        if showsIcon { column.setCustomSpacing(14, after: iconView) }
         column.edgeInsets = NSEdgeInsets(top: 28, left: 28, bottom: 24, right: 28)
         column.translatesAutoresizingMaskIntoConstraints = false
 
@@ -311,11 +369,11 @@ final class SheepAlert: NSObject {
             column.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             column.topAnchor.constraint(equalTo: container.topAnchor),
             column.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            column.widthAnchor.constraint(equalToConstant: Self.contentWidth + 56),
+            column.widthAnchor.constraint(equalToConstant: width + 56),
         ])
         panel.contentView = container
         container.layoutSubtreeIfNeeded()
-        panel.setContentSize(NSSize(width: Self.contentWidth + 56, height: column.fittingSize.height))
+        panel.setContentSize(NSSize(width: width + 56, height: column.fittingSize.height))
         self.panel = panel
         return panel
     }

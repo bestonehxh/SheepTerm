@@ -200,6 +200,20 @@ struct Host: Identifiable, Codable, Hashable {
     /// nil = straight there. A dangling id (the bastion was deleted) is
     /// reported at connect time, never silently bypassed.
     var jumpHostID: UUID? = nil
+    /// A bastion the user TYPED instead of picking a saved host (4.2 (9)):
+    /// `user@host[:port]` or `user@[v6]:port`, read by `ConnectParser` with
+    /// `requireHostShape: false`. `jumpHostID` wins when both are set and it
+    /// resolves (see `JumpTarget.resolve`). Optional with a default so a
+    /// hosts.json written before it decodes unchanged. Unlike the id it
+    /// travels in a `.sheepterm`: it means the same thing on any Mac.
+    var jumpSpec: String? = nil
+
+    /// The typed bastion as a VALUE: nil, "" and "   " all mean "none".
+    var jumpSpecValue: String? {
+        guard let jumpSpec else { return nil }
+        let trimmed = jumpSpec.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     /// The pack to actually highlight with — `vendor` with the nil hole filled.
     var highlightVendor: Vendor { vendor ?? .auto }
@@ -254,7 +268,12 @@ struct Host: Identifiable, Codable, Hashable {
         if filled.agentForward == nil { filled.agentForward = match.agentForward }
         if filled.vendor == nil { filled.vendor = match.vendor }
         if filled.disablePaging == nil { filled.disablePaging = match.disablePaging }
-        if filled.jumpHostID == nil { filled.jumpHostID = match.jumpHostID }
+        // The path is one answer: a target that names a bastion either way
+        // keeps it, and only one that names none takes the saved host's.
+        if filled.jumpHostID == nil && filled.jumpSpecValue == nil {
+            filled.jumpHostID = match.jumpHostID
+            filled.jumpSpec = match.jumpSpec
+        }
         return filled
     }
 }
@@ -1043,6 +1062,99 @@ enum ConnectParser {
             port: port,
             username: username
         )
+    }
+}
+
+/// Which bastion a host connects through — the one rule `AppModel.open`
+/// follows, here so it can be tested without a window (4.2 (9)).
+///
+/// Precedence: a `jumpHostID` that names a saved SSH host which is not itself
+/// behind a jump host (one hop only) → `.saved`; else a `jumpSpec` that parses
+/// → `.spec`; else anything named at all (a dangling or multi-hop id, a spec
+/// that does not parse) → `.invalid`, which the tab reports instead of
+/// silently connecting direct; else `.none`. An id naming the host itself is
+/// treated as unset, as before.
+enum JumpTarget: Equatable {
+    case none
+    case saved(Host)
+    case spec(Host)
+    case invalid
+
+    /// A typed bastion → an SSH endpoint. nil = not a target. An empty
+    /// username is allowed (the worker asks for one).
+    static func parse(_ spec: String) -> Host? {
+        let trimmed = spec.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasSuffix("@") else { return nil }
+        guard let parsed = ConnectParser.parse(trimmed, requireHostShape: false) else { return nil }
+        // The host half must be a host: `a@b@c` is a UPN user, but a "[" or
+        // "]" left in the address is a mistyped IPv6 literal.
+        guard !parsed.address.contains("["), !parsed.address.contains("]") else { return nil }
+        return parsed
+    }
+
+    /// Whether `host` may be a bastion: SSH, and not itself behind a jump
+    /// host by either route (one hop only).
+    static func canBeBastion(_ host: Host) -> Bool {
+        host.kind == .ssh && host.jumpHostID == nil && host.jumpSpecValue == nil
+    }
+
+    static func resolve(host: Host, saved: [Host]) -> JumpTarget {
+        let jumpID = host.jumpHostID.flatMap { $0 == host.id ? nil : $0 }
+        if let jumpID, let bastion = saved.first(where: { $0.id == jumpID }), canBeBastion(bastion) {
+            return .saved(bastion)
+        }
+        if let spec = host.jumpSpecValue {
+            guard let parsed = parse(spec) else { return .invalid }
+            return .spec(parsed)
+        }
+        return jumpID == nil ? .none : .invalid
+    }
+
+    /// The red line under the "Via jump host" row, or nil. A saved
+    /// reference is checked against the store — `candidates` are the hosts
+    /// the form offers, `saved` every saved host; typed text (used only when
+    /// no id is set) against `parse`. The form refuses to save only for typed
+    /// text (`blocksSave`): a stale reference was always saveable, and the
+    /// tab names it at connect time.
+    static func fieldError(text: String, jumpHostID: UUID?, candidates: [Host], saved: [Host]) -> String? {
+        if let jumpHostID {
+            if candidates.contains(where: { $0.id == jumpHostID }) { return nil }
+            if saved.contains(where: { $0.id == jumpHostID }) {
+                return "That host is behind a jump host itself — one hop only"
+            }
+            return "Saved jump host no longer exists — pick another or None"
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.contains(where: { $0.isWhitespace }) { return "Jump host must not contain spaces" }
+        return parse(trimmed) == nil ? "Jump host must be user@host[:port]" : nil
+    }
+
+    /// Typed text that does not parse keeps Connect/Save disabled.
+    static func blocksSave(text: String, jumpHostID: UUID?) -> Bool {
+        guard jumpHostID == nil else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && parse(trimmed) == nil
+    }
+
+    /// The typed half of the field as it is stored: nil when a saved host is
+    /// referenced or the field is empty.
+    static func storedSpec(text: String, jumpHostID: UUID?) -> String? {
+        guard jumpHostID == nil else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// How a saved bastion reads in the "Via jump host" field:
+    /// `user@address`, `:port` only when it is not 22, an IPv6 literal in
+    /// brackets only when a port follows it. `username` is the login the
+    /// host connects with (its credential's, when it names one). `parse`
+    /// reads the result back to the same endpoint.
+    static func text(address: String, port: Int, username: String) -> String {
+        let user = username.isEmpty ? "" : "\(username)@"
+        guard port != 22 else { return user + address }
+        let hostPart = address.contains(":") ? "[\(address)]" : address
+        return "\(user)\(hostPart):\(port)"
     }
 }
 
@@ -3259,8 +3371,9 @@ final class HostStore: ObservableObject {
             // Same reasoning: a file that changes only this must raise the
             // conflict, or Replace would silently keep the old answer.
             && (a.disablePaging ?? false) == (b.disablePaging ?? false)
-        // jumpHostID is NOT compared: ShareCodec strips it both ways, so a
-        // file can never carry one and a Replace keeps ours (like cipherMode).
+        // jumpHostID and jumpSpec are NOT compared: ShareCodec strips both
+        // ways, so a file can never carry either and a Replace keeps ours
+        // (like cipherMode).
     }
 
     /// Applies an import after the dialog decided the outcome (0.4).
@@ -3372,7 +3485,10 @@ final class HostStore: ObservableObject {
                     // forwarding off and our cipher policy back to auto.
                     merged.agentForward = current.agentForward
                     merged.cipherMode = current.cipherMode
+                    // Both jump fields are ours: a file never carries a path
+                    // (ShareCodec strips it), so Replace keeps what we had.
                     merged.jumpHostID = current.jumpHostID
+                    merged.jumpSpec = current.jumpSpec
                     // In place: the slot is claimed by this row alone, so no
                     // later row can read or overwrite what was just written.
                     groups[index].hosts[hostIndex] = merged
@@ -3520,6 +3636,7 @@ final class HostStore: ObservableObject {
             recents[index].vendor = new.vendor
             recents[index].disablePaging = new.disablePaging
             recents[index].jumpHostID = new.jumpHostID
+            recents[index].jumpSpec = new.jumpSpec
             changed = true
         }
         guard changed else { return }

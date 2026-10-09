@@ -207,6 +207,10 @@ enum Theme {
     static let accent = nsColorValue(0x5AA5D6)
     static let ok = nsColorValue(0x7DD98C)
     static let warn = nsColorValue(0xFEBC2E)
+    /// Every red in the app's own UI — error lines, trash buttons, a dropped
+    /// session's dot — is the popups' soft red (the user, 2026-10-09: one
+    /// tone family, not SwiftUI's saturated `.red`).
+    static let destructive = SwiftUI.Color(nsColor: SheepAlert.destructiveRed)
 
     private static func nsColorValue(_ hex: UInt32) -> SwiftUI.Color {
         SwiftUI.Color(nsColor: nsColor(hex))

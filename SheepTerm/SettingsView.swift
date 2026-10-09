@@ -21,6 +21,7 @@ struct GeneralSettingsView: View {
     @AppStorage("recentsShown") private var recentsShown = 5
     @AppStorage(ChromeStyle.storageKey) private var chromeStyle = ChromeStyle.glass
     @AppStorage(SessionTerminalHost.clipboardWriteKey) private var allowClipboardWrite = false
+    @AppStorage(UpdateCore.autoCheckKey) private var checkForUpdatesAutomatically = true
 
     var body: some View {
         Form {
@@ -88,6 +89,13 @@ struct GeneralSettingsView: View {
                 Text("Lets vim or tmux on a device copy into the Mac's clipboard. Off by default: a compromised device could plant a command for your next ⌘V. When on, pasting text a session set always asks first. Reading the clipboard is never allowed.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $checkForUpdatesAutomatically)
+                    .help("Checks GitHub a few seconds after every launch and once a day while SheepTerm is open. Nothing is installed until you press Install & Relaunch, and only a download whose signature matches is installed.")
+                Button("Check Now") { AppUpdater.shared.checkNow() }
+                    .help("Same as SheepTerm → Check for Updates…")
             }
 
             Section("Backup") {

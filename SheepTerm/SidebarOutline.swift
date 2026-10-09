@@ -82,6 +82,9 @@ struct SidebarOutline: NSViewRepresentable {
     /// host-side "New Section…" any more: a host points at one of its group's
     /// headings, it does not invent one.)
     let onNewGroupSection: (HostGroup) -> Void
+    /// The search field's ↑/↓/Return reach the outline through this (the
+    /// caret never leaves the field); the coordinator fills it in.
+    var keyBridge = SidebarKeyBridge()
 
     func makeCoordinator() -> SidebarOutlineCoordinator {
         SidebarOutlineCoordinator(self)
@@ -366,6 +369,48 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     var parent: SidebarOutline
     weak var outline: SidebarOutlineView?
 
+    /// The row the search field's arrows selected (cleared as soon as the
+    /// selection becomes anything else — a click, a rebuild that dropped it).
+    /// Return in the field only opens a host the ARROWS picked, never one that
+    /// was merely left selected by an earlier click.
+    private var arrowSelectedID: String?
+    private var arrowMoving = false
+
+    private func installKeyBridge() {
+        parent.keyBridge.move = { [weak self] delta in self?.moveArrowSelection(delta) }
+        parent.keyBridge.activateSelection = { [weak self] in self?.activateArrowSelection() ?? false }
+    }
+
+    /// Per row, in display order: can a host be opened from it.
+    private func hostRowFlags(_ outline: NSOutlineView) -> [Bool] {
+        (0..<outline.numberOfRows).map { row in
+            let kind = (outline.item(atRow: row) as? SidebarItem)?.kind
+            return kind == .host || kind == .staticRow
+        }
+    }
+
+    /// ↓ / ↑ in the search field. Selection only (what an arrow key does in
+    /// any list); the keyboard stays in the field, nothing is opened.
+    private func moveArrowSelection(_ delta: Int) {
+        guard let outline else { return }
+        let current = arrowSelectedID.flatMap { cache[$0] }.map { outline.row(forItem: $0) }
+            .flatMap { $0 >= 0 ? $0 : nil }
+        guard let row = SearchNav.step(current: current, delta: delta, eligible: hostRowFlags(outline)),
+              let item = outline.item(atRow: row) as? SidebarItem else { return }
+        arrowMoving = true
+        outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        arrowMoving = false
+        arrowSelectedID = item.id
+        outline.scrollRowToVisible(row)
+    }
+
+    private func activateArrowSelection() -> Bool {
+        guard let outline, let id = arrowSelectedID, let node = cache[id],
+              outline.row(forItem: node) >= 0, outline.isRowSelected(outline.row(forItem: node)) else { return false }
+        activate(node)
+        return true
+    }
+
     private var roots: [SidebarItem] = []
     private var cache: [String: SidebarItem] = [:]
     private var signature = ""
@@ -417,6 +462,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     init(_ parent: SidebarOutline) {
         self.parent = parent
+        super.init()
+        installKeyBridge()
     }
 
     // MARK: Model
@@ -862,6 +909,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !restoringSelection, let outline else { return }
+        if !arrowMoving { arrowSelectedID = nil }
         let ids = outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? SidebarItem)?.id }
         if !ids.isEmpty {
             selectedIDs = ids

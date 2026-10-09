@@ -33,6 +33,13 @@ struct QuickConnectSheet: View {
     @State private var credentialName = ""
     @State private var cipherMode: CipherMode = .auto
     @State private var agentForward = false
+    /// Via jump host (SheepJump): a saved SSH host to tunnel through, or
+    /// nil for a direct connection. Edit Host has had this since 4.2 (4);
+    /// the user missed it here (4.2 (9)).
+    @State private var jumpHostID: UUID?
+    /// The same row's text: the picked host's `user@address`, or a bastion
+    /// typed by hand (`Host.jumpSpec`). See `JumpHostRow`.
+    @State private var jumpText = ""
     /// Edit Host → "Disable paging on connect" (SSH only; see `Vendor.disablePagingCommand`).
     @State private var disablePaging = false
     /// Highlight device family. `.auto` leaves passive stream detection ON; a
@@ -77,14 +84,14 @@ struct QuickConnectSheet: View {
                     if let addressError {
                         Text(addressError)
                             .font(.system(size: 10))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.destructive)
                     }
                     TextField("Port", text: $port, prompt: Text("22"))
                         .onChange(of: port) { portEdited = true }
                     if let portError {
                         Text(portError)
                             .font(.system(size: 10))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.destructive)
                     }
 
                     Picker("Credential", selection: $credentialSelection) {
@@ -118,6 +125,14 @@ struct QuickConnectSheet: View {
                     }
 
                     Toggle("Forward SSH agent", isOn: $agentForward)
+                    JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
+                                candidates: jumpCandidates,
+                                render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                    if let jumpError {
+                        Text(jumpError)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.destructive)
+                    }
                     Toggle("Disable paging on connect", isOn: $disablePaging)
                         .disabled(vendor.disablePagingCommand == nil)
 
@@ -193,6 +208,7 @@ struct QuickConnectSheet: View {
         .padding(20)
         .frame(width: 400)
         .sheepSheetChrome()
+        .noAutoFill()
         .onAppear {
             guard kind == .ssh else {
                 // The serial form has no text field at all, so there is
@@ -322,8 +338,22 @@ struct QuickConnectSheet: View {
         switch kind {
         case .ssh:
             return parsedPort != nil && !targetHost.isEmpty && addressError == nil
+                && !JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID)
         default: return !device.isEmpty
         }
+    }
+
+    /// Saved SSH hosts that can be a bastion: one hop only, so a host that
+    /// is itself behind a jump host is not offered (same rule as Edit Host).
+    private var jumpCandidates: [Host] {
+        model.store.groups.flatMap(\.hosts).filter { JumpTarget.canBeBastion($0) }
+    }
+
+    /// The red line under "Via jump host" (see `JumpTarget.fieldError`).
+    private var jumpError: String? {
+        guard kind == .ssh else { return nil }
+        return JumpTarget.fieldError(text: jumpText, jumpHostID: jumpHostID,
+                                     candidates: jumpCandidates, saved: model.store.groups.flatMap(\.hosts))
     }
 
     private var targetGroup: String? {
@@ -407,7 +437,12 @@ struct QuickConnectSheet: View {
         // endpoint. HostEditSheet has always stored the literal — the two
         // doors now say the same thing.
         host.vendor = vendor
-        if kind == .ssh { host.disablePaging = disablePaging }
+        if kind == .ssh {
+            host.disablePaging = disablePaging
+            // Travels with the host into the session, a recent and a saved group.
+            host.jumpHostID = jumpHostID
+            host.jumpSpec = JumpTarget.storedSpec(text: jumpText, jumpHostID: jumpHostID)
+        }
         // A password typed beside "Enter manually" is for THIS session (it is
         // saved only if "Save as credential" was ticked, and then the host
         // carries the id instead). Empty is not a hole to fill from the

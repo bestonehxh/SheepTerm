@@ -68,7 +68,7 @@ struct CredentialsSheet: View {
                                     .font(.system(size: 11))
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.destructive)
                             .help("Delete credential")
                         }
                         .padding(.vertical, 2)
@@ -115,6 +115,7 @@ struct CredentialsSheet: View {
         .padding(20)
         .frame(width: 400)
         .sheepSheetChrome()
+        .noAutoFill()
         .onAppear {
             AuthPrompt.forceASCIIKeyboard()
         }

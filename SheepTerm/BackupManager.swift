@@ -81,6 +81,8 @@ enum BackupManager {
         "terminalFontFamily", "terminalFontSize", "terminalFontWeight",
         "terminalFontSmoothing", "scrollbackLines",
         "TSMLanguageIndicatorEnabled",
+        // Settings → Updates (`UpdateCore.autoCheckKey`).
+        "checkForUpdatesAutomatically",
     ]
 
     private static var baseDirectory: URL {

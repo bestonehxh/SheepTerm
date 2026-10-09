@@ -261,6 +261,12 @@ struct DetailPane: View {
         .sheet(isPresented: $model.showBroadcast) {
             BroadcastSheet()
         }
+        .sheet(item: $model.snippetVariables) { request in
+            SnippetVariablesSheet(request: request)
+        }
+        .sheet(item: $model.historyRequest) { request in
+            CommandHistorySheet(request: request)
+        }
         // Here and not on SidebarView: the sidebar is removed from the
         // hierarchy when hidden, and View → Reorder Groups… then set a flag
         // nobody was presenting — nothing happened, and the sheet popped up
@@ -487,19 +493,13 @@ struct EmptyPaneView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            // Line art extracted from icon D itself — identical strokes,
-            // transparent background.
-            Group {
-                if let sheep = NSImage(named: "SheepLineD") {
-                    Image(nsImage: sheep)
-                        .resizable()
-                        .interpolation(.high)
-                } else {
-                    SheepLineMark()
-                }
-            }
-            .frame(width: 84, height: 84)
-            .opacity(hovering ? 1.0 : 0.75)
+            // The round sheep of the password popup (the user's pick,
+            // 2026-10-09), without its badge — the same picture as the
+            // connection card, so the app has one face.
+            SheepLockBadge(symbol: nil)
+                .frame(width: 64, height: 64)
+                .padding(10)
+                .opacity(hovering ? 1.0 : 0.8)
             Text("⌘T or click to open a new terminal")
                 .font(.system(size: 13, design: .monospaced))
         }

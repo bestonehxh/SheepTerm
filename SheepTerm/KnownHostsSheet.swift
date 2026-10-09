@@ -190,7 +190,7 @@ struct KnownHostsSheet: View {
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.red)
+                .foregroundStyle(Theme.destructive)
                 .disabled(busy)
                 .help("Remove this host key")
             }
@@ -226,8 +226,8 @@ struct KnownHostsSheet: View {
             .font(.system(size: 9, weight: .semibold))
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .foregroundStyle(revoked ? Color.red : Color.secondary)
-            .overlay(Capsule().strokeBorder(revoked ? Color.red : Color.secondary, lineWidth: 1))
+            .foregroundStyle(revoked ? Theme.destructive : Color.secondary)
+            .overlay(Capsule().strokeBorder(revoked ? Theme.destructive : Color.secondary, lineWidth: 1))
     }
 
     // MARK: Load / delete

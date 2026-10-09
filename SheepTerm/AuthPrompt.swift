@@ -2,8 +2,16 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
-/// Glassy macOS-style modal used for SSH username/password prompts.
-/// Runs a modal session so the SSH worker thread can block on the answer.
+/// The OLD application-modal panels for SSH questions — since 4.2 (9) only a
+/// FALLBACK. Every question a session's worker asks (username, password,
+/// challenge, first-seen host key) is a card inside the tab
+/// (`ConnectionPromptView`, via `SessionTerminalHost.presentPrompt` and
+/// `PromptBridge`) and nothing blocks the main thread. These panels run only
+/// if a prompt is ever asked ON the main thread, where the card could not be
+/// answered (main would be the thread waiting) — never the normal path. Do
+/// not wire them back in as the normal path (ARCHITECTURE.md §15).
+///
+/// `forceASCIIKeyboard` is shared by every credential field in the app.
 enum AuthPrompt {
     @MainActor
     static func ask(prompt: String, secure: Bool) -> String? {
@@ -60,27 +68,8 @@ enum AuthPrompt {
         return box.value
     }
 
-    /// Runs `body` on the main actor and waits for it — the bridge every
-    /// worker-queue question (password, challenge, username, host key) goes
-    /// through: the worker blocks on the answer, AppKit presents on main.
-    /// Never sync-dispatches to main from main.
-    nonisolated static func onMain<T: Sendable>(_ body: @MainActor () -> T) -> T {
-        if Thread.isMainThread {
-            return MainActor.assumeIsolated { body() }
-        }
-        return DispatchQueue.main.sync {
-            MainActor.assumeIsolated { body() }
-        }
-    }
-
-    /// `SSHWorker.hostKeyPrompt` for the app: asks on the main actor from the
-    /// worker queue. Wire it as `worker.hostKeyPrompt = AuthPrompt.confirmHostKeyFromWorker`.
-    nonisolated static let confirmHostKeyFromWorker: SSHWorker.HostKeyPrompt = { question, isCancelled in
-        onMain { confirmHostKey(question, isCancelled: isCancelled) }
-    }
-
-    /// First connection to a host: show what the server presented and ask.
-    /// A glass panel (`HostKeyPromptView`), everything centred: the target,
+    /// First connection to a host — the main-thread fallback of the in-tab
+    /// card (see the type's note). A glass panel (`HostKeyPromptView`), everything centred: the target,
     /// the key type and the fingerprint in two even lines. "Cancel" is the
     /// default button (Return) and Escape; trusting takes a deliberate click.
     /// Polls `isCancelled` while open: a tab closed (or the app quitting)
@@ -168,25 +157,7 @@ struct AuthPromptView: View {
     let completion: (String?) -> Void
 
     @State private var text = ""
-    @State private var revealed = false
-    /// Revealing swaps SecureField for TextField — two different views, so
-    /// they cannot share one focus binding: the focus set on the old field
-    /// dies with it and the caret vanishes (you type into nothing). Each
-    /// field claims its own value instead, and the eye button re-aims the
-    /// focus at whichever one is about to exist.
-    private enum Field: Hashable {
-        case secure, plain
-    }
-    @FocusState private var focusedField: Field?
-    private var focused: Bool { focusedField != nil }
-    /// Which field the current mode renders — the focus target.
-    private var activeField: Field { secure && !revealed ? .secure : .plain }
-
-    /// Recomputed from the current value — clears itself once the text is
-    /// clean again, nothing latches.
-    private var hasNonASCII: Bool {
-        text.contains { !$0.isASCII }
-    }
+    @State private var focusTrigger = 0
 
     /// What the prompt answers with. A USERNAME is trimmed for the same
     /// reason the sheets trim theirs — " admin" pasted out of a runbook
@@ -216,6 +187,96 @@ struct AuthPromptView: View {
                     .multilineTextAlignment(.center)
             }
 
+            PopupTextEntry(placeholder: secure ? "Password" : "Username", secure: secure, text: $text,
+                           focusTrigger: focusTrigger) { completion(answer) }
+
+            HStack(spacing: 10) {
+                Button("Cancel") { completion(nil) }
+                    .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                Button(secure ? "Connect" : "Continue") { completion(answer) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+        }
+        .padding(28)
+        .frame(width: 350)
+        .popupChrome()
+        .onAppear {
+            AuthPrompt.forceASCIIKeyboard()
+            focusTrigger += 1
+        }
+    }
+}
+
+/// The popups' glass (AuthPromptView, HostKeyPromptView, the in-tab
+/// connection card): rounded 24, ultra-thin material, a light top edge, 10 pt
+/// of room for the shadow. One modifier so the three cannot drift apart.
+extension View {
+    func popupChrome() -> some View {
+        background(
+            RoundedRectangle(cornerRadius: 24)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.25), Color.white.opacity(0.06)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1
+                        )
+                )
+        )
+        .padding(10)
+    }
+}
+
+/// The popups' text entry: icon, field and (for a secret) the reveal eye in
+/// one rounded box that turns accent with the caret, plus the orange
+/// non-ASCII warning. Used by AuthPromptView and by the in-tab card, so the
+/// two are the same field. The focus is the caller's: bump `focusTrigger`
+/// to put the caret here (the popup does it on appear; the card only when
+/// its pane has the keyboard — never stealing it).
+struct PopupTextEntry: View {
+    let placeholder: String
+    let secure: Bool
+    @Binding var text: String
+    var focusTrigger: Int
+    /// Take the caret as soon as the field exists (a page that replaced one
+    /// that had the keyboard — `focusTrigger` cannot say it: the new view is
+    /// born with the current value, so it never sees a change).
+    var focusOnAppear = false
+    let onSubmit: () -> Void
+    var onFocusChange: ((Bool) -> Void)? = nil
+
+    @State private var revealed = false
+    /// Revealing swaps SecureField for TextField — two different views, so
+    /// they cannot share one focus binding: the focus set on the old field
+    /// dies with it and the caret vanishes (you type into nothing). Each
+    /// field claims its own value instead, and the eye button re-aims the
+    /// focus at whichever one is about to exist.
+    private enum Field: Hashable {
+        case secure, plain
+    }
+    @FocusState private var focusedField: Field?
+    private var focused: Bool { focusedField != nil }
+    /// Which field the current mode renders — the focus target.
+    private var activeField: Field { secure && !revealed ? .secure : .plain }
+
+    /// Recomputed from the current value — clears itself once the text is
+    /// clean again, nothing latches.
+    private var hasNonASCII: Bool {
+        text.contains { !$0.isASCII }
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
             HStack(spacing: 9) {
                 Image(systemName: secure ? "key.fill" : "person.fill")
                     .font(.system(size: 13))
@@ -223,10 +284,10 @@ struct AuthPromptView: View {
                     .frame(width: 18)
                 Group {
                     if secure && !revealed {
-                        SecureField("Password", text: $text)
+                        SecureField(placeholder, text: $text)
                             .focused($focusedField, equals: .secure)
                     } else {
-                        TextField(secure ? "Password" : "Username", text: $text)
+                        TextField(placeholder, text: $text)
                             .focused($focusedField, equals: .plain)
                     }
                 }
@@ -237,10 +298,16 @@ struct AuthPromptView: View {
                 // one — and the revealed field is an ordinary TextField, so
                 // without this they would.
                 .autocorrectionDisabled(true)
-                .onSubmit { completion(answer) }
+                .noAutoFill()
+                .onSubmit(onSubmit)
                 if secure {
                     Button {
+                        // Only follow the focus if the field HAD it (the rule
+                        // RevealableSecureField learned): re-hiding must not
+                        // engage secure input for a field nobody is typing in.
+                        let wasFocused = focused
                         revealed.toggle()
+                        guard wasFocused else { return }
                         // Aim at the field that is about to exist; it isn't
                         // installed yet in this runloop pass.
                         let target: Field = revealed ? .plain : .secure
@@ -272,62 +339,32 @@ struct AuthPromptView: View {
             )
             .animation(.easeOut(duration: 0.15), value: focused)
 
-            if hasNonASCII {
-                // Same policy as RevealableSecureField: keep the pasted value
-                // intact, just flag it — a silently mangled paste is
-                // undebuggable.
-                //
-                // What it used to say — "passwords are ASCII only" — was a
-                // rule nothing here enforces: the field takes these
-                // characters and SSHWorker sends them as typed. Whether the
-                // far end accepts them is the far end's business, and this
-                // dialog cannot know. All this app does is switch the
-                // keyboard to an ASCII-capable layout when the panel opens.
-                //
-                // One line, deliberately: the panel is sized ONCE from
-                // `hosting.fittingSize` before this warning can appear, so a
-                // message that wraps to three lines is a message that gets
-                // clipped.
-                Text("Contains non-ASCII characters — sent exactly as typed")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-            }
-
-            HStack(spacing: 10) {
-                Button("Cancel") { completion(nil) }
-                    .keyboardShortcut(.cancelAction)
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-                Button(secure ? "Connect" : "Continue") { completion(answer) }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.accent)
-                    .frame(maxWidth: .infinity)
-            }
-            .controlSize(.large)
+            // Same policy as RevealableSecureField: keep the pasted value
+            // intact, just flag it — a silently mangled paste is
+            // undebuggable. The field takes these characters and SSHWorker
+            // sends them as typed; whether the far end accepts them is the
+            // far end's business. One line, deliberately: a popup is sized
+            // once and a wrapped warning gets clipped. The line is ALWAYS
+            // laid out (invisible when there is nothing to say) so the field
+            // never jumps up when the warning appears (the user, 2026-10-09).
+            Text("Contains non-ASCII characters — sent exactly as typed")
+                .font(.system(size: 10))
+                .foregroundStyle(Color(nsColor: SheepAlert.cautionYellow))
+                .opacity(hasNonASCII ? 1 : 0)
+                .accessibilityHidden(!hasNonASCII)
         }
-        .padding(28)
-        .frame(width: 350)
-        .background(
-            RoundedRectangle(cornerRadius: 24)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24)
-                        .stroke(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.25), Color.white.opacity(0.06)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            lineWidth: 1
-                        )
-                )
-        )
-        .padding(10)
-        .onAppear {
-            AuthPrompt.forceASCIIKeyboard()
+        .onChange(of: focusTrigger) {
             let target = activeField
             DispatchQueue.main.async { focusedField = target }
+        }
+        .onAppear {
+            guard focusOnAppear else { return }
+            let target = activeField
+            DispatchQueue.main.async { focusedField = target }
+        }
+        .onChange(of: focused) {
+            if focused { AuthPrompt.forceASCIIKeyboard() }
+            onFocusChange?(focused)
         }
     }
 }

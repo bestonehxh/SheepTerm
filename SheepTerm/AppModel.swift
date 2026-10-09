@@ -63,6 +63,10 @@ final class SessionTab: ObservableObject, Identifiable {
     /// password auth notes it via rememberSessionPassword, key-only SSH
     /// and serial note it on the first success status.
     var didNoteRecent = false
+    /// 5.0 (1): the name the device's prompt gave a session that was called
+    /// after its cable / bare address (`PromptName`). `title` already reads
+    /// `Core-SW (cu.usbserial-1420)`; a reconnect carries this to the successor.
+    var promptName: String?
 
     init(content: Content, title: String) {
         self.content = content
@@ -136,12 +140,42 @@ final class AppModel: ObservableObject {
         book.attach(tab.id, pendingPlacement)
         pendingPlacement = .newTab
         // With several panes visible, the Safe Paste sheet must say which
-        // session it is about.
-        terminalHost(ofSession: tab.id)?.sessionLabel = tab.title
+        // session it is about: name AND address (the user's call — the
+        // dialog stays centred in the window, so the label is what tells
+        // the panes apart).
+        terminalHost(ofSession: tab.id)?.sessionLabel = Self.sessionLabel(for: tab)
         return select
     }
 
     func tab(id: UUID) -> SessionTab? { tabs.first { $0.id == id } }
+
+    /// "Core-SW (10.199.197.2)" — the name alone is not enough when the host
+    /// was saved by IP or two hosts share a name; the address alone is not
+    /// enough when it was saved by name. Serial: the device path.
+    static func sessionLabel(for tab: SessionTab) -> String {
+        // A prompt-named title already carries the cable / address.
+        if tab.promptName != nil { return tab.title }
+        switch tab.content {
+        case .local:
+            return tab.title
+        case .ssh(let controller):
+            let address = controller.host.address
+            return address.isEmpty || address == tab.title ? tab.title : "\(tab.title) (\(address))"
+        case .serial(let controller):
+            let path = controller.host.address
+            return path.isEmpty || path == tab.title ? tab.title : "\(tab.title) (\(path))"
+        }
+    }
+
+    /// 5.0 (1): a session called after its cable / bare address takes the
+    /// name its device's prompt showed — `Core-SW (cu.usbserial-1420)`. The
+    /// controller renames the open log itself; this is the tab's half.
+    func adoptPromptName(_ name: String?, original: String, for tab: SessionTab) {
+        guard let name else { return }
+        tab.promptName = name
+        tab.title = PromptName.title(learned: name, original: original)
+        terminalHost(ofSession: tab.id)?.sessionLabel = Self.sessionLabel(for: tab)
+    }
 
     /// The Safe Paste owner / terminal view of a session, by id.
     func terminalHost(ofSession id: UUID) -> SessionTerminalHost? {
@@ -165,6 +199,10 @@ final class AppModel: ObservableObject {
     /// Snippets → Edit Snippets… / Broadcast to Tabs… (4.2 (4)).
     @Published var showSnippets = false
     @Published var showBroadcast = false
+    /// Command history picker (⌘Y) and the snippet-variables form; each is a
+    /// sheet presented by ContentView.
+    @Published var historyRequest: HistoryRequest?
+    @Published var snippetVariables: SnippetVariablesRequest?
     @Published var showReorderGroups = false
     @Published var addHostsRequest: AddHostsRequest?
     @Published var groupCredentialRequest: GroupCredentialRequest?
@@ -274,6 +312,8 @@ final class AppModel: ObservableObject {
     let credentialStore = CredentialStore()
     /// Snippets (4.2 (4)): saved commands behind the Snippets menu.
     let snippetStore = SnippetStore()
+    /// Per-host command history (5.0 (1)); history.json, not in Backup.
+    let historyStore = CommandHistoryStore()
     private var dataWarningSubscriptions = Set<AnyCancellable>()
     /// Session-lifetime memory of passwords that worked (keyed
     /// user@host:port) so reconnects don't ask again. Never written to disk.
@@ -814,7 +854,11 @@ final class AppModel: ObservableObject {
         if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
             diffs.append("disable paging: \((existing.disablePaging ?? false) ? "on" : "off") → \((incoming.disablePaging ?? false) ? "on" : "off")")
         }
-        // No jump-host line: ShareCodec strips it on import, a Replace keeps ours.
+        // The saved-bastion id never travels (ShareCodec strips it, a Replace
+        // keeps ours); a TYPED bastion does, and `sameForImport` compares it.
+        if incoming.jumpSpecValue != existing.jumpSpecValue {
+            diffs.append("jump host: \(existing.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? "none") → \(incoming.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? "none")")
+        }
         return diffs.isEmpty
             ? "The two entries differ."
             : "Differences (yours → file):\n" + diffs.joined(separator: "\n")
@@ -882,7 +926,67 @@ final class AppModel: ObservableObject {
     /// paste does (Safe Paste asks about a multi-line one).
     func sendSnippet(_ snippet: Snippet) {
         guard let tab = selectedTab, let host = terminalHost(of: tab) else { NSSound.beep(); return }
-        host.sendCommand(snippet.payload)
+        guard SnippetVariables.hasPlaceholders(snippet.text) else {
+            host.sendCommand(snippet.payload)
+            return
+        }
+        // {{name}} / {{name=default}}: ask first, then send to the tab that
+        // was current when the menu item was chosen (if it is still there).
+        let tabID = tab.id
+        snippetVariables = SnippetVariablesRequest(title: snippet.name, template: snippet.text) { [weak self] filled in
+            guard let self, let tab = self.tabs.first(where: { $0.id == tabID }),
+                  let host = self.terminalHost(of: tab) else { NSSound.beep(); return }
+            var out = snippet
+            out.text = filled
+            host.sendCommand(out.payload)
+        }
+    }
+
+    // MARK: - Command history (5.0 (1))
+
+    /// The history key for a session being opened (nil = local shell).
+    func historyKey(for host: Host) -> String? {
+        CommandHistory.key(kind: host.kind, savedID: savedHost(id: host.id) != nil ? host.id : nil,
+                           username: host.username, address: host.address, port: host.port)
+    }
+
+    private func historyKey(of tab: SessionTab) -> String? {
+        terminalHost(of: tab)?.historyKey
+    }
+
+    /// Whether Session history has anything to act on: a remote tab is current.
+    var canUseCommandHistory: Bool {
+        selectedTab.flatMap { historyKey(of: $0) } != nil
+    }
+
+    /// ⌘Y: the picker for the current tab's host.
+    func openCommandHistory() {
+        guard let tab = selectedTab, let key = historyKey(of: tab) else { NSSound.beep(); return }
+        historyRequest = HistoryRequest(tabID: tab.id, key: key, title: tab.title)
+    }
+
+    /// Types the picked line into the tab WITHOUT Return — the user runs it.
+    func typeHistoryCommand(_ command: String, into tabID: UUID) {
+        guard let tab = tabs.first(where: { $0.id == tabID }), let host = terminalHost(of: tab) else { NSSound.beep(); return }
+        // One line, controls out: a history file is data from disk.
+        let line = SnippetCodec.commandText(command).replacingOccurrences(of: "\n", with: " ")
+        guard !line.isEmpty else { return }
+        host.sendCommand(line)
+        focusActiveTerminal()
+    }
+
+    func clearCommandHistoryForCurrentHost() {
+        guard let tab = selectedTab, let key = historyKey(of: tab) else { NSSound.beep(); return }
+        let count = historyStore.commands(for: key).count
+        let alert = SheepAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Remove command history for “\(tab.title)”?"
+        alert.informativeText = count == 0 ? "There is nothing saved for this host."
+            : "\(count) saved command\(count == 1 ? "" : "s") for this host will be removed. Other hosts are not touched."
+        alert.addButton(withTitle: "Remove History")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
+        historyStore.clear(key)
     }
 
     /// The Safe Paste owner of a tab — every session kind has one.
@@ -970,7 +1074,7 @@ final class AppModel: ObservableObject {
     /// are the callers that say `.complete`.
     func open(host: Host, completeness: HostCompleteness = .needsCompletion,
               password overridePassword: String? = nil, serialLog: Bool? = nil,
-              reusingLogger: SessionLogger? = nil) {
+              reusingLogger: SessionLogger? = nil, promptName carriedPromptName: String? = nil) {
         switch host.kind {
         case .local:
             newLocalTab()
@@ -997,29 +1101,47 @@ final class AppModel: ObservableObject {
             // Jump host (4.2 (4)): the bastion's login is resolved the same
             // way — its credential names the user, its password comes from
             // the Keychain or the session cache, else the worker prompts.
+            // 4.2 (9): or a TYPED bastion (`Host.jumpSpec`) — no credential,
+            // so the session cache or the prompt. Precedence and the one-hop
+            // rule live in `JumpTarget.resolve` (Models, harness-tested).
             var jump: JumpHop?
             var jumpUnresolved = false
-            if let jumpID = host.jumpHostID, jumpID != host.id {
-                // One hop only: a bastion that is itself behind a jump host is
-                // not resolved (connecting to it directly would be a silent
-                // change of path), and the tab says so.
-                if var bastion = store.groups.flatMap(\.hosts).first(where: { $0.id == jumpID && $0.kind == .ssh && $0.jumpHostID == nil }) {
-                    let bastionCredential = bastion.credentialID.flatMap { credentialStore.credential(for: $0) }
-                    if let bastionCredential, !bastionCredential.username.isEmpty {
-                        bastion.username = bastionCredential.username
-                    }
-                    let bastionPassword = bastionCredential.flatMap { credentialStore.password(for: $0) }
-                        ?? passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"]
-                    jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
-                                   password: bastionPassword,
-                                   cipherPolicy: JumpHop.CipherPolicy(rawValue: (bastion.cipherMode ?? .auto).rawValue) ?? .auto)
-                } else {
-                    jumpUnresolved = true
+            switch JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts)) {
+            case .none:
+                break
+            case .saved(var bastion):
+                let bastionCredential = bastion.credentialID.flatMap { credentialStore.credential(for: $0) }
+                if let bastionCredential, !bastionCredential.username.isEmpty {
+                    bastion.username = bastionCredential.username
                 }
+                let bastionPassword = bastionCredential.flatMap { credentialStore.password(for: $0) }
+                    ?? passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"]
+                jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
+                               password: bastionPassword,
+                               cipherPolicy: JumpHop.CipherPolicy(rawValue: (bastion.cipherMode ?? .auto).rawValue) ?? .auto)
+            case .spec(let bastion):
+                // An empty username is allowed: the worker's prompt asks, and
+                // `rememberJumpPassword` caches what worked under the name
+                // typed there.
+                jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
+                               password: bastion.username.isEmpty ? nil
+                                   : passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"],
+                               cipherPolicy: .auto)
+            case .invalid:
+                // A deleted or multi-hop saved bastion, or a typed one that
+                // does not parse: reported in the tab, never bypassed.
+                jumpUnresolved = true
             }
             let controller = SSHTerminalController(host: host, password: password, jump: jump,
                                                    jumpUnresolved: jumpUnresolved, reusingLogger: reusingLogger)
+            controller.terminalHost.historyKey = historyKey(for: host)
             let tab = SessionTab(content: .ssh(controller), title: host.name)
+            if let carriedPromptName { controller.carryPromptName(carriedPromptName) }
+            adoptPromptName(carriedPromptName, original: host.name, for: tab)
+            controller.onPromptName = { [weak self, weak tab] name in
+                guard let tab else { return }
+                self?.adoptPromptName(name, original: host.name, for: tab)
+            }
             tab.highlightVendor = host.highlightVendor
             // A saved host with an explicit family is the user's choice —
             // passive detection must never override it. But `.auto` (nil OR a
@@ -1075,7 +1197,14 @@ final class AppModel: ObservableObject {
         case .serial:
             let controller = SerialTerminalController(host: host, reusingLogger: reusingLogger)
             controller.logOverride = serialLog
+            controller.terminalHost.historyKey = historyKey(for: host)
             let tab = SessionTab(content: .serial(controller), title: host.name)
+            if let carriedPromptName { controller.carryPromptName(carriedPromptName) }
+            adoptPromptName(carriedPromptName, original: host.name, for: tab)
+            controller.onPromptName = { [weak self, weak tab] name in
+                guard let tab else { return }
+                self?.adoptPromptName(name, original: host.name, for: tab)
+            }
             tab.highlightVendor = host.highlightVendor
             // A saved host with an explicit family is the user's choice —
             // passive detection must never override it. But `.auto` (nil OR a
@@ -1285,8 +1414,14 @@ final class AppModel: ObservableObject {
             let label = { (on: Bool) in on ? "on" : "off" }
             changes.append("disable paging: \(label(existing.disablePaging ?? false)) → \(label(incoming.disablePaging ?? false))")
         }
-        if incoming.jumpHostID != existing.jumpHostID {
-            changes.append("jump host: \(existing.jumpHostID == nil ? "none" : "set") → \(incoming.jumpHostID == nil ? "none" : "set")")
+        // The id and the typed spec are one answer ("which path"), described
+        // as one line: the typed text is shown, a saved reference as "saved host".
+        if incoming.jumpHostID != existing.jumpHostID || incoming.jumpSpecValue != existing.jumpSpecValue {
+            let label = { (host: Host) -> String in
+                if host.jumpHostID != nil { return "saved host" }
+                return host.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? "none"
+            }
+            changes.append("jump host: \(label(existing)) → \(label(incoming))")
         }
         return changes
     }
@@ -1397,6 +1532,8 @@ final class AppModel: ObservableObject {
         var host: Host
         var serialLog: Bool?
         var handedLogger: SessionLogger?
+        // The tab keeps the name its device's prompt gave it (PromptName).
+        let carriedPromptName = tab.promptName
         switch tab.content {
         case .ssh(let controller):
             host = controller.host
@@ -1435,7 +1572,8 @@ final class AppModel: ObservableObject {
         // that said "Enter manually" drifted onto a saved credential on its
         // reconnect (recheck finding 3); the password it authenticated with is
         // in `passwordCache`, keyed on this very host.
-        open(host: host, completeness: .complete, serialLog: serialLog, reusingLogger: handedLogger)
+        open(host: host, completeness: .complete, serialLog: serialLog, reusingLogger: handedLogger,
+             promptName: carriedPromptName)
         // `attach` consumed the placement; if nothing was opened, the old
         // pane must not linger in the book.
         if case .replacing(let old) = pendingPlacement {

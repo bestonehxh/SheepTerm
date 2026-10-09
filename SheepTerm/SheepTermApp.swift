@@ -29,6 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Clicking the Dock icon with the window closed reopens it rather than
     /// creating a second one.
+    /// The in-app updater (SheepTermUpdate.swift): first automatic check a
+    /// few seconds after launch, then daily while the app stays open.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppUpdater.shared.start()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         true
     }
@@ -283,6 +289,12 @@ struct SheepTermCommands: Commands {
         // between windows. Remove the default File → New Window (⌘N).
         CommandGroup(replacing: .newItem) { }
 
+        // SheepTerm menu, under About. No shortcut: nothing obvious is free
+        // and an update check is not an every-day keystroke.
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { AppUpdater.shared.checkNow() }
+        }
+
         CommandGroup(after: .newItem) {
             Button("Quick Connect…") { model.showQuickSearch = true }
                 .keyboardShortcut("k", modifiers: .command)
@@ -467,6 +479,17 @@ struct SheepTermCommands: Commands {
             Divider()
             Button("Broadcast to Tabs…") { model.showBroadcast = true }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
+        }
+
+        // Per-host command history (5.0 (1)). ⌘Y: ⌃ chords belong to the
+        // remote shell (⌃R reverse search, line editing), and ⇧⌘H is
+        // Toggle Highlighting.
+        CommandMenu("History") {
+            Button("Command History…") { model.openCommandHistory() }
+                .keyboardShortcut("y", modifiers: .command)
+                .disabled(!model.canUseCommandHistory)
+            Button("Clear History for This Host…") { model.clearCommandHistoryForCurrentHost() }
+                .disabled(!model.canUseCommandHistory)
         }
 
         CommandMenu("Tabs") {

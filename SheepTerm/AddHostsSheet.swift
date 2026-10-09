@@ -141,7 +141,7 @@ struct AddHostsSheet: View {
                     if newGroupNameTaken {
                         Text("The name “\(trimmedNewGroupName)” is already used.")
                             .font(.system(size: 10))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.destructive)
                     }
                 }
                 Picker("Default credential", selection: $defaultCredentialID) {
@@ -256,6 +256,7 @@ struct AddHostsSheet: View {
         .padding(20)
         .frame(width: 760)
         .sheepSheetChrome()
+        .noAutoFill()
         // ⌘V while NO cell holds the keyboard. Right after the sheet opens the
         // focus ring is drawn before the field is actually first responder
         // (measured with a real ⌘V at 1.5 s and 3 s: nothing landed until the

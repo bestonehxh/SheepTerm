@@ -12,7 +12,28 @@ extension TerminalView {
 
     // MARK: - Buttons
 
+    /// Split-pane rule: the first click on a pane that does not hold the
+    /// keyboard focuses it and does nothing else. Returns true when this
+    /// press was that click.
+    private func focusClickOnly() -> Bool {
+        guard pointerGated else {
+            swallowingFocusClick = false   // a lost release must not outlive its press
+            return false
+        }
+        swallowingFocusClick = true
+        window?.makeFirstResponder(self)
+        return true
+    }
+
+    /// Drag / release of a press `focusClickOnly` took. The release ends it.
+    private func swallowed(release: Bool) -> Bool {
+        guard swallowingFocusClick else { return false }
+        if release { swallowingFocusClick = false }
+        return true
+    }
+
     public override func mouseDown(with event: NSEvent) {
+        if focusClickOnly() { return }
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
         if reportMouse(event: event, button: .left, action: .press, at: point) { return }
@@ -47,6 +68,7 @@ extension TerminalView {
     }
 
     public override func mouseDragged(with event: NSEvent) {
+        if swallowed(release: false) { return }
         let point = convert(event.locationInWindow, from: nil)
         if reportMouse(event: event, button: .left, action: .motion, at: point) { return }
 
@@ -79,6 +101,7 @@ extension TerminalView {
     }
 
     public override func mouseUp(with event: NSEvent) {
+        if swallowed(release: true) { return }
         stopAutoScroll()
         let point = convert(event.locationInWindow, from: nil)
         if reportMouse(event: event, button: .left, action: .release, at: point) { return }
@@ -93,6 +116,7 @@ extension TerminalView {
     }
 
     public override func mouseMoved(with event: NSEvent) {
+        if pointerGated { return }
         guard terminal.modes.mouseTracking == .anyEvent else {
             super.mouseMoved(with: event)
             return
@@ -102,6 +126,7 @@ extension TerminalView {
     }
 
     public override func rightMouseDown(with event: NSEvent) {
+        if focusClickOnly() { return }
         let point = convert(event.locationInWindow, from: nil)
         if reportMouse(event: event, button: .right, action: .press, at: point) { return }
         super.rightMouseDown(with: event)
@@ -113,12 +138,14 @@ extension TerminalView {
     /// — xterm reports it, and so does the middle button below. Selection is a
     /// left-button gesture only, so all this does is report.
     public override func rightMouseDragged(with event: NSEvent) {
+        if swallowed(release: false) { return }
         let point = convert(event.locationInWindow, from: nil)
         if reportMouse(event: event, button: .right, action: .motion, at: point) { return }
         super.rightMouseDragged(with: event)
     }
 
     public override func rightMouseUp(with event: NSEvent) {
+        if swallowed(release: true) { return }
         let point = convert(event.locationInWindow, from: nil)
         if reportMouse(event: event, button: .right, action: .release, at: point) { return }
         super.rightMouseUp(with: event)
@@ -128,6 +155,7 @@ extension TerminalView {
     /// middle-click paste is deliberately off (it pastes the wrong thing far
     /// too easily on a device that is about to run what it receives).
     public override func otherMouseDown(with event: NSEvent) {
+        if focusClickOnly() { return }
         let point = convert(event.locationInWindow, from: nil)
         _ = reportMouse(event: event, button: .middle, action: .press, at: point)
     }
@@ -135,11 +163,13 @@ extension TerminalView {
     /// Same story as `rightMouseDragged`: `otherMouseDragged` is the only place
     /// a middle-button drag is delivered.
     public override func otherMouseDragged(with event: NSEvent) {
+        if swallowed(release: false) { return }
         let point = convert(event.locationInWindow, from: nil)
         _ = reportMouse(event: event, button: .middle, action: .motion, at: point)
     }
 
     public override func otherMouseUp(with event: NSEvent) {
+        if swallowed(release: true) { return }
         let point = convert(event.locationInWindow, from: nil)
         _ = reportMouse(event: event, button: .middle, action: .release, at: point)
     }
@@ -174,6 +204,13 @@ extension TerminalView {
         guard lines != 0 else { return }
         let up = lines > 0
         let magnitude = min(abs(lines), 100)
+
+        // A pane without the keyboard scrolls its own scrollback and nothing
+        // else: no mouse report, no cursor keys (alternate scroll).
+        if pointerGated {
+            scrollViewport(by: up ? -magnitude : magnitude)
+            return
+        }
 
         let point = convert(event.locationInWindow, from: nil)
         if terminal.modes.mouseTracking != .none, !event.modifierFlags.contains(.shift) {

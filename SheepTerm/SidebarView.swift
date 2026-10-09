@@ -9,6 +9,9 @@ struct SidebarView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var store: HostStore
     @State private var searchText = ""
+    /// ↑/↓/Return in the search field -> the outline's selection (the caret
+    /// stays in the field).
+    @State private var keyBridge = SidebarKeyBridge()
     @State private var showNewGroup = false
     @State private var renameTarget: HostGroup?
     @State private var editTarget: Host?
@@ -277,7 +280,8 @@ struct SidebarView: View {
             onRenameHostSection: { group, label in
                 renameSectionTarget = SectionPrompt(name: label, group: group)
             },
-            onNewGroupSection: { newSectionTarget = SectionPrompt(group: $0) }
+            onNewGroupSection: { newSectionTarget = SectionPrompt(group: $0) },
+            keyBridge: keyBridge
         )
         // Not only on appear: a Remove Section (or a rename) leaves its key
         // behind, and making a heading with that name again brought it back
@@ -498,7 +502,21 @@ struct SidebarView: View {
             TextField("Search or user@host", text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .noAutoFill()
+                // Spotlight-style: ↑/↓ move the outline's selection through
+                // the matches while the caret stays here, so typing goes on.
+                .onKeyPress(.downArrow) {
+                    keyBridge.move(1)
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    keyBridge.move(-1)
+                    return .handled
+                }
                 .onSubmit {
+                    // A host the arrows selected opens like Return in the
+                    // outline; otherwise Return is what it always was.
+                    if keyBridge.activateSelection() { return }
                     if let target = searchConnectTarget {
                         connect(to: target)
                     }

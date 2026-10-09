@@ -81,6 +81,14 @@ final class PaneTreeView: NSView {
     /// the sidebar outline.
     func focusFocusedPane() {
         guard let state, let focused = terminalView(for: state.focused), let window = focused.window else { return }
+        // A connection question up in the focused pane (4.2 (9)): the keyboard
+        // goes to its card instead of the terminal — same restraint.
+        if let host = leaves[state.focused]?.host, host.hasPrompt {
+            if host.promptHasKeyboard { return }
+            guard !keyboardIsElsewhere(in: window) else { return }
+            host.focusPrompt()
+            return
+        }
         if window.firstResponder === focused {
             // A pane dragged to another tab is reparented with the keyboard
             // still on it — no become/resign, so nothing asked for the frame
@@ -89,8 +97,25 @@ final class PaneTreeView: NSView {
             focused.setNeedsFrame()
             return
         }
-        guard !(window.firstResponder is NSTextView), !(window.firstResponder is NSOutlineView) else { return }
+        guard !keyboardIsElsewhere(in: window) else { return }
         window.makeFirstResponder(focused)
+    }
+
+    /// The restraint: the keyboard is in a text field (the sidebar search, a
+    /// find bar) or the sidebar outline, and must stay there. The one text
+    /// field that does NOT count is another pane's connection-prompt card in
+    /// this tree (4.2 (9)): a split opened beside a pane whose card had the
+    /// keyboard kept it there while the new pane showed as focused.
+    private func keyboardIsElsewhere(in window: NSWindow) -> Bool {
+        guard let responder = window.firstResponder else { return false }
+        if responder is NSOutlineView { return true }
+        guard let editor = responder as? NSTextView else { return false }
+        var view = editor.delegate as? NSView
+        while let current = view {
+            if current is ConnectionCardView { return !current.isDescendant(of: self) }
+            view = current.superview
+        }
+        return true
     }
 
     /// A new tab's tree is handed to the window AFTER updateNSView's async
@@ -149,6 +174,10 @@ final class PaneTreeView: NSView {
         layer?.backgroundColor = several ? NSColor(Theme.tabActive).cgColor : nil
         for (id, leaf) in leaves {
             leaf.showsHeader = several
+            // With several panes the pointer only reaches a pane's device once
+            // that pane holds the keyboard (first click focuses; the wheel
+            // scrolls our own scrollback). A lone pane: exactly as before.
+            leaf.terminalView.pointerNeedsFocus = several
             leaf.setFocused(id == selected)
             leaf.updateCard()
         }
@@ -359,6 +388,8 @@ final class PaneLeafView: NSView {
         header.isHidden = true
         header.onClick = { [weak self] in
             guard let self, let window = self.window else { return }
+            // The terminal's focus hook hands the keyboard on to a
+            // connection question's card when one is up.
             window.makeFirstResponder(self.terminalView)
         }
         host.terminalView.autoresizingMask = [.width, .height]
@@ -531,8 +562,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         let down = status?.hasPrefix("disconnected") == true
         switch tab.content {
         case .local: return NSColor(Theme.ok)
-        case .ssh: return down ? .systemRed : NSColor(Theme.accent)
-        case .serial: return down ? .systemRed : NSColor(Theme.warn)
+        case .ssh: return down ? SheepAlert.destructiveRed : NSColor(Theme.accent)
+        case .serial: return down ? SheepAlert.destructiveRed : NSColor(Theme.warn)
         }
     }
 

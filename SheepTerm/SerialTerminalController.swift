@@ -51,6 +51,31 @@ final class SerialTerminalController: NSObject {
     /// that mentioned Linux) can replace it. See `VendorFingerprint`.
     private var autoDetected = false
 
+    // MARK: prompt name (5.0 (1)) — see PromptName.swift
+    /// Fired once when the device's prompt names a session that was called
+    /// after its cable or bare address. AppModel retitles the tab.
+    var onPromptName: ((String) -> Void)?
+    /// Passive, one-shot, bounded; nil detector (zero cost) for a session
+    /// with a real name, a carried name, or once it has decided.
+    private lazy var promptNaming = PromptNaming(
+        applies: PromptName.applies(name: host.name, address: host.address, kind: host.kind))
+    /// The name the prompt gave this session, if any.
+    var learnedPromptName: String? { promptNaming.learned }
+    /// A reconnect successor keeps the name its tab learned: no rescan, and a
+    /// NEW log (none was handed over) starts under that name.
+    func carryPromptName(_ name: String) { promptNaming.carry(name) }
+    /// What the log file and the quit report call this session.
+    private var sessionName: String { promptNaming.sessionName(original: host.name) }
+
+    /// After the terminal has the bytes, like the vendor fingerprint. Never
+    /// sends anything. On a lock the OPEN log is renamed in place (the
+    /// logger orders that with its own writes; a refusal keeps the old name).
+    private func considerPromptName(_ bytes: [UInt8]) {
+        guard promptNaming.scanning, let name = promptNaming.consume(bytes) else { return }
+        logger?.rename(toSessionName: PromptName.title(learned: name, original: host.name))
+        onPromptName?(name)
+    }
+
     /// Stops passive detection for good — the vendor is now the user's (or a
     /// saved host's) explicit choice.
     func suppressVendorDetection() { vendorChosenByUser = true }
@@ -228,7 +253,7 @@ final class SerialTerminalController: NSObject {
             printNotice("logging continues to \(logger.url.path)")
         } else if logOverride ?? (UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true) {
             do {
-                let opened = try SessionLogger.open(sessionName: host.name)
+                let opened = try SessionLogger.open(sessionName: sessionName)
                 adoptLogNotices(opened)
                 logger = opened
                 printNotice("logging to \(opened.url.path)")
@@ -315,7 +340,7 @@ final class SerialTerminalController: NSObject {
         // to know whether the flush landed, so it is the thing that makes the
         // call and keeps the answer. Handing it the queue keeps the ORDER
         // here, where the queue lives.
-        return QuitLogFlush(session: host.name, logger: logger, closingOn: logQueue, gate: logGate)
+        return QuitLogFlush(session: sessionName, logger: logger, closingOn: logQueue, gate: logGate)
     }
 
     func stop() {
@@ -352,6 +377,7 @@ final class SerialTerminalController: NSObject {
         guard !pending.isEmpty else { return }
         terminalView.feed(pending)
         answerPagerIfNeeded(pending)
+        considerPromptName(pending)
         // Passive family detection, after the terminal has the bytes.
         // Bounded — see VendorFingerprint. Detection deliberately CONTINUES
         // after an automatic lock (`autoDetected` keeps
@@ -394,6 +420,7 @@ extension SerialTerminalController: TerminalViewDelegate {
         // A refused write means the worker took nothing: keep the answer so
         // a paced paste can end on it instead of counting the line as sent.
         lastWriteAccepted = worker.write(bytes)
+        terminalHost.noteOutgoing(bytes)
     }
 
     /// Only a real keystroke cancels a running Safe Paste — a DA/DSR reply

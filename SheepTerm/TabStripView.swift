@@ -393,8 +393,8 @@ struct TabItemView: View {
     private var indicatorColor: Color {
         switch tab.content {
         case .local: return Theme.ok
-        case .ssh: return isDisconnected ? Color.red : Theme.accent
-        case .serial: return isDisconnected ? Color.red : Theme.warn
+        case .ssh: return isDisconnected ? Theme.destructive : Theme.accent
+        case .serial: return isDisconnected ? Theme.destructive : Theme.warn
         }
     }
 

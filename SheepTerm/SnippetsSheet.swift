@@ -95,7 +95,7 @@ struct SnippetsSheet: View {
                 Image(systemName: "trash").font(.system(size: 11))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.red)
+            .foregroundStyle(Theme.destructive)
             .help("Delete snippet")
         }
         .padding(.vertical, 2)

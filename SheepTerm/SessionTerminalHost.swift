@@ -176,6 +176,244 @@ final class SessionTerminalHost {
         scrollerFader.attach(in: terminalView)
     }
 
+    // MARK: - Connection card (4.2 (9))
+
+    /// The card a connecting session shows — stage track, questions,
+    /// failure — and where it lives: centred over the dimmed terminal
+    /// (`connectionOverlay`, a subview of the TERMINAL view, so a tab switch,
+    /// a pane drag or a zoom carry it along and none of them cancels it), or
+    /// in a window-centred panel while the pane is too small to hold it.
+    /// See `ConnectionCardView` / ARCHITECTURE.md §15.
+    private var connectionCard: ConnectionCardView?
+    private var connectionOverlay: ConnectionOverlayView?
+    private var connectionPanel: ConnectionCardPanel?
+    private var cardConstraints: [NSLayoutConstraint] = []
+    /// The live question's completion: called exactly once.
+    private var questionCompletion: ((ConnectionPromptReply) -> Void)?
+    /// What Close / Escape does on the page on screen (progress, failure).
+    private var pageClose: (() -> Void)?
+    private var pageKnownHosts: (() -> Void)?
+
+    /// The pane is smaller than this: the card goes to a panel instead (the
+    /// card never shrinks its font or its width).
+    private static let cardMargin: CGFloat = 24
+    private static let minPaneHeight: CGFloat = 260
+
+    /// A connection card is on screen (in the pane or in its panel).
+    var hasConnectionCard: Bool { connectionCard != nil }
+    /// Kept for the call sites that only care about questions.
+    var hasPrompt: Bool { connectionCard != nil }
+
+    /// Whether the keyboard is in the card.
+    var promptHasKeyboard: Bool { connectionCard?.hasKeyboard ?? false }
+
+    /// Puts the card up (or refreshes its header) on its first page.
+    func beginConnectionCard(_ header: ConnectionCardHeader) {
+        if connectionCard == nil {
+            let card = ConnectionCardView(header: header)
+            card.onFocus = { [weak self] in
+                guard let self else { return }
+                AppModel.shared.noteFocus(view: self.terminalView)
+            }
+            let overlay = ConnectionOverlayView(frame: terminalView.bounds)
+            overlay.card = card
+            overlay.onGeometryChange = { [weak self] in self?.placeConnectionCard() }
+            connectionCard = card
+            connectionOverlay = overlay
+            terminalView.addSubview(overlay)
+            // The keyboard: taken at once only if this pane already had it.
+            // Otherwise the card waits — a click on the pane, the tab being
+            // selected or the pane focused moves the keyboard to the
+            // terminal, and `terminalTookKeyboard()` hands it on. Nothing is
+            // ever taken from the sidebar or another pane.
+            let hadKeyboard = terminalView.window?.firstResponder === terminalView
+            placeConnectionCard()
+            if hadKeyboard { card.takeKeyboard() }
+        }
+    }
+
+    /// "Connecting…" / "Authenticating…" at `stage`; `onClose` = Close/Esc.
+    func showConnectionProgress(_ text: String, stage: ConnectionStage, onClose: @escaping () -> Void) {
+        guard let card = connectionCard else { return }
+        settleQuestion(.cancel)
+        pageClose = onClose
+        pageKnownHosts = nil
+        card.show(stage: stage, page: .progress(text)) { [weak self] action in self?.cardAction(action) }
+        placeConnectionCard()
+    }
+
+    /// One of the worker's questions. `completion` is called exactly once:
+    /// with the user's answer, or `.cancel` on Escape / Close, when a newer
+    /// page replaces it, or when the card is taken down (tab closed).
+    func presentPrompt(_ prompt: ConnectionPrompt, header: ConnectionCardHeader,
+                       completion: @escaping (ConnectionPromptReply) -> Void) {
+        beginConnectionCard(header)
+        guard let card = connectionCard else { completion(.cancel); return }
+        settleQuestion(.cancel)
+        pageClose = nil
+        pageKnownHosts = nil
+        questionCompletion = completion
+        card.show(stage: prompt.stage, page: .question(prompt)) { [weak self] action in self?.cardAction(action) }
+        placeConnectionCard()
+    }
+
+    /// The connection failed: the reason in red on the card, at the stage it
+    /// got to. `onKnownHosts` adds "Open Known Hosts…".
+    func showConnectionFailure(title: String, message: String, hostKeyProblem: Bool,
+                               onKnownHosts: (() -> Void)?, onClose: @escaping () -> Void) {
+        guard let card = connectionCard else { return }
+        settleQuestion(.cancel)
+        pageClose = onClose
+        pageKnownHosts = onKnownHosts
+        card.show(stage: card.stage,
+                  page: .failure(title: title, message: message, hostKeyProblem: hostKeyProblem,
+                                 offersKnownHosts: onKnownHosts != nil)) { [weak self] action in self?.cardAction(action) }
+        placeConnectionCard()
+    }
+
+    /// Settles a live question with `.cancel` (its worker gets nil); the
+    /// card stays. Safe to call with nothing up.
+    func dismissPrompt() {
+        settleQuestion(.cancel)
+    }
+
+    /// Takes the card down — a live question is settled `.cancel` first.
+    func closeConnectionCard() {
+        settleQuestion(.cancel)
+        pageClose = nil
+        pageKnownHosts = nil
+        guard let card = connectionCard else { return }
+        let hadKeyboard = card.hasKeyboard
+        connectionCard = nil
+        NSLayoutConstraint.deactivate(cardConstraints)
+        cardConstraints = []
+        card.removeFromSuperview()
+        connectionOverlay?.onGeometryChange = nil
+        connectionOverlay?.removeFromSuperview()
+        connectionOverlay = nil
+        if let panel = connectionPanel {
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+            connectionPanel = nil
+        }
+        // The keyboard goes back to the terminal it came from — the next
+        // thing the user types after a login is a command.
+        if hadKeyboard, let window = terminalView.window {
+            window.makeFirstResponder(terminalView)
+        }
+    }
+
+    /// The terminal view just became first responder (`focusChanged`): while
+    /// a card is up the keyboard belongs to it. Next turn of the run loop —
+    /// the terminal is still inside its own becomeFirstResponder — and only
+    /// if nothing else has taken the keyboard meanwhile.
+    func terminalTookKeyboard() {
+        guard connectionCard != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let card = self.connectionCard,
+                  self.terminalView.window?.firstResponder === self.terminalView else { return }
+            card.takeKeyboard()
+        }
+    }
+
+    /// Gives the card the keyboard now (the pane was focused on purpose).
+    @discardableResult
+    func focusPrompt() -> Bool {
+        connectionCard?.takeKeyboard() ?? false
+    }
+
+    private func settleQuestion(_ reply: ConnectionPromptReply) {
+        guard let completion = questionCompletion else { return }
+        questionCompletion = nil
+        completion(reply)
+    }
+
+    private func cardAction(_ action: ConnectionCardAction) {
+        switch action {
+        case .answer(let reply):
+            settleQuestion(reply)
+        case .close:
+            let close = pageClose
+            pageClose = nil
+            close?()
+        case .openKnownHosts:
+            pageKnownHosts?()
+        }
+    }
+
+    /// In the pane when it fits — centred on the veil — else in a panel
+    /// centred over the window. Re-run on every page (the height changes),
+    /// every pane resize and every window change (a hidden tab or pane puts
+    /// the panel away; coming back brings it back).
+    private func placeConnectionCard() {
+        guard let card = connectionCard, let overlay = connectionOverlay else { return }
+        let hadKeyboard = card.hasKeyboard
+        // One size for every stage (the card's fixed frame), so a pane that
+        // holds one page holds them all — the card never jumps in and out.
+        let needed = ConnectionCardView.cardSize
+        let size = overlay.bounds.size
+        let fits = size.width >= needed.width + Self.cardMargin
+            && size.height >= max(Self.minPaneHeight, needed.height + Self.cardMargin)
+        if fits {
+            if let panel = connectionPanel {
+                panel.parent?.removeChildWindow(panel)
+                panel.orderOut(nil)
+            }
+            overlay.veiled = true
+            card.drawsChrome = true
+            if card.superview !== overlay {
+                NSLayoutConstraint.deactivate(cardConstraints)
+                card.removeFromSuperview()
+                overlay.addSubview(card)
+                cardConstraints = [
+                    card.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+                    card.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+                ]
+                NSLayoutConstraint.activate(cardConstraints)
+                if hadKeyboard { card.takeKeyboard() }
+            }
+            return
+        }
+        overlay.veiled = false
+        guard let window = overlay.window else {
+            // Tab switched away / pane hidden: the panel goes with it.
+            if let panel = connectionPanel {
+                panel.parent?.removeChildWindow(panel)
+                panel.orderOut(nil)
+            }
+            return
+        }
+        let panel: ConnectionCardPanel
+        if let existing = connectionPanel {
+            panel = existing
+        } else {
+            panel = ConnectionCardPanel(title: card.header.windowTitle)
+            panel.onClose = { [weak card] in card?.cancelOperation(nil) }
+            connectionPanel = panel
+        }
+        card.drawsChrome = false
+        if card.superview !== panel.contentView, let content = panel.contentView {
+            NSLayoutConstraint.deactivate(cardConstraints)
+            card.removeFromSuperview()
+            content.addSubview(card)
+            cardConstraints = [
+                card.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                card.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                card.topAnchor.constraint(equalTo: content.topAnchor),
+                card.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ]
+            NSLayoutConstraint.activate(cardConstraints)
+        }
+        panel.setContentSize(NSSize(width: needed.width, height: needed.height + ConnectionCardView.panelTitleBand))
+        if panel.parent !== window {
+            panel.parent?.removeChildWindow(panel)
+            SheepAlert.center(panel, over: window)
+            window.addChildWindow(panel, ordered: .above)
+        }
+        panel.orderFront(nil)
+        if hadKeyboard { card.takeKeyboard() }
+    }
+
     // MARK: - SafePaste
 
     /// `TerminalViewDelegate.clipboardWrite`: records a write that reached
@@ -273,19 +511,77 @@ final class SessionTerminalHost {
     /// the controller calls this from `TerminalViewDelegate.send`, which the
     /// pacer's own lines also go through (hence the flag).
     func prepareForOrdinaryUserInput() {
+        keystrokePending = true
         if !sendingPacedLine, pastePacer.isActive {
             cancelSafePaste(reason: .keyboardInput)
         }
     }
 
+    // MARK: - Command history (5.0 (1))
+
+    /// The key this session files its history under (`CommandHistory.key`);
+    /// nil = not recorded (a local shell). Set by `AppModel` when it opens
+    /// the session.
+    var historyKey: String?
+    private var historyGate = HistoryEchoGate()
+    /// Set by `prepareForOrdinaryUserInput` (a real keystroke, called just
+    /// before its `send`) and consumed by the next `noteOutgoing`.
+    private var keystrokePending = false
+
+    /// Every `TerminalViewDelegate.send` calls this with its bytes. Records
+    /// the line when the USER pressed Return: a key, not a paste, a snippet,
+    /// a broadcast or Safe Paste's pacer (those never set `keystrokePending`).
+    /// The line is read back from the screen row the cursor is on, the
+    /// prompt cut off (`CommandHistoryCapture`) — keystrokes are not
+    /// reconstructed, because Tab completion, `?` and line editing make that
+    /// wrong on network gear. Anything doubtful is skipped.
+    func noteOutgoing(_ bytes: [UInt8]) {
+        let typed = keystrokePending
+        keystrokePending = false
+        guard historyKey != nil else { return }
+        let counter = terminalView.terminal.changeCounter
+        let isReturn = bytes == [0x0D] || bytes == [0x0D, 0x0A]
+        if !isReturn {
+            // Typed keys and pasted text leave the screen stale until their
+            // echo arrives; a terminal reply (CSI …) says nothing.
+            if typed || (bytes.first.map { $0 >= 0x20 && $0 != 0x7F } ?? false) {
+                historyGate.typed(counter: counter)
+            }
+            return
+        }
+        let screenIsCurrent = historyGate.returned(counter: counter)
+        guard typed, screenIsCurrent, let key = historyKey else { return }
+        // A connection question is up: what is typed is the card's.
+        guard !hasConnectionCard else { return }
+        guard let command = commandOnCursorLine() else { return }
+        AppModel.shared.historyStore.record(command, for: key)
+    }
+
+    private func commandOnCursorLine() -> String? {
+        let terminal = terminalView.terminal
+        guard !terminal.isAlternate else { return nil }
+        let buffer = terminal.buffer
+        var rows: [(text: String, wrapped: Bool)] = []
+        rows.reserveCapacity(terminal.rows)
+        for y in 0..<terminal.rows {
+            let row = buffer.row(y)
+            rows.append((row.string(trimRight: false), row.wrapped))
+        }
+        guard let line = CommandHistoryCapture.logicalLine(rows: rows, cursorRow: buffer.y) else { return nil }
+        return CommandHistoryCapture.command(fromRow: line)
+    }
+
     private func presentSafePasteConfirmation(plan: SafePastePlan, originalText: String) {
         let alert = SheepAlert()
         alert.alertStyle = .informational
+        // A working dialog, landscape and one fixed size (the accessory's
+        // 620 × 330), no icon — the user's call, 2026-10-09.
+        alert.showsIcon = false
         alert.messageText = "Safe Multi-line Paste"
         let target = sessionLabel.map { " to \($0)" } ?? ""
         alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending\(target)."
         alert.addButton(withTitle: "Send Line by Line")
-        alert.addButton(withTitle: "Paste Immediately")
+        alert.markCaution(alert.addButton(withTitle: "Paste Immediately"))
         alert.addButton(withTitle: "Cancel")
 
         let reviewLabel = NSTextField(labelWithString: "Commands to send:")

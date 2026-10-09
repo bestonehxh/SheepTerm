@@ -85,6 +85,9 @@ nonisolated final class SSHWorker: Sendable {
         /// because a credential was wrong. Telling them apart is what stops a
         /// link that dropped mid-handshake from being blamed on the user.
         var authTransportError: String?
+        /// True while `establishJump` runs: every question asked then (its
+        /// username, host key, password, challenge) is the BASTION's.
+        var askingForJumpHost = false
     }
     private let state = Mutex(State())
     /// Cap on buffered input — a wedged session must not grow it forever.
@@ -277,8 +280,18 @@ nonisolated final class SSHWorker: Sendable {
         }
     }
 
-    private var isRunning: Bool {
+    /// False once `stop()` was called (tab closed, quit) or the session
+    /// ended. The app's in-tab prompts poll it so a worker blocked on a
+    /// question is freed even if no card ever answers (`PromptBridge`).
+    var isRunning: Bool {
         state.withLock { $0.running }
+    }
+
+    /// Whether the question being asked right now belongs to the jump host
+    /// (4.2 (9)): read by the prompt callbacks, which run on this worker's
+    /// queue inside the handshake, so the card can say "via <bastion>".
+    var isAskingForJumpHost: Bool {
+        state.withLock { $0.askingForJumpHost }
     }
 
     /// Up to `limit` bytes from the front of the input queue. The rest stays
@@ -392,15 +405,6 @@ nonisolated final class SSHWorker: Sendable {
         }
         var config = initialConfig
         refusedHost = nil
-        if config.username.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let user = usernamePrompt?("Username for \(config.host)")?
-                .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
-                closeSession("connection cancelled — no username given")
-                return
-            }
-            config.username = user
-            onUsernameResolved?(user)
-        }
         // config.port is an unvalidated Int.
         guard (1...65535).contains(config.port) else {
             closeSession("invalid port \(config.port) — must be between 1 and 65535")
@@ -463,6 +467,21 @@ nonisolated final class SSHWorker: Sendable {
             return
         }
         defer { link.shutdown() }
+
+        // The username is asked HERE, after the key exchange and the host-key
+        // decision (4.2 (9)) — the order the in-tab card shows: connect →
+        // host key → username → password. Nothing before userauth needs it.
+        // The server's LoginGraceTime runs while the user types, as it does
+        // for the password.
+        if config.username.trimmingCharacters(in: .whitespaces).isEmpty {
+            guard let user = usernamePrompt?("Username for \(config.host)")?
+                .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
+                if isRunning { closeSession("connection cancelled — no username given") }
+                return
+            }
+            config.username = user
+            onUsernameResolved?(user)
+        }
 
         authCancelled = false
         authTransportError = nil
@@ -630,15 +649,9 @@ nonisolated final class SSHWorker: Sendable {
     /// The bastion link is owned by the returned tunnel; the inner link
     /// closes it with itself.
     private func establishJump(_ hop: JumpHop, target: SSHConfig, wake: Int32) -> SSHLink.Tunnel? {
+        state.withLock { $0.askingForJumpHost = true }
+        defer { state.withLock { $0.askingForJumpHost = false } }
         var hopConfig = hop.asConfig()
-        if hopConfig.username.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let user = usernamePrompt?("Username for jump host \(hop.host)")?
-                .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
-                closeSession("connection cancelled — no username given for jump host \(hop.host)")
-                return nil
-            }
-            hopConfig.username = user
-        }
         guard (1...65535).contains(hopConfig.port) else {
             closeSession("jump host \(hop.host): invalid port \(hopConfig.port)")
             return nil
@@ -660,6 +673,16 @@ nonisolated final class SSHWorker: Sendable {
         case .failure(let failure):
             report(failure, prefix: prefix)
             return nil
+        }
+        // The bastion's username, after its host key — as for the target.
+        if hopConfig.username.trimmingCharacters(in: .whitespaces).isEmpty {
+            guard let user = usernamePrompt?("Username for jump host \(hop.host)")?
+                .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
+                if isRunning { closeSession("connection cancelled — no username given for jump host \(hop.host)") }
+                link.close()
+                return nil
+            }
+            hopConfig.username = user
         }
         authCancelled = false
         authTransportError = nil
@@ -1269,8 +1292,11 @@ nonisolated final class SSHWorker: Sendable {
     }
 
     nonisolated enum HostKeyAnswer: Sendable, Equatable {
-        /// "Trust & Connect": pin the key, carry on with the handshake.
+        /// "Add and continue": pin the key, carry on with the handshake.
         case trust
+        /// "Continue" (4.2 (9)): trust the key for THIS session only —
+        /// nothing is written; the next connection asks again.
+        case trustOnce
         /// "Cancel": nothing is written, the session ends.
         case cancel
         /// The session was stopped while the question was open.
@@ -1292,6 +1318,8 @@ nonisolated final class SSHWorker: Sendable {
         case alreadyTrusted
         /// The user said yes and the key was appended.
         case saved
+        /// The user said "this time only": trusted, nothing written.
+        case trustedOnce
         /// The user said yes; the key is trusted for this session only.
         case notSaved(String)
         /// Starts with `hostKeyRefusedPrefix` (a different key for the host
@@ -1333,6 +1361,23 @@ nonisolated final class SSHWorker: Sendable {
         case .cancel: return .declined
         case .stopped: return .stopped
         case .trust: break
+        case .trustOnce:
+            // Nothing is written, but the file is still read AGAIN: the
+            // question can stay open for minutes, and a different key
+            // pinned for the host meanwhile is a CHANGED refusal, not a
+            // reason to carry on with this one.
+            var after = KnownHosts(text: "")
+            if FileManager.default.fileExists(atPath: path) {
+                guard let data = FileManager.default.contents(atPath: path) else {
+                    return .refused(unreadableKnownHostsRefusal)
+                }
+                after = KnownHosts(text: String(decoding: data, as: UTF8.self))
+            }
+            switch hostKeyVerdict(user: after.lookup(host: host, port: port, key: key), global: global) {
+            case .trusted: return .alreadyTrusted
+            case .refused(let why): return .refused(why)
+            case .firstSeen: return .trustedOnce
+            }
         }
         let (verdict, saveError) = pinFirstUse(key: key, host: host, port: port, global: global, path: path)
         switch verdict {
@@ -1396,6 +1441,9 @@ nonisolated final class SSHWorker: Sendable {
             return nil
         case .saved:
             notice("first connection — host key \(id) trusted and saved to known_hosts")
+            return nil
+        case .trustedOnce:
+            notice("first connection — host key \(id) trusted for this session only (not saved to known_hosts)")
             return nil
         case .notSaved(let why):
             // A failed save must not be silent — the user would otherwise

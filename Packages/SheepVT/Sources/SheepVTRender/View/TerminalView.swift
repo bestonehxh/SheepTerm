@@ -182,6 +182,22 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
 
     // MARK: - Mouse / selection gesture state
 
+    /// Split panes: when true, this view only talks to its program through
+    /// the pointer while it holds the keyboard. A click that arrives without
+    /// the keyboard only focuses the view (the whole press-drag-release is
+    /// swallowed — no selection, no report) and the wheel scrolls our own
+    /// scrollback and never becomes a mouse report or cursor keys. The app
+    /// sets it for a pane that shares its tab with another; false (a lone
+    /// pane) behaves exactly as before.
+    public var pointerNeedsFocus = false
+
+    /// True when the pointer must not reach the program right now.
+    var pointerGated: Bool { pointerNeedsFocus && window?.firstResponder !== self }
+
+    /// A press that only focused the view is in progress: its drag and release
+    /// are ours to ignore too.
+    var swallowingFocusClick = false
+
     var dragAnchor: Position?
 
     var dragStartPoint: CGPoint?

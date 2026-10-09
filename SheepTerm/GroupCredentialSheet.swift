@@ -63,6 +63,7 @@ struct GroupCredentialSheet: View {
         .padding(20)
         .frame(width: 380)
         .sheepSheetChrome()
+        .noAutoFill()
         .onAppear {
             // Opens on what the group ALREADY has, so Return changes nothing
             // by accident: the sheet used to open on "None (ask when

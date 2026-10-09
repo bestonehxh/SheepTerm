@@ -22,6 +22,9 @@ struct HostEditSheet: View {
     @State private var agentForward: Bool
     @State private var disablePaging: Bool
     @State private var jumpHostID: UUID?
+    /// The "Via jump host" field: a saved host's `user@address` while
+    /// `jumpHostID` is set, else the typed bastion (`Host.jumpSpec`).
+    @State private var jumpText: String
     @State private var vendor: Vendor
     @State private var baud: Int
     /// Whether the Port field has been typed in during this edit. See
@@ -61,7 +64,18 @@ struct HostEditSheet: View {
         _cipherMode = State(initialValue: host.cipherMode ?? .auto)
         _agentForward = State(initialValue: host.agentForward ?? false)
         _disablePaging = State(initialValue: host.disablePaging ?? false)
-        _jumpHostID = State(initialValue: host.jumpHostID)
+        // An id naming this host itself was never followed (`JumpTarget
+        // .resolve`): shown as None rather than as an error.
+        let jumpID = host.jumpHostID == host.id ? nil : host.jumpHostID
+        _jumpHostID = State(initialValue: jumpID)
+        if let jumpID {
+            let bastion = AppModel.shared.store.groups.flatMap(\.hosts).first { $0.id == jumpID }
+            _jumpText = State(initialValue: bastion.map {
+                JumpHostRow.text(for: $0, credentials: AppModel.shared.credentialStore)
+            } ?? "")
+        } else {
+            _jumpText = State(initialValue: host.jumpSpecValue ?? "")
+        }
         _vendor = State(initialValue: host.highlightVendor)
         // A host whose stored baud is not one this picker offers showed a
         // BLANK picker, and Save wrote the bad value straight back, so the
@@ -94,14 +108,14 @@ struct HostEditSheet: View {
                     if let addressError {
                         Text(addressError)
                             .font(.system(size: 10))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.destructive)
                     }
                     TextField("Port", text: $port)
                         .onChange(of: port) { portEdited = true }
                     if parsedPort == nil {
                         Text("Port must be 1-65535")
                             .font(.system(size: 10))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.destructive)
                     }
                     Picker("Credential", selection: $credentialSelection) {
                         Text("None (enter manually)").tag(UUID?.none)
@@ -137,19 +151,14 @@ struct HostEditSheet: View {
                     }
                     Toggle("Forward SSH agent", isOn: $agentForward)
                         .help("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
-                    Picker("Via jump host", selection: $jumpHostID) {
-                        Text("None (direct)").tag(UUID?.none)
-                        ForEach(jumpCandidates) { candidate in
-                            Text("\(candidate.name) (\(candidate.address))").tag(UUID?.some(candidate.id))
-                        }
-                        // The saved bastion is gone (deleted, or now behind a
-                        // jump host itself): shown rather than a blank picker,
-                        // and the user picks something else or None.
-                        if let dangling = jumpHostID, !jumpCandidates.contains(where: { $0.id == dangling }) {
-                            Text("Missing jump host — pick another or None").tag(UUID?.some(dangling))
-                        }
+                    JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
+                                candidates: jumpCandidates,
+                                render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                    if let jumpError {
+                        Text(jumpError)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.destructive)
                     }
-                    .help("Logs into the chosen host first and tunnels this connection through it (ProxyJump). That host needs TCP forwarding allowed; this device sees the connection coming from it.")
                 } else if original.kind == .serial {
                     TextField("Device path", text: $address)
                     Picker("Baud rate", selection: $baud) {
@@ -186,6 +195,7 @@ struct HostEditSheet: View {
         .padding(20)
         .frame(width: 400)
         .sheepSheetChrome()
+        .noAutoFill()
         .onAppear {
             // Only when this sheet can show a password field. Editing a
             // serial host is Name + Device path — taking the user's input
@@ -313,6 +323,7 @@ struct HostEditSheet: View {
     private var isValid: Bool {
         if trimmedName.isEmpty || trimmedAddress.isEmpty { return false }
         if original.kind == .ssh, parsedPort == nil || addressError != nil { return false }
+        if original.kind == .ssh, JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID) { return false }
         return true
     }
 
@@ -344,7 +355,9 @@ struct HostEditSheet: View {
             host.cipherMode = cipherMode
             host.agentForward = agentForward
             host.disablePaging = disablePaging
+            // One answer in two fields: a saved reference, or the typed text.
             host.jumpHostID = jumpHostID
+            host.jumpSpec = JumpTarget.storedSpec(text: jumpText, jumpHostID: jumpHostID)
             // `selectedCredential`, not `credentialSelection`: the same
             // question the form asked when it decided to show the password
             // field at all. A host pointing at a deleted credential shows it,
@@ -396,8 +409,15 @@ extension HostEditSheet {
 
 extension HostEditSheet {
     /// Saved SSH hosts this one may hop through — every one but itself.
-    /// One hop only: a host that is itself behind a jump host cannot be one.
+    /// One hop only: a host that is itself behind a jump host (saved or
+    /// typed) cannot be one.
     var jumpCandidates: [Host] {
-        model.store.groups.flatMap(\.hosts).filter { $0.kind == .ssh && $0.id != original.id && $0.jumpHostID == nil }
+        model.store.groups.flatMap(\.hosts).filter { $0.id != original.id && JumpTarget.canBeBastion($0) }
+    }
+
+    /// The red line under "Via jump host" (see `JumpTarget.fieldError`).
+    var jumpError: String? {
+        JumpTarget.fieldError(text: jumpText, jumpHostID: jumpHostID,
+                              candidates: jumpCandidates, saved: model.store.groups.flatMap(\.hosts))
     }
 }

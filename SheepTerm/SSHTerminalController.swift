@@ -45,6 +45,31 @@ final class SSHTerminalController: NSObject {
     /// that mentioned Linux) can replace it. See `VendorFingerprint`.
     private var autoDetected = false
 
+    // MARK: prompt name (5.0 (1)) — see PromptName.swift
+    /// Fired once when the device's prompt names a session that was called
+    /// after its cable or bare address. AppModel retitles the tab.
+    var onPromptName: ((String) -> Void)?
+    /// Passive, one-shot, bounded; nil detector (zero cost) for a session
+    /// with a real name, a carried name, or once it has decided.
+    private lazy var promptNaming = PromptNaming(
+        applies: PromptName.applies(name: host.name, address: host.address, kind: host.kind))
+    /// The name the prompt gave this session, if any.
+    var learnedPromptName: String? { promptNaming.learned }
+    /// A reconnect successor keeps the name its tab learned: no rescan, and a
+    /// NEW log (none was handed over) starts under that name.
+    func carryPromptName(_ name: String) { promptNaming.carry(name) }
+    /// What the log file and the quit report call this session.
+    private var sessionName: String { promptNaming.sessionName(original: host.name) }
+
+    /// After the terminal has the bytes, like the vendor fingerprint. Never
+    /// sends anything. On a lock the OPEN log is renamed in place (the
+    /// logger orders that with its own writes; a refusal keeps the old name).
+    private func considerPromptName(_ bytes: [UInt8]) {
+        guard promptNaming.scanning, let name = promptNaming.consume(bytes) else { return }
+        logger?.rename(toSessionName: PromptName.title(learned: name, original: host.name))
+        onPromptName?(name)
+    }
+
     /// Stops passive detection for good — the vendor is now the user's (or a
     /// saved host's) explicit choice.
     func suppressVendorDetection() { vendorChosenByUser = true }
@@ -143,6 +168,9 @@ final class SSHTerminalController: NSObject {
         self.password = password
         self.jump = jump
         self.jumpUnresolved = jumpUnresolved
+        let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        hostLabel = host.port == 22 ? address : address.contains(":") ? "[\(address)]:\(host.port)" : "\(address):\(host.port)"
+        jumpLabel = jump?.label
         // A reconnect keeps appending to the previous session's log file
         // instead of starting a fresh one per attempt.
         loggerState = Mutex(reusingLogger)
@@ -217,13 +245,23 @@ final class SSHTerminalController: NSObject {
                 self.onStatus?(status)
                 // "ssh2 · …" is sent once, after the shell was granted — the
                 // first moment a command can go to the device.
-                if status.hasPrefix("ssh2") { self.disablePagingIfAsked() }
+                if status.hasPrefix("ssh2") {
+                    // The shell is up: the connection card's job is done.
+                    self.cancelPendingProgress()
+                    self.terminalHost.closeConnectionCard()
+                    self.disablePagingIfAsked()
+                }
             }
         }
         worker.onClosed = { [weak self] message in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.terminalHost.cancelSafePaste(reason: .sessionEnded)
+                // Nothing can be waiting on a card once the session closed.
+                self.cancelPrompt()
+                // Close on the card already said "cancelled" and set the
+                // status; whatever the stopped worker reports after it is noise.
+                guard !self.connectCancelledByUser else { return }
                 self.printNotice(message, error: true)
                 // A prompt the user dismissed is a decision, not a drop. Plain
                 // "disconnected" is what auto-reconnect keys on, and it would
@@ -247,7 +285,17 @@ final class SSHTerminalController: NSObject {
                 // A pinned key that no longer matches (or a revoked one):
                 // offer the way out — File → Known Hosts…, pre-filtered.
                 // Nothing is deleted here; the user decides in the sheet.
-                if let conflict = SSHWorker.knownHostsConflict(message) {
+                let conflict = SSHWorker.knownHostsConflict(message)
+                if message.hasPrefix("connection cancelled") {
+                    // The user's own Close / Escape: nothing to report.
+                    self.cancelPendingProgress()
+                    self.terminalHost.closeConnectionCard()
+                } else if self.terminalHost.hasConnectionCard {
+                    // Still connecting: the card turns into the failure, red,
+                    // at the stage it got to (with Open Known Hosts… for a
+                    // pin that no longer matches — instead of the sheet).
+                    self.showFailure(message, conflict: conflict)
+                } else if let conflict {
                     self.offerKnownHosts(conflict)
                 }
                 // The log is NOT closed here. Auto-reconnect hands this
@@ -257,14 +305,23 @@ final class SSHTerminalController: NSObject {
                 // (tab close) and beginShutdownForQuit() own the close.
             }
         }
-        // First connection to a host: show its key fingerprint and ask before
-        // anything is pinned or sent (nil here would refuse every new host).
-        worker.hostKeyPrompt = AuthPrompt.confirmHostKeyFromWorker
-        worker.passwordPrompt = { prompt in
-            Self.askOnMainActor(prompt: prompt, secure: true)
+        // Every question the worker asks — first-seen host key, username,
+        // password, challenge — is a card inside this tab (4.2 (9)), never a
+        // modal panel. See `askInTab`. The host-key prompt must stay wired:
+        // nil there refuses every new host.
+        worker.hostKeyPrompt = { [weak self] question, isCancelled in
+            guard let self else { return .stopped }
+            return self.askHostKeyInTab(question, isCancelled: isCancelled)
         }
-        worker.challengePrompt = { prompt, secure in
-            Self.askOnMainActor(prompt: prompt, secure: secure)
+        worker.passwordPrompt = { [weak self] prompt in
+            self?.askInTab(prompt) { host, _ in
+                // "Password for user@host" — the account is what the card names.
+                let account = prompt.hasPrefix("Password for ") ? String(prompt.dropFirst(13)) : host
+                return .password(account: SSHWorker.printable(account))
+            }
+        }
+        worker.challengePrompt = { [weak self] prompt, secure in
+            self?.askInTab(prompt) { _, _ in .challenge(text: SSHWorker.printable(prompt), secure: secure) }
         }
         worker.onPasswordWorked = { [weak self] user, password in
             DispatchQueue.main.async {
@@ -282,8 +339,8 @@ final class SSHTerminalController: NSObject {
                 AppModel.shared.rememberJumpPassword(password, forUser: user, address: jump.host, port: jump.port)
             }
         }
-        worker.usernamePrompt = { prompt in
-            Self.askOnMainActor(prompt: prompt, secure: false)
+        worker.usernamePrompt = { [weak self] prompt in
+            self?.askInTab(prompt) { _, _ in .username }
         }
         // Reconnect rebuilds the session from `host`, so a username typed at
         // the prompt has to land there whatever auth method follows.
@@ -292,25 +349,206 @@ final class SSHTerminalController: NSObject {
         }
     }
 
-    /// The SSH worker asks for credentials synchronously on its dedicated blocking
-    /// queue, while AppKit must present the prompt on the main actor. Keep
-    /// that bridge in one place and avoid sync-dispatching to the main queue
-    /// if a future caller is already there.
-    nonisolated private static func askOnMainActor(prompt: String, secure: Bool) -> String? {
-        if Thread.isMainThread {
-            return MainActor.assumeIsolated {
-                AuthPrompt.ask(prompt: prompt, secure: secure)
-            }
+    // MARK: - connection prompts (4.2 (9))
+
+    /// Who a question from the worker is about, as the card names it: the
+    /// jump host while the worker is logging into it, else this tab's host.
+    nonisolated private func promptSubject() -> (host: String, viaJump: Bool, tabHost: String) {
+        let tabHost = SSHWorker.printable(hostLabel)
+        if worker.isAskingForJumpHost, let jump = jumpLabel {
+            return (SSHWorker.printable(jump), true, tabHost)
         }
-        return DispatchQueue.main.sync {
-            MainActor.assumeIsolated {
-                AuthPrompt.ask(prompt: prompt, secure: secure)
+        return (tabHost, false, tabHost)
+    }
+    /// "address" or "address:port" — fixed at init, read from the worker queue.
+    nonisolated private let hostLabel: String
+    nonisolated private let jumpLabel: String?
+
+    /// A text question (username, password, challenge) from the worker queue,
+    /// answered by a card in this tab. The worker blocks here; the main
+    /// thread never does: the card is put up with `main.async` and the
+    /// answer comes back through a `PromptBridge`. A stopped worker (tab
+    /// closed, quit) frees the wait even if no card ever answered.
+    nonisolated private func askInTab(_ text: String,
+                                      step: (_ host: String, _ viaJump: Bool) -> ConnectionPrompt.Step) -> String? {
+        let subject = promptSubject()
+        let prompt = ConnectionPrompt(step: step(subject.host, subject.viaJump), host: subject.host,
+                                      viaJump: subject.viaJump, tabHost: subject.tabHost, fallbackText: text)
+        // Never on main (the worker has its own queue). If it ever were, the
+        // card could not be answered while main blocks — fall back to the
+        // old panel rather than deadlock.
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { AuthPrompt.ask(prompt: text, secure: prompt.isSecure) }
+        }
+        let worker = self.worker
+        return PromptBridge<String>.ask(isCancelled: { !worker.isRunning }) { bridge in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.stopped else { bridge.answer(nil); return }
+                self.cancelPendingProgress()
+                self.terminalHost.presentPrompt(prompt, header: self.cardHeader) { [weak self] reply in
+                    guard case .text(let value) = reply else { bridge.answer(nil); return }
+                    bridge.answer(value)
+                    self?.showProgress(after: prompt)
+                }
             }
         }
     }
 
+    /// The first-seen host key, the same way. Escape / Cancel → `.cancel`
+    /// (the worker closes with "connection cancelled — host key not
+    /// trusted…"); a stopped session → `.stopped`, whatever the card said.
+    nonisolated private func askHostKeyInTab(_ question: SSHWorker.HostKeyQuestion,
+                                             isCancelled: @escaping @Sendable () -> Bool) -> SSHWorker.HostKeyAnswer {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { AuthPrompt.confirmHostKey(question, isCancelled: isCancelled) }
+        }
+        let subject = promptSubject()
+        // Everything shown went through the worker's sanitizer: the host is
+        // the user's, but the key type is the server's.
+        let shown = SSHWorker.HostKeyQuestion(host: SSHWorker.printable(question.host), port: question.port,
+                                              keyType: SSHWorker.printable(question.keyType),
+                                              fingerprint: SSHWorker.printable(question.fingerprint))
+        let prompt = ConnectionPrompt(step: .hostKey(shown), host: subject.host, viaJump: subject.viaJump,
+                                      tabHost: subject.tabHost, fallbackText: question.target)
+        return PromptBridge<SSHWorker.HostKeyAnswer>.askHostKey(isCancelled: isCancelled) { bridge in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.stopped else { bridge.answer(nil); return }
+                self.cancelPendingProgress()
+                self.terminalHost.presentPrompt(prompt, header: self.cardHeader) { [weak self] reply in
+                    switch reply {
+                    case .trust: bridge.answer(.trust)
+                    case .trustOnce: bridge.answer(.trustOnce)
+                    case .text, .cancel: bridge.answer(.cancel); return
+                    }
+                    self?.showProgress(after: prompt)
+                }
+            }
+        }
+    }
+
+    /// Settles a question still on screen (its worker gets nil / cancel).
+    private func cancelPrompt() {
+        terminalHost.dismissPrompt()
+    }
+
+    // MARK: - connection card (4.2 (9))
+
+    /// Set by the card's Close while connecting: the worker was stopped on
+    /// the user's word, and what it reports afterwards is not news.
+    private var connectCancelledByUser = false
+
+    /// The session's title and "SSH address:port" for the card.
+    private var cardHeader: ConnectionCardHeader {
+        let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = host.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = SSHWorker.printable(name.isEmpty ? address : name)
+        let endpoint = address.contains(":") ? "[\(address)]:\(host.port)" : "\(address):\(host.port)"
+        return ConnectionCardHeader(title: title, subtitle: "SSH " + SSHWorker.printable(endpoint),
+                                    windowTitle: name.isEmpty || name == address
+                                        ? SSHWorker.printable(endpoint) : "\(title) — \(SSHWorker.printable(endpoint))")
+    }
+
+    /// The spinner page waiting to be shown after an answer (see below).
+    private var pendingProgress: DispatchWorkItem?
+
+    /// Back to the spinner once a question is answered, at its stage — but
+    /// only if the next page has not arrived within `answerGrace`.
+    /// Username → password usually takes a few milliseconds, and flashing a
+    /// spinner page in between read as a flicker (the user, 2026-10-09).
+    /// After the LAST answer (the password) the same flash happened the
+    /// other way: "Authenticating…" for a blink, then the card closed — so
+    /// the grace is a full second, longer than a LAN login takes, and a
+    /// quick login goes straight from the password page to the shell (5.0 (1)).
+    private func showProgress(after prompt: ConnectionPrompt) {
+        guard !stopped else { return }
+        pendingProgress?.cancel()
+        let text = prompt.stage == .hostKey ? "Connecting…" : "Authenticating…"
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.terminalHost.showConnectionProgress(text, stage: prompt.stage) { [weak self] in self?.cancelConnecting() }
+        }
+        pendingProgress = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.answerGrace, execute: work)
+    }
+
+    /// A newer page is taking over: a spinner still waiting its turn must not
+    /// paint over it.
+    /// How long a connect may take before "Connecting…" is worth a card.
+    /// Shorter than a human notices as a wait; long enough that a LAN host
+    /// with a known key and saved credentials never shows one.
+    static let cardGrace: TimeInterval = 0.6
+    /// How long after an answer the card keeps its page before "Authenticating…".
+    static let answerGrace: TimeInterval = 1.0
+
+    /// "Connecting…" once the connect has taken `cardGrace` — unless a
+    /// question, a failure or the shell got there first (they all cancel it
+    /// through `cancelPendingProgress`).
+    private func scheduleConnectingCard() {
+        pendingProgress?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.terminalHost.beginConnectionCard(self.cardHeader)
+            self.terminalHost.showConnectionProgress("Connecting…", stage: .connect) { [weak self] in self?.cancelConnecting() }
+        }
+        pendingProgress = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cardGrace, execute: work)
+    }
+
+    private func cancelPendingProgress() {
+        pendingProgress?.cancel()
+        pendingProgress = nil
+    }
+
+    /// Close / Escape on the card while connecting: the connection is
+    /// cancelled (the worker stopped) — the same end as Escape on a question.
+    private func cancelConnecting() {
+        guard !stopped, !connectCancelledByUser else { return }
+        connectCancelledByUser = true
+        worker.stop()
+        cancelPendingProgress()
+        terminalHost.closeConnectionCard()
+        printNotice("connection cancelled", error: true)
+        onStatus?("disconnected — cancelled")
+    }
+
+    /// The card's failure page for a close that happened while connecting.
+    private func showFailure(_ message: String, conflict: SSHWorker.KnownHostsConflict?) {
+        let target = refusedTarget()
+        let title: String
+        switch conflict {
+        case .changed?: title = "The host key for \(target) has CHANGED"
+        case .revoked?: title = "The host key for \(target) is revoked"
+        case nil:
+            title = message.hasPrefix(SSHWorker.hostKeyRefusedPrefix) ? "Host key refused" : "Connection failed"
+        }
+        let hostKeyProblem = conflict != nil || message.hasPrefix(SSHWorker.hostKeyRefusedPrefix)
+        let knownHosts: (() -> Void)? = conflict == nil ? nil : {
+            AppModel.shared.openKnownHosts(search: target)
+        }
+        cancelPendingProgress()
+        terminalHost.beginConnectionCard(cardHeader)
+        terminalHost.showConnectionFailure(title: title, message: message, hostKeyProblem: hostKeyProblem,
+                                           onKnownHosts: knownHosts) { [weak self] in
+            self?.terminalHost.closeConnectionCard()
+        }
+    }
+
+    /// The host whose key was refused — through a jump host it may be the
+    /// bastion, and the wrong pin must not be offered.
+    private func refusedTarget() -> String {
+        let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        return worker.refusedHost ?? (host.port == 22 ? address
+            : address.contains(":") ? "[\(address)]:\(host.port)" : "\(address):\(host.port)")
+    }
+
     func start() {
         printNotice("connecting to \(host.address):\(host.port)…")
+        // The card is NOT up from the first moment (5.0 (1), the user's call):
+        // a host whose key is known and whose credentials are saved connects
+        // with no card at all. A question puts it up at once (`presentPrompt`),
+        // a failure too (`showFailure`); a connect that is merely slow shows
+        // "Connecting…" after `cardGrace` (§15).
+        scheduleConnectingCard()
         if let logger {
             // A handed-over logger's notices belong to THIS session now — the
             // controller that opened it is on its way out.
@@ -318,7 +556,7 @@ final class SSHTerminalController: NSObject {
             printNotice("logging continues to \(logger.url.path)")
         } else if UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true {
             do {
-                let opened = try SessionLogger.open(sessionName: host.name)
+                let opened = try SessionLogger.open(sessionName: sessionName)
                 adoptLogNotices(opened)
                 logger = opened
                 printNotice("logging to \(opened.url.path)")
@@ -335,6 +573,13 @@ final class SSHTerminalController: NSObject {
             // Never "connect directly instead": the user set a path on purpose.
             printNotice("this host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only) — edit the host and pick another, or None", error: true)
             onStatus?("disconnected — jump host missing")
+            cancelPendingProgress()
+            terminalHost.beginConnectionCard(cardHeader)
+            terminalHost.showConnectionFailure(title: "Jump host missing",
+                                               message: "This host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only). Edit the host and pick another, or None.",
+                                               hostKeyProblem: false, onKnownHosts: nil) { [weak self] in
+                self?.terminalHost.closeConnectionCard()
+            }
             return
         }
         worker.start(SSHConfig(
@@ -410,6 +655,8 @@ final class SSHTerminalController: NSObject {
     /// whether it LANDED — see `QuitLogFlush`.
     func beginShutdownForQuit() -> QuitLogFlush {
         worker.stop()
+        cancelPendingProgress()
+        terminalHost.closeConnectionCard()
         // Before anything else: a worker thread parked in reserve()/submit()
         // must be free to notice that the session is over, or it would sit out
         // its whole timeout while the main actor waits behind it. Nothing
@@ -422,7 +669,7 @@ final class SSHTerminalController: NSObject {
         // to know whether the flush landed, so it is the thing that makes the
         // call and keeps the answer. Handing it the queue keeps the ORDER
         // here, where the queue lives.
-        return QuitLogFlush(session: host.name, logger: logger, closingOn: logQueue, gate: logGate)
+        return QuitLogFlush(session: sessionName, logger: logger, closingOn: logQueue, gate: logGate)
     }
 
     /// After a host-key refusal that a known_hosts line decided: say so and
@@ -430,11 +677,7 @@ final class SSHTerminalController: NSObject {
     /// default (Return/Escape) — removing a pin is never one keystroke away.
     private func offerKnownHosts(_ conflict: SSHWorker.KnownHostsConflict) {
         guard !stopped else { return }
-        let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The refused host is whichever hop said no — through a jump host it
-        // may be the bastion, and the wrong pin must not be offered.
-        let target = worker.refusedHost ?? (host.port == 22 ? address
-            : address.contains(":") ? "[\(address)]:\(host.port)" : "\(address):\(host.port)")
+        let target = refusedTarget()
         let alert = SheepAlert()
         alert.alertStyle = .warning
         switch conflict {
@@ -465,6 +708,11 @@ final class SSHTerminalController: NSObject {
         stopped = true
         terminalHost.cancelSafePaste(reason: .sessionEnded)
         worker.stop()
+        // A question still up is answered "no" — the worker, blocked on it,
+        // is free at once (its own poll would free it within 0.1 s anyway) —
+        // and the card goes with the tab (and its panel, if it had one).
+        cancelPendingProgress()
+        terminalHost.closeConnectionCard()
         // Nothing will drain these once the tab is gone, so stop gating: a
         // worker thread parked in reserve()/submit() has to be free to notice
         // that its session ended. `take()` still hands back whatever is
@@ -497,6 +745,7 @@ final class SSHTerminalController: NSObject {
         guard !pending.isEmpty else { return }
         terminalView.feed(pending)
         answerPagerIfNeeded(pending)
+        considerPromptName(pending)
         // Passive family detection, after the terminal has the bytes.
         // Bounded — see VendorFingerprint. Detection deliberately CONTINUES
         // after an automatic lock (`autoDetected` keeps
@@ -533,13 +782,17 @@ extension SSHTerminalController: TerminalViewDelegate {
 
     /// Split panes: the pane the keyboard went to is the selected session.
     func focusChanged(_ view: TerminalView, focused: Bool) {
-        if focused { AppModel.shared.noteFocus(view: view) }
+        guard focused else { return }
+        AppModel.shared.noteFocus(view: view)
+        // A connection question is up: the keyboard belongs to its card.
+        terminalHost.terminalTookKeyboard()
     }
 
     func send(_ view: TerminalView, bytes: [UInt8]) {
         // A refused write means the worker took nothing: keep the answer so
         // a paced paste can end on it instead of counting the line as sent.
         lastWriteAccepted = worker.write(bytes)
+        terminalHost.noteOutgoing(bytes)
     }
 
     /// Only a real keystroke cancels a running Safe Paste — a DA/DSR reply

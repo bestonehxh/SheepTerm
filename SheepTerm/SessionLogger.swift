@@ -371,7 +371,18 @@ nonisolated final class MainFeedQueue: Sendable {
 /// place it's ever called from is what actually keeps access exclusive,
 /// standing in for the Mutex's old role.)
 nonisolated final class SessionLogger: Sendable {
-    let url: URL
+    /// Where the log is. A `var` behind a lock since 5.0 (1): `rename`
+    /// moves the open file to the device's prompt name, and every reader
+    /// (the controllers' notices, the quit's report, the detectors on
+    /// `ioQueue`) must see either the old path or the new one, never a torn
+    /// value. Only `ioQueue` ever WRITES it, right after the rename(2) that
+    /// makes it true — so the link/rename detectors, which also run only on
+    /// `ioQueue`, always compare the inode against the path it really has.
+    var url: URL { urlBox.withLock { $0 } }
+    private let urlBox: Mutex<URL>
+    /// ` <stamp>-<XXXX>.log` — the part of the file name a rename keeps, so
+    /// a renamed log still sorts by time and stays unique.
+    private let fileTail: String
     /// Every actual disk write/close lives here, off the caller's thread —
     /// see the class doc comment for why this exists.
     private let ioQueue = DispatchQueue(label: "SheepTerm.SessionLogger.io")
@@ -568,17 +579,7 @@ nonisolated final class SessionLogger: Sendable {
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.dateFormat = "yyyy-MM-dd HHmmss"
         let stamp = formatter.string(from: Date())
-        let safeName = sessionName
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            // A NUL ends the C string the kernel actually sees, so `url` and
-            // the file on disk would disagree about the name. Fold it away
-            // rather than let the two drift apart.
-            .replacingOccurrences(of: "\0", with: "-")
-            // Every other control character too: legal on APFS, hostile in
-            // Finder and in a shell — a host named with a CR LF in it made a
-            // two-line file name.
-            .components(separatedBy: .controlCharacters).joined()
+        let safeName = Self.safeFileName(sessionName)
         // Evaluated once: the getter creates the directory as a side effect.
         let dir = Self.logsDirectory
 
@@ -589,19 +590,20 @@ nonisolated final class SessionLogger: Sendable {
         // name, and the stamp and uniquifier still tell the files apart.
         var budget = Self.maxNameUnits - " \(stamp)-XXXX.log".utf16.count
 
-        var opened: (url: URL, fd: Int32)?
+        var opened: (url: URL, fd: Int32, tail: String)?
         var lastFailure = OpenFailure(path: dir.path, code: EEXIST)
         for _ in 0..<Self.maxOpenAttempts {
             let unique = UUID().uuidString.prefix(4)
+            let tail = " \(stamp)-\(unique).log"
             let candidate = dir.appendingPathComponent(
-                "\(Self.trimmed(safeName, toUTF16Units: budget)) \(stamp)-\(unique).log")
+                "\(Self.trimmed(safeName, toUTF16Units: budget))\(tail)")
             // O_EXCL is the whole point: `createFile(atPath:contents:nil)`
             // TRUNCATES, so two sessions of one host started in the same
             // second used to destroy the first one's bytes and then interleave
             // at independent offsets. Refusing to land on an existing path and
             // redrawing costs one failed syscall instead.
             let fd = Darwin.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
-            if fd >= 0 { opened = (candidate, fd); break }
+            if fd >= 0 { opened = (candidate, fd, tail); break }
             lastFailure = OpenFailure(path: candidate.path, code: errno)
             switch lastFailure.code {
             case EEXIST:
@@ -615,9 +617,28 @@ nonisolated final class SessionLogger: Sendable {
             }
         }
         guard let opened else { throw lastFailure }
-        url = opened.url
+        urlBox = Mutex(opened.url)
+        fileTail = opened.tail
         handle = FileHandle(fileDescriptor: opened.fd, closeOnDealloc: true)
         state = Mutex(State())
+    }
+
+    /// A session name made safe to be a file name: no path separator, no
+    /// `:` (Finder's separator), no NUL, no control characters. Shared by
+    /// the open and by `rename`, so a prompt-learned name obeys exactly the
+    /// rules a host name does.
+    static func safeFileName(_ sessionName: String) -> String {
+        sessionName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            // A NUL ends the C string the kernel actually sees, so `url` and
+            // the file on disk would disagree about the name. Fold it away
+            // rather than let the two drift apart.
+            .replacingOccurrences(of: "\0", with: "-")
+            // Every other control character too: legal on APFS, hostile in
+            // Finder and in a shell — a host named with a CR LF in it made a
+            // two-line file name.
+            .components(separatedBy: .controlCharacters).joined()
     }
 
     /// Cuts `name` to at most `units` UTF-16 code units on a Character
@@ -1030,6 +1051,75 @@ nonisolated final class SessionLogger: Sendable {
         // business taking the outlet away from whoever is still using it.
         if !alreadyClosed { onProblem = nil }
         return landed && !refused
+    }
+
+    /// Renames the OPEN log to `sessionName` + the same ` <stamp>-<XXXX>.log`
+    /// tail (5.0 (1): the device's prompt names a serial or bare-address
+    /// session). Same directory, same file, same descriptor — the writes
+    /// follow the inode, so nothing is copied and nothing is lost.
+    ///
+    /// The handshake with the rest of this class:
+    /// - **Ordered like a write.** The rename is queued on `ioQueue` from
+    ///   inside `state`'s Mutex, exactly as `append` and `close` queue theirs,
+    ///   so it lands between the chunks it was called between, and a `close`
+    ///   that wins the Mutex first turns it into a no-op (returns false) —
+    ///   there is no window where a closed or closing file is renamed.
+    /// - **Never seen as an external move.** `noteIfRenamed` and
+    ///   `relinkIfUnlinked` also run only on `ioQueue`, and `url` is updated
+    ///   on `ioQueue` immediately after the rename(2) succeeds — so the next
+    ///   check compares the inode against the new path and finds it ours.
+    ///   Nothing is nil'ed or swapped that another thread might be reading:
+    ///   `url` is read through its lock, `handle` is untouched.
+    /// - **Never clobbers.** `RENAME_EXCL`: a file already at the new name
+    ///   (or a volume that refuses — read-only folder, a share) leaves the log
+    ///   where it is, silently, still being written. The name is cosmetic;
+    ///   the log is evidence.
+    /// - **Only our own file.** If the path no longer names the inode we hold
+    ///   (someone moved or replaced it), the rename is skipped — renaming a
+    ///   stranger's file would be worse than keeping a stale name.
+    ///
+    /// `completion` gets the new URL, or nil when the log kept its old name.
+    /// It runs on `ioQueue` and MUST NOT BLOCK (same contract as `onProblem`).
+    /// Returns false when the logger was already closed (nothing queued).
+    @discardableResult
+    func rename(toSessionName sessionName: String,
+                completion: (@Sendable (URL?) -> Void)? = nil) -> Bool {
+        let safeName = Self.safeFileName(sessionName)
+        return state.withLock { state in
+            guard !state.closed else { return false }
+            ioQueue.async { [self] in
+                // Two statements on purpose: `completion?(performRename(…))`
+                // skips the ARGUMENT too when completion is nil — the app
+                // passes none, so the log was never renamed (5.0 (1)).
+                let renamed = performRename(to: safeName)
+                completion?(renamed)
+            }
+            return true
+        }
+    }
+
+    /// The rename itself, on `ioQueue` only.
+    private func performRename(to safeName: String) -> URL? {
+        let current = url
+        guard !safeName.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        var mine = stat()
+        var onDisk = stat()
+        guard fstat(handle.fileDescriptor, &mine) == 0, mine.st_nlink > 0,
+              stat(current.path, &onDisk) == 0,
+              onDisk.st_ino == mine.st_ino, onDisk.st_dev == mine.st_dev else { return nil }
+        let dir = current.deletingLastPathComponent()
+        var budget = Self.maxNameUnits - fileTail.utf16.count
+        for _ in 0..<Self.maxOpenAttempts {
+            let candidate = dir.appendingPathComponent("\(Self.trimmed(safeName, toUTF16Units: budget))\(fileTail)")
+            if candidate.lastPathComponent == current.lastPathComponent { return current }
+            if renamex_np(current.path, candidate.path, UInt32(RENAME_EXCL)) == 0 {
+                urlBox.withLock { $0 = candidate }
+                return candidate
+            }
+            guard errno == ENAMETOOLONG, budget > 16 else { return nil }
+            budget /= 2
+        }
+        return nil
     }
 
     /// Called from `ioQueue` once the file is written and the descriptor

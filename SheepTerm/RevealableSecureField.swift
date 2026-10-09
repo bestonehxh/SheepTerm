@@ -1,6 +1,20 @@
 import AppKit
 import SwiftUI
 
+extension View {
+    /// Keep macOS AutoFill (Passwords, contacts, one-time codes) out of the
+    /// app's own fields. Credentials live only in SheepTerm's Keychain, and the
+    /// system's suggestion bar has no business offering a website login for a
+    /// device password. AppKit has no "off" switch: the heuristic keys on the
+    /// field's `contentType` (a secure field is a `.password` unless told
+    /// otherwise), so we set one that no AutoFill provider recognises. It goes
+    /// in the environment, so one call at a sheet's root covers every field
+    /// under it. Typing, paste and the reveal toggle are untouched.
+    func noAutoFill() -> some View {
+        textContentType(NSTextContentType(rawValue: "sheepterm.none"))
+    }
+}
+
 /// Password field with an eye button to reveal/hide what's typed.
 struct RevealableSecureField: View {
     let title: String
@@ -37,6 +51,7 @@ struct RevealableSecureField: View {
                 // ordinary TextField, so without this they would (smart
                 // quotes alone would silently change what gets sent).
                 .autocorrectionDisabled(true)
+                .noAutoFill()
                 .onChange(of: focusedField) {
                     if focusedField != nil {
                         AuthPrompt.forceASCIIKeyboard()
@@ -75,7 +90,7 @@ struct RevealableSecureField: View {
                 // words, and used to cite this line as its authority.
                 Text("Contains non-ASCII characters — sent exactly as typed")
                     .font(.system(size: 10))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color(nsColor: SheepAlert.cautionYellow))
             }
         }
     }
@@ -83,6 +98,12 @@ struct RevealableSecureField: View {
 
 /// The auth dialog badge: SheepTerm's sheep face guarded by a little lock.
 struct SheepLockBadge: View {
+    /// The badge's symbol: the lock the password popup always had; the card
+    /// passes the stage's (person / key / lock / warning), nil = no badge.
+    var symbol: String? = "lock.fill"
+    /// Red symbol for a host key that no longer matches.
+    var danger = false
+
     var body: some View {
         ZStack {
             Circle()
@@ -115,17 +136,19 @@ struct SheepLockBadge: View {
                     .offset(x: 1, y: 8)
             }
 
-            // lock badge
-            ZStack {
-                Circle()
-                    .fill(Color(red: 0.11, green: 0.12, blue: 0.16))
-                    .frame(width: 22, height: 22)
-                    .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.99, green: 0.85, blue: 0.45))
+            // stage badge (the lock, on the password popup)
+            if let symbol {
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 0.11, green: 0.12, blue: 0.16))
+                        .frame(width: 22, height: 22)
+                        .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                    Image(systemName: symbol)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(danger ? Color(nsColor: SheepAlert.destructiveRed) : Color(red: 0.99, green: 0.85, blue: 0.45))
+                }
+                .offset(x: 21, y: 21)
             }
-            .offset(x: 21, y: 21)
         }
     }
 }

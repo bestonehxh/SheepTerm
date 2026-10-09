@@ -6,6 +6,9 @@ struct QuickSearchView: View {
     @EnvironmentObject var model: AppModel
     @State private var text = ""
     @FocusState private var focused: Bool
+    /// The result the arrows have walked to (nil = none: ↩
+    /// takes the first result as before). Index into `matches`.
+    @State private var highlightedKey: String?
 
     private var connectTarget: Host? {
         ConnectParser.parse(text)
@@ -87,6 +90,15 @@ struct QuickSearchView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .focused($focused)
+                    .noAutoFill()
+                    .onKeyPress(.downArrow) { walk(1, count: results.count) }
+                    .onKeyPress(.upArrow) { walk(-1, count: results.count) }
+                    // Re-filtering keeps the highlight while that host still
+                    // matches, and drops it otherwise.
+                    .onChange(of: text) {
+                        highlightedKey = SearchNav.keptSelection(highlightedKey,
+                                                                 results: matches.map(\.connectionKey))
+                    }
                     .onSubmit(connectFirst)
             }
             .padding(.horizontal, 9)
@@ -110,6 +122,7 @@ struct QuickSearchView: View {
                 Divider()
                 ForEach(results) { host in
                     paletteRow(
+                        isHighlighted: highlightedKey == host.connectionKey,
                         badge: host.kind.badge,
                         badgeColor: host.kind == .serial ? Theme.warn : Theme.accent,
                         name: host.name,
@@ -130,6 +143,7 @@ struct QuickSearchView: View {
     }
 
     private func paletteRow(
+        isHighlighted: Bool = false,
         badge: String,
         badgeColor: Color,
         name: String,
@@ -158,6 +172,10 @@ struct QuickSearchView: View {
             .contentShape(Rectangle())
             .padding(.vertical, 3)
             .padding(.horizontal, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isHighlighted ? Theme.accent.opacity(0.22) : Color.clear)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -168,7 +186,23 @@ struct QuickSearchView: View {
         model.collapseSidebar()
     }
 
+    /// ↓ / ↑ in the field: walk the results (SearchNav.step); the caret stays
+    /// in the field. Keyboard only.
+    private func walk(_ delta: Int, count: Int) -> KeyPress.Result {
+        let keys = matches.map(\.connectionKey)
+        let current = highlightedKey.flatMap { keys.firstIndex(of: $0) }
+        let next = SearchNav.step(current: current, delta: delta,
+                                  eligible: Array(repeating: true, count: keys.count))
+        highlightedKey = next.map { keys[$0] }
+        return .handled
+    }
+
     private func connectFirst() {
+        // A result ↓ walked to wins; otherwise ↩ is what it always was.
+        if let key = highlightedKey, let host = matches.first(where: { $0.connectionKey == key }) {
+            connect(host)
+            return
+        }
         if let target = connectTarget ?? matches.first {
             connect(target)
         }

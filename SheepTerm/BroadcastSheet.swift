@@ -12,6 +12,7 @@ struct BroadcastSheet: View {
     @State private var text = ""
     @State private var ticked: Set<UUID> = []
     @State private var lastReport: String?
+    @State private var variablesRequest: SnippetVariablesRequest?
 
     private var candidates: [BroadcastPlan.Candidate] {
         model.tabs.map { tab in
@@ -104,12 +105,34 @@ struct BroadcastSheet: View {
         .padding(20)
         .frame(width: 520)
         .sheepSheetChrome()
+        .sheet(item: $variablesRequest) { request in
+            SnippetVariablesSheet(request: request)
+        }
     }
 
     private func send() {
+        guard !plan.isEmpty else { return }
+        // {{name}} / {{name=default}} in the line: ask once, then the same
+        // text goes to every ticked tab. The template is the line that would
+        // be sent (controls out, first line), not a later line of a paste.
+        let line = SnippetCodec.commandText(text).split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map(String.init) ?? ""
+        if SnippetVariables.hasPlaceholders(line) {
+            let targets = ticked
+            let tabs = candidates
+            let model = model
+            variablesRequest = SnippetVariablesRequest(title: "Broadcast", template: line) { filled in
+                let sends = BroadcastPlan.sends(text: filled, to: targets, among: tabs)
+                guard !sends.isEmpty else { return }
+                let count = model.broadcast(sends)
+                report("Sent to \(count) tab\(count == 1 ? "" : "s")")
+            }
+            return
+        }
         let sends = plan
-        guard !sends.isEmpty else { return }
         let count = model.broadcast(sends)
-        lastReport = "Sent to \(count) tab\(count == 1 ? "" : "s")"
+        report("Sent to \(count) tab\(count == 1 ? "" : "s")")
     }
+
+    private func report(_ text: String) { lastReport = text }
 }
