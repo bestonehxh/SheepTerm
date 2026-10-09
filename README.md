@@ -24,6 +24,11 @@ config pasting.
 >
 > Requires macOS 26.4 (Tahoe) or later, Apple Silicon.
 
+After the first install SheepTerm keeps itself up to date: it checks for a new release at launch
+and once a day, and **SheepTerm → Check for Updates…** checks now. Each update is verified against
+an Ed25519 signature before it is unpacked, and nothing is installed until you click
+**Install & Relaunch**.
+
 ## The Sheep family 🐑
 
 SheepTerm is one of a few small native macOS apps for network engineers:
@@ -53,7 +58,11 @@ The servers and hypervisor control a network lab needs, native on the Mac:
   ones old Cisco / Aruba / HPE gear still speaks (`diffie-hellman-group1-sha1`, `3des-cbc`,
   `ssh-dss`, `hmac-md5`), with automatic fallback; strict key exchange (Terrapin-safe); password,
   keyboard-interactive (TACACS / OTP), public-key and ssh-agent logins; SSH agent forwarding
-- **Serial console** over USB serial adapters (configurable baud rate)
+- **Jump host (ProxyJump)** — reach a device through a bastion: pick a saved host or type
+  `user@bastion[:port]` in Edit Host or Quick Connect (one hop)
+- **Login inside the tab** — host key, username and password are asked on a card in the tab
+  itself, not in a window-blocking dialog, so several tabs can connect at once
+- **Serial console** over USB serial adapters (configurable baud rate), with **Send Break** (⌃⌥B)
 - **Local shell** tabs alongside your remote sessions
 - **Quick Connect (⌘K)** — type `admin@10.0.0.1`, `admin@sw01:2222`, or an IPv6 literal and go,
   or search your saved hosts by name, address, or section
@@ -61,6 +70,11 @@ The servers and hypervisor control a network lab needs, native on the Mac:
   set one credential for a whole group in one step
 - **Tabs** — drag a tab to reorder it, or move the current one with ⌃⌘← / ⌃⌘→; a new local
   tab starts in your home folder
+- **Split panes** — Split Right (⌘D) / Split Down (⇧⌘D), move focus with ⌥⌘ + arrows, zoom a
+  pane (⇧⌘↩); drag a pane's header onto another pane, a tab, or the tab strip to rearrange, and
+  drop a host from the sidebar beside an open pane
+- **Tabs named from the prompt** — a session opened by bare IP or serial port takes the device's
+  hostname from its prompt (`Core-SW (10.1.1.1)`), and its open log file is renamed to match
 - Ask-before-quit when live SSH/serial sessions would be lost (local shells don't nag)
 
 ### Host management
@@ -92,8 +106,17 @@ The servers and hypervisor control a network lab needs, native on the Mac:
 - **Safe Multi-line Paste** — pasting 2+ lines into an SSH/serial session shows a
   read-only preview first, with the option to send line-by-line at a chosen pacing
   delay (great for config blocks on slow control planes)
+- **Auto-page** (View menu, off by default) answers `--More--` prompts for you; a host can also
+  send the vendor's "disable paging" command right after an SSH login
+- **Snippets** — saved commands and config blocks in the Snippets menu, with `{{variables}}`
+  (and `{{name=default}}`) filled in a form before sending; **Broadcast to Tabs** (⇧⌘B) sends one
+  to several connected sessions at once
+- **Command history per host** (⌘Y) — commands read from the screen as you run them, so Tab
+  completion and `?` help don't garble them; lines that look like passwords, keys or community
+  strings are never kept
 - **Find in scrollback** (⌘F, ⌘G / ⇧⌘G, ⌘E to use the selection), clear scrollback (⌘L)
-- **Session logging** to `~/Documents/SheepTerm Logs/`
+- **Session logging** to `~/Documents/SheepTerm Logs/`, and **Search Logs** (⇧⌘F) across every
+  saved log, plain text or regex
 - 6 terminal themes: SheepTerm, Dracula, Nord, One Dark, Solarized Dark, Gruvbox Dark;
   terminal font and size adjustable (⌘= / ⌘−)
 - Dark appearance throughout, with the sidebar and tab bar in **Liquid Glass** or a solid colour
@@ -129,7 +152,8 @@ xcodebuild -project SheepTerm.xcodeproj -scheme SheepTerm -configuration Release
 
 The app is built at
 `~/Library/Developer/Xcode/DerivedData/SheepTerm-*/Build/Products/Release/SheepTerm.app`.
-It links only Apple's frameworks and the two local packages in `Packages/` (SheepVT, SheepSSH).
+It links only Apple's frameworks and the three local packages in `Packages/` (SheepVT, SheepSSH,
+SheepJump).
 
 ## License
 
