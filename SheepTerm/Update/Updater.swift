@@ -202,19 +202,36 @@ final class Updater {
     // MARK: Alerts
 
     private func presentOffer(_ offer: UpdateOffer, current: UpdateVersion, manual: Bool) {
-        let notes = offer.notes.isEmpty ? nil : Self.notesView(offer.notes)
-        let answer = hooks.presenter.present(
-            title: "\(config.appName) \(offer.version) is available",
-            message: "You have \(current).",
-            accessory: notes,
-            buttons: [UpdateAlertButton(title: "Install & Relaunch", role: .primary),
-                      UpdateAlertButton(title: "Later"),
-                      UpdateAlertButton(title: "Skip This Version")])
-        switch answer {
-        case 0: install(offer, current: current)
-        case 2: UserDefaults.standard.set(offer.tag, forKey: UpdateCore.skippedTagKey)
-        default: break
+        // Short first page; the release notes only behind Details… (5.0 (4)).
+        let page = UpdateOfferAction.offerPage(hasNotes: !offer.notes.isEmpty)
+        while true {
+            let answer = hooks.presenter.present(
+                title: "\(config.appName) \(offer.version) is available",
+                message: "You have \(current).",
+                accessory: nil,
+                buttons: Self.buttons(page))
+            switch UpdateOfferAction.answer(answer, on: page) {
+            case .install: install(offer, current: current); return
+            case .skip: UserDefaults.standard.set(offer.tag, forKey: UpdateCore.skippedTagKey); return
+            case .later, .back: return
+            case .details:
+                let details = UpdateOfferAction.detailsPage
+                let choice = hooks.presenter.present(
+                    title: "What's new in \(config.appName) \(offer.version)",
+                    message: "You have \(current).",
+                    accessory: Self.notesView(offer.notes),
+                    buttons: Self.buttons(details))
+                if UpdateOfferAction.answer(choice, on: details) == .install {
+                    install(offer, current: current)
+                    return
+                }
+                // Back: the first page again.
+            }
         }
+    }
+
+    private static func buttons(_ page: [UpdateOfferAction]) -> [UpdateAlertButton] {
+        page.map { UpdateAlertButton(title: $0.title, role: $0 == .install ? .primary : .normal) }
     }
 
     /// A newer release that cannot be verified (no .sig, wrong asset, a URL
@@ -249,28 +266,56 @@ final class Updater {
     }
 
     /// The release notes: plain text, selectable, scrollable, fixed size.
-    private static func notesView(_ text: String) -> NSView {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 288, height: 150))
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.borderType = .noBorder
-        scroll.drawsBackground = false
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 288, height: 150))
+    /// The Details page: the release notes as a readable list — a bullet
+    /// per item with a hanging indent, body-size text in the label colour,
+    /// as tall as the notes up to `notesMaxHeight`, scrolling beyond.
+    static let notesWidth: CGFloat = 288
+    static let notesMaxHeight: CGFloat = 280
+
+    static func notesView(_ text: String) -> NSView {
+        let body = NSMutableAttributedString()
+        let font = NSFont.systemFont(ofSize: 12.5)
+        let indent: CGFloat = 14
+        for (index, item) in UpdateCore.noteItems(text).enumerated() {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.paragraphSpacingBefore = index == 0 ? 0 : 7
+            paragraph.lineSpacing = 1.5
+            if item.bullet {
+                paragraph.headIndent = indent
+                paragraph.tabStops = [NSTextTab(textAlignment: .left, location: indent)]
+                paragraph.defaultTabInterval = indent
+            }
+            let line = (index == 0 ? "" : "\n") + (item.bullet ? "•\t" : "") + item.text
+            body.append(NSAttributedString(string: line, attributes: [
+                .font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]))
+        }
+        let inset = NSSize(width: 10, height: 10)
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: notesWidth, height: 10))
         textView.isEditable = false
         textView.isSelectable = true
-        textView.isRichText = false
+        textView.isRichText = true
         textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 4, height: 4)
-        textView.font = .systemFont(ofSize: 11)
-        textView.textColor = .secondaryLabelColor
+        textView.textContainerInset = inset
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
-        textView.string = text
+        textView.textStorage?.setAttributedString(body)
+        // Fit the notes; cap and scroll when they are long.
+        var height = notesMaxHeight
+        if let container = textView.textContainer, let layout = textView.layoutManager {
+            layout.ensureLayout(for: container)
+            height = min(notesMaxHeight, ceil(layout.usedRect(for: container).height + inset.height * 2))
+        }
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: notesWidth, height: max(height, 44)))
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        textView.frame.size.height = scroll.frame.height
         scroll.documentView = textView
         scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = 8
+        scroll.layer?.cornerRadius = 10
         scroll.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
         return scroll
     }

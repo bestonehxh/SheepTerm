@@ -110,6 +110,36 @@ nonisolated struct UpdateOffer: Equatable, Sendable {
 }
 
 /// What a check should do with the latest release.
+/// What the "update available" alert offers, and what its buttons mean.
+/// The notes are NOT on the first page (the user, 5.0 (4)): a Details…
+/// button opens them on a second page that can still install.
+nonisolated enum UpdateOfferAction: Equatable, Sendable {
+    case install, details, later, skip, back
+
+    /// The first page's buttons, in order (index = the presenter's answer).
+    static func offerPage(hasNotes: Bool) -> [UpdateOfferAction] {
+        hasNotes ? [.install, .details, .later, .skip] : [.install, .later, .skip]
+    }
+    /// The Details page's buttons.
+    static let detailsPage: [UpdateOfferAction] = [.install, .back]
+
+    var title: String {
+        switch self {
+        case .install: return "Install & Relaunch"
+        case .details: return "Details…"
+        case .later: return "Later"
+        case .skip: return "Skip This Version"
+        case .back: return "Back"
+        }
+    }
+
+    /// The action behind a presenter answer; out of range (closed some other
+    /// way) is `.later` — never an install.
+    static func answer(_ index: Int, on page: [UpdateOfferAction]) -> UpdateOfferAction {
+        page.indices.contains(index) ? page[index] : .later
+    }
+}
+
 nonisolated enum UpdateDecision: Equatable, Sendable {
     case offer
     case upToDate
@@ -384,6 +414,26 @@ nonisolated enum UpdateCore {
         if text.count > maxCharacters { text = String(text.prefix(maxCharacters)); truncated = true }
         if truncated { text += "\n… (the full notes are on the release page)" }
         return text
+    }
+
+    /// The Details page's items: one per `- ` / `* ` bullet (wrapped
+    /// continuation lines joined to it), other non-empty lines as plain
+    /// items; markdown emphasis (`**`, `__`, backticks) removed. 5.0 (4).
+    static func noteItems(_ notes: String) -> [(bullet: Bool, text: String)] {
+        var items: [(bullet: Bool, text: String)] = []
+        for raw in notes.split(separator: "\n", omittingEmptySubsequences: false) {
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            for mark in ["**", "__", "`"] { line = line.replacingOccurrences(of: mark, with: "") }
+            if line.isEmpty { continue }
+            if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ") {
+                items.append((true, String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)))
+            } else if let last = items.last, last.bullet, raw.hasPrefix(" ") || raw.hasPrefix("\t") {
+                items[items.count - 1].text += " " + line
+            } else {
+                items.append((false, line))
+            }
+        }
+        return items
     }
 
     // MARK: Integrity

@@ -478,9 +478,11 @@ final class SSHTerminalController: NSObject {
     /// A newer page is taking over: a spinner still waiting its turn must not
     /// paint over it.
     /// How long a connect may take before "Connecting…" is worth a card.
-    /// Shorter than a human notices as a wait; long enough that a LAN host
-    /// with a known key and saved credentials never shows one.
-    static let cardGrace: TimeInterval = 0.6
+    /// Long enough that a host with a known key and saved credentials never
+    /// shows one: 0.6 s was not — an Aruba CX takes over a second to check a
+    /// password and open the shell, so the card flashed up and away (5.0 (4)).
+    /// The terminal's "connecting to …" line and the status bar say it meanwhile.
+    static let cardGrace: TimeInterval = 3.0
     /// How long after an answer the card keeps its page before "Authenticating…".
     static let answerGrace: TimeInterval = 1.0
 
