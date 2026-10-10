@@ -1,8 +1,6 @@
 import AppKit
 import Combine
 import Foundation
-import LocalAuthentication
-import Security
 
 struct Credential: Identifiable, Codable, Hashable {
     var id = UUID()
@@ -295,124 +293,37 @@ final class CredentialStore: ObservableObject {
     }
 }
 
+/// Credential passwords, all inside the one-item `PasswordVault` (5.0 (14)):
+/// one Keychain prompt per update instead of one per host.
 enum Keychain {
-    private static let service = "Bestchaan.SheepTerm"
-
-    private static func baseQuery(account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-    }
-
-    private static func baseQuery(for id: UUID) -> [String: Any] {
-        baseQuery(account: id.uuidString)
-    }
-
-    /// Returns whether the value actually landed in the Keychain. The add
-    /// status must be checked: an ignored failure would silently lose the
-    /// password while callers report success.
-    ///
-    /// Deliberately updates in place rather than delete-then-add: a bare
-    /// SecItemDelete followed by a failed SecItemAdd (locked keychain,
-    /// denied access) used to destroy the previous, working password before
-    /// ever confirming the new one was stored. SecItemUpdate has no such
-    /// window. Delete+add is kept only as a fallback for the case where
-    /// there is genuinely no existing item to update, and even then the
-    /// previous value is captured first so a failed add can be undone.
-    @discardableResult
-    private static func set(_ password: String, baseQuery: [String: Any]) -> Bool {
-        let newData = Data(password.utf8)
-        let account = baseQuery[kSecAttrAccount as String] as? String ?? "?"
-
-        let updateStatus = SecItemUpdate(baseQuery as CFDictionary,
-                                          [kSecValueData as String: newData] as CFDictionary)
-        if updateStatus == errSecSuccess {
-            return true
-        }
-        guard updateStatus == errSecItemNotFound else {
-            NSLog("SheepTerm: Keychain write failed (status %d) for account %@", updateStatus, account)
-            return false
-        }
-
-        // Nothing existed to update, so an add is safe. Still read whatever
-        // might be there first — costs nothing, and guarantees the failure
-        // path below has a correct value to restore rather than assuming
-        // "not found" means "nothing to lose".
-        let previous = get(baseQuery: baseQuery)
-        SecItemDelete(baseQuery as CFDictionary)
-        var attributes = baseQuery
-        attributes[kSecValueData as String] = newData
-        let addStatus = SecItemAdd(attributes as CFDictionary, nil)
-        if addStatus == errSecSuccess {
-            return true
-        }
-        NSLog("SheepTerm: Keychain write failed (status %d) for account %@", addStatus, account)
-        if let previous {
-            var restoreAttributes = baseQuery
-            restoreAttributes[kSecValueData as String] = Data(previous.utf8)
-            SecItemAdd(restoreAttributes as CFDictionary, nil)
-        }
-        return false
-    }
-
-    private static func get(baseQuery: [String: Any]) -> String? {
-        var query = baseQuery
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
+    private static var vault: PasswordVault { .shared }
 
     /// Returns false when the password did not land in the Keychain —
     /// callers must surface that, never swallow it.
     @discardableResult
     static func setPassword(_ password: String, for id: UUID) -> Bool {
-        set(password, baseQuery: baseQuery(for: id))
+        vault.set(Data(password.utf8), for: id.uuidString, interactive: true)
     }
 
     static func password(for id: UUID) -> String? {
-        get(baseQuery: baseQuery(for: id))
+        vault.value(for: id.uuidString, interactive: true).flatMap { String(data: $0, encoding: .utf8) }
     }
 
     /// For Sync's background reads: never put up a Keychain access prompt
-    /// (an item the system wants to confirm reads as "unavailable" instead
-    /// of interrupting the user every five minutes).
+    /// (a vault nobody has opened yet reads as "unavailable" instead of
+    /// interrupting the user every five minutes).
     static func passwordWithoutPrompt(for id: UUID) -> String? {
-        get(baseQuery: noPromptQuery(for: id))
+        vault.value(for: id.uuidString, interactive: false).flatMap { String(data: $0, encoding: .utf8) }
     }
 
-    private static func noPromptQuery(for id: UUID) -> [String: Any] {
-        var query = baseQuery(for: id)
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        query[kSecUseAuthenticationContext as String] = context
-        // The login (file) keychain's access-list prompt is not covered by
-        // the context above; this older flag is what refuses it there.
-        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
-        return query
-    }
-
-    /// Sync's write: never a prompt. An item the system wants confirmed is
-    /// reported as not written (Sync retries later) instead of putting up a
-    /// dialog every five minutes. A NEW item never needs confirming.
+    /// Sync's write: never a prompt. Not written = Sync retries later.
     static func setPasswordWithoutPrompt(_ password: String, for id: UUID) -> Bool {
-        let status = SecItemUpdate(noPromptQuery(for: id) as CFDictionary,
-                                   [kSecValueData as String: Data(password.utf8)] as CFDictionary)
-        if status == errSecSuccess { return true }
-        guard status == errSecItemNotFound else { return false }
-        var attributes = baseQuery(for: id)
-        attributes[kSecValueData as String] = Data(password.utf8)
-        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
+        vault.set(Data(password.utf8), for: id.uuidString, interactive: false)
     }
 
     /// Sync's delete: never a prompt (see above).
     static func deletePasswordWithoutPrompt(for id: UUID) -> Bool {
-        let status = SecItemDelete(noPromptQuery(for: id) as CFDictionary)
-        return status == errSecSuccess || status == errSecItemNotFound
+        vault.remove(id.uuidString, interactive: false)
     }
 
     /// Reports success so the caller can tell the user: a refused delete
@@ -420,7 +331,6 @@ enum Keychain {
     /// nothing in the app can name it again.
     @discardableResult
     static func deletePassword(for id: UUID) -> Bool {
-        let status = SecItemDelete(baseQuery(for: id) as CFDictionary)
-        return status == errSecSuccess || status == errSecItemNotFound
+        vault.remove(id.uuidString, interactive: true)
     }
 }

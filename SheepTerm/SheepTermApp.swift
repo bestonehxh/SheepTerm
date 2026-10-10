@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The in-app updater (SheepTermUpdate.swift): first automatic check a
     /// few seconds after launch, then daily while the app stays open.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Pre-5.0 (14) per-credential Keychain items → the one-item vault,
+        // before Sync reads anything (PasswordVault.swift). A no-op once moved.
+        PasswordVault.shared.migrate(AppModel.shared.credentialStore.credentials.map(\.id.uuidString)
+                                     + ["sheepsync.session"])   // SyncEngine.sessionAccount
         AppUpdater.shared.start()
         SheepTermSync.shared.start()
     }

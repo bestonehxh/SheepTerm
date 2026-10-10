@@ -55,9 +55,13 @@ final class SheepTermSync: SyncDataSource {
         let secret = (info["SheepSyncGoogleClientSecret"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         let id = SyncPolicy.usableClientID(id: info["SheepSyncGoogleClientID"] as? String ?? "", secret: secret)
         let client = GoogleClient(clientID: id, clientSecret: secret)
+        // Sync's session (refresh token + vault key) lives in the same
+        // one-item PasswordVault as the host passwords: one Keychain prompt
+        // per update for everything, not one more for Sync.
         engine = SyncEngine(configuration: SyncConfiguration(
             appName: "SheepTerm", google: client, keychainService: "Bestchaan.SheepTerm",
-            stateDirectory: BackupManager.baseDirectory, deviceName: ShareCodec.deviceName))
+            stateDirectory: BackupManager.baseDirectory, deviceName: ShareCodec.deviceName),
+            secrets: VaultSecretStore(), makeBackend: { GoogleDriveBackend(account: $0) })
         engine.openURL = { NSWorkspace.shared.open($0) }
         engine.dataSource = self
     }
@@ -330,5 +334,21 @@ final class SheepTermSync: SyncDataSource {
             try? FileManager.default.removeItem(at: staging)
             throw error
         }
+    }
+}
+/// SheepSync's secret store, kept in the vault under the same account names
+/// SheepSync's own `SecretStore` used (`sheepsync.<account>`), so a session
+/// saved before 5.0 (14) is moved in on first use like a host password.
+nonisolated struct VaultSecretStore: SecretStoring {
+    func read(_ account: String) -> Data? {
+        PasswordVault.shared.value(for: "sheepsync.\(account)", interactive: true)
+    }
+    @discardableResult
+    func write(_ account: String, _ value: Data) -> Bool {
+        PasswordVault.shared.set(value, for: "sheepsync.\(account)", interactive: true)
+    }
+    @discardableResult
+    func delete(_ account: String) -> Bool {
+        PasswordVault.shared.remove("sheepsync.\(account)", interactive: true)
     }
 }
