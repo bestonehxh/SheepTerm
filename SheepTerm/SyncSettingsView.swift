@@ -843,15 +843,27 @@ final class AccountCardPanel: NSObject, NSWindowDelegate {
         })
     }
 
+    /// The left button is down over the account button right now.
+    private func pressIsOnAnchor() -> Bool {
+        guard NSEvent.pressedMouseButtons & 1 != 0,
+              let anchor, let window = anchor.window else { return false }
+        let onScreen = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+        return onScreen.contains(NSEvent.mouseLocation)
+    }
+
     func windowDidResignKey(_ notification: Notification) {
         // Not while its own confirmation sheet or the picture chooser holds
         // the key — those are part of using the card.
         DispatchQueue.main.async { [weak self] in
             guard let self, let panel = self.panel else { return }
-            self.log("resignKey key=\(panel.isKeyWindow) app.key=\(String(describing: NSApp.keyWindow))")
+            self.log("resignKey key=\(panel.isKeyWindow) app.key=\(String(describing: NSApp.keyWindow)) onAnchor=\(self.pressIsOnAnchor())")
             if panel.isKeyWindow || panel.attachedSheet != nil { return }
             if let key = NSApp.keyWindow, key.sheetParent === panel || key is NSOpenPanel { return }
             if NSApp.isActive, NSApp.keyWindow == nil { return }
+            // A press on the account button took the key: its own action
+            // (on mouse-up) toggles the card closed. Closing here first made
+            // that toggle open it again — the card never closed.
+            if self.pressIsOnAnchor() { return }
             self.close()
         }
     }
