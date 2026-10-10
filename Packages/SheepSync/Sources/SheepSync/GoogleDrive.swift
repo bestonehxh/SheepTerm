@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// A signed-in Google account: turns the stored refresh token into short-
 /// lived access tokens, one refresh at a time.
@@ -80,8 +83,8 @@ public actor GoogleAccount {
 /// Google client created are visible to it, and the user's own Drive files
 /// are out of reach entirely (scope `drive.appdata`).
 public actor GoogleDriveBackend: SyncBackend {
-    static let api = "https://www.googleapis.com/drive/v3/files"
-    static let upload = "https://www.googleapis.com/upload/drive/v3/files"
+    static var api: String { GoogleOAuth.endpoint("/drive/v3/files", "https://www.googleapis.com/drive/v3/files").absoluteString }
+    static var upload: String { GoogleOAuth.endpoint("/upload/drive/v3/files", "https://www.googleapis.com/upload/drive/v3/files").absoluteString }
 
     private let account: GoogleAccount
     private let session: URLSession

@@ -1,5 +1,12 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The app's registration with Google (Google Cloud Console → Clients →
 /// Desktop app). Both values ship inside the app: Google's own guidance is
@@ -25,12 +32,19 @@ public struct GoogleClient: Sendable, Equatable {
 /// listener and the network calls are elsewhere, so all of this is testable
 /// without a browser or a network.
 public enum GoogleOAuth {
-    public static let authorizationEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
-    public static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
-    public static let revokeEndpoint = URL(string: "https://oauth2.googleapis.com/revoke")!
+    /// Test/debug seam: when set (a port's `SHEEPTERM_SYNC_ENDPOINTS` against a fake server), every Google URL below is
+    /// `<base>/auth`, `/token`, `/revoke`, `/userinfo` (and Drive `<base>/drive/v3/files`). Nothing on the Mac sets it.
+    nonisolated(unsafe) public static var endpointBase: URL?
+    static func endpoint(_ path: String, _ standard: String) -> URL {
+        if let base = endpointBase { return URL(string: base.absoluteString.trimmingSuffix("/") + path)! }
+        return URL(string: standard)!
+    }
+    public static var authorizationEndpoint: URL { endpoint("/auth", "https://accounts.google.com/o/oauth2/v2/auth") }
+    public static var tokenEndpoint: URL { endpoint("/token", "https://oauth2.googleapis.com/token") }
+    public static var revokeEndpoint: URL { endpoint("/revoke", "https://oauth2.googleapis.com/revoke") }
     /// Who is signed in, for a Mac that holds a sign-in but not the address
     /// (the state file was lost, or the sign-in came from elsewhere).
-    public static let userInfoEndpoint = URL(string: "https://openidconnect.googleapis.com/v1/userinfo")!
+    public static var userInfoEndpoint: URL { endpoint("/userinfo", "https://openidconnect.googleapis.com/v1/userinfo") }
 
     public struct Profile: Equatable, Sendable {
         public var email: String?
@@ -215,4 +229,8 @@ public enum GoogleOAuth {
         guard let code = parameters["code"], !code.isEmpty else { throw OAuthError.denied("no code") }
         return code
     }
+}
+
+private extension String {
+    func trimmingSuffix(_ suffix: String) -> String { hasSuffix(suffix) ? String(dropLast(suffix.count)) : self }
 }

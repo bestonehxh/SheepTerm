@@ -1,6 +1,10 @@
+import Foundation
+#if canImport(CryptoKit)
 import CommonCrypto
 import CryptoKit
-import Foundation
+#else
+import Crypto
+#endif
 
 /// Everything SheepSync encrypts goes through here. Apple primitives only:
 /// PBKDF2-HMAC-SHA256 from CommonCrypto, HKDF / AES-256-GCM / HMAC-SHA256
@@ -39,6 +43,41 @@ public enum PassphraseKDF {
         Data(passphrase.precomposedStringWithCanonicalMapping.utf8)
     }
 
+#if !canImport(CommonCrypto)
+    /// swift-crypto has no PBKDF2. A port (Windows) may install a faster one
+    /// (the app owns a pre-keyed SHA-256 loop); the default below is the plain
+    /// HMAC loop — the same function, only slow at 600 000 iterations.
+    nonisolated(unsafe) public static var portableImplementation: (@Sendable (Data, Data, Int, Int) -> Data)?
+
+    static func referencePBKDF2(password: Data, salt: Data, iterations: Int, length: Int) -> Data {
+        let base = HMAC<SHA256>(key: SymmetricKey(data: password))
+        var out = [UInt8]()
+        var block: UInt32 = 1
+        while out.count < length {
+            var m = base
+            m.update(data: salt)
+            m.update(data: [UInt8(block >> 24 & 0xFF), UInt8(block >> 16 & 0xFF), UInt8(block >> 8 & 0xFF), UInt8(block & 0xFF)])
+            var u = Array(m.finalize())
+            var t = u
+            if iterations > 1 {
+                for _ in 1..<iterations {
+                    var h = base
+                    h.update(data: u)
+                    u = Array(h.finalize())
+                    for i in 0..<t.count { t[i] ^= u[i] }
+                }
+            }
+            out.append(contentsOf: t)
+            block += 1
+        }
+        return Data(out.prefix(length))
+    }
+
+    public static func pbkdf2SHA256(password: Data, salt: Data, iterations: Int, length: Int) throws -> Data {
+        if let portableImplementation { return portableImplementation(password, salt, iterations, length) }
+        return referencePBKDF2(password: password, salt: salt, iterations: iterations, length: length)
+    }
+#else
     public static func pbkdf2SHA256(password: Data, salt: Data, iterations: Int, length: Int) throws -> Data {
         var derived = Data(count: length)
         let status = derived.withUnsafeMutableBytes { out in
@@ -56,14 +95,20 @@ public enum PassphraseKDF {
         guard status == kCCSuccess else { throw VaultCryptoError.keyDerivationFailed(status) }
         return derived
     }
+#endif
 }
 
 enum SecureRandom {
     static func bytes(_ count: Int) throws -> Data {
+#if !canImport(Security)
+        var generator = SystemRandomNumberGenerator()
+        return Data((0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+#else
         var data = Data(count: count)
         let status = data.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!) }
         guard status == errSecSuccess else { throw VaultCryptoError.randomFailed(status) }
         return data
+#endif
     }
 }
 

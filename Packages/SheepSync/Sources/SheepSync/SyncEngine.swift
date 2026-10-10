@@ -1,6 +1,15 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Network)
 import Network
+#endif
 import Observation
 
 /// Everything an app tells SheepSync about itself.
@@ -159,7 +168,9 @@ public final class SyncEngine {
     @ObservationIgnored private var syncAgain = false
     @ObservationIgnored private var currentRun: Task<Void, Never>?
     @ObservationIgnored private var cachedKeyFile: VaultKeyFile?
+#if canImport(Network)
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
+#endif
     /// Bumped by everything that changes WHICH vault/account this Mac is on
     /// (sign-in, sign-out, reset, adopting a key). Work that awaited across
     /// such a change must not act on its result — see `ensure(_:)`.
@@ -261,7 +272,12 @@ public final class SyncEngine {
         }
     }
 
+    /// Without Network.framework (Windows) the app reports reachability
+    /// itself: call this when the network goes away or comes back.
+    public func reportNetwork(online: Bool) { networkChanged(online: online) }
+
     private func watchNetwork() {
+#if canImport(Network)
         guard pathMonitor == nil else { return }
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
@@ -270,6 +286,7 @@ public final class SyncEngine {
         }
         monitor.start(queue: DispatchQueue(label: "SheepSync.path"))
         pathMonitor = monitor
+#endif
     }
 
     private func networkChanged(online: Bool) {

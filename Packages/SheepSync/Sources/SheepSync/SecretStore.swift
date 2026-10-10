@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
 /// The few secrets SheepSync keeps on a Mac — the Google refresh token and
 /// the unwrapped vault key — in the login Keychain under the app's own
@@ -9,6 +11,19 @@ public struct SecretStore: Sendable {
     public let service: String
 
     public init(service: String) { self.service = service }
+
+#if !canImport(Security)
+    /// Without a Keychain (Windows) the app supplies the store — its own
+    /// encrypted vault file — before the engine is created. With none set,
+    /// nothing can be kept, so nothing can be signed in.
+    nonisolated(unsafe) public static var portableStore: SecretStoring?
+
+    public func read(_ account: String) -> Data? { Self.portableStore?.read("sheepsync.\(account)") }
+    @discardableResult
+    public func write(_ account: String, _ value: Data) -> Bool { Self.portableStore?.write("sheepsync.\(account)", value) ?? false }
+    @discardableResult
+    public func delete(_ account: String) -> Bool { Self.portableStore?.delete("sheepsync.\(account)") ?? true }
+#else
 
     private func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -45,4 +60,5 @@ public struct SecretStore: Sendable {
         let status = SecItemDelete(query(account) as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
+#endif
 }
