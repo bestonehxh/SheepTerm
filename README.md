@@ -12,6 +12,23 @@ points: legacy-cipher SSH to old gear, serial consoles over USB adapters, device
 highlighted per vendor, hundreds of hosts organised by site and floor, and safe multi-line
 config pasting.
 
+## At a glance
+
+- **Vendor-aware highlighting** for switches, routers and firewalls.
+- **SSH, serial and local shell** with saved hosts and groups.
+- **Split panes** to keep several sessions visible.
+- **Optional Google sign-in** for passphrase-encrypted sync through your own Drive.
+- **Share host groups** through `.sheepterm` exports that strip credentials.
+
+[Website & screenshots](https://bestonehxh.github.io/sheepterm/) · [macOS download](https://github.com/bestonehxh/SheepTerm/releases/latest) · [Windows download](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest)
+
+<table>
+<tr><td><img src="https://bestonehxh.github.io/assets/mac/st-highlight.webp" alt="Vendor-aware Aruba CX output highlighting" width="560"></td><td><img src="https://bestonehxh.github.io/assets/mac/st-split.webp" alt="Split terminal panes" width="560"></td></tr>
+<tr><td>Vendor-aware highlighting</td><td>Split panes on macOS</td></tr>
+</table>
+
+Share Link is currently in testing and is not yet available in the public download. Linux support is coming soon.
+
 ## ⬇️ Download
 
 [![Download SheepTerm for macOS](https://img.shields.io/badge/Download-SheepTerm_5.0_%2816%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTerm/releases/latest)
