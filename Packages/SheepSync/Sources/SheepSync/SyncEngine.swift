@@ -4,7 +4,7 @@ import CryptoKit
 import Crypto
 #endif
 import Foundation
-#if canImport(FoundationNetworking)
+#if canImport(FoundationNetworking) && !os(Windows)
 import FoundationNetworking
 #endif
 #if canImport(Network)
@@ -157,9 +157,9 @@ public final class SyncEngine {
 
     @ObservationIgnored private let config: SyncConfiguration
     @ObservationIgnored private let secrets: SecretStoring
-    @ObservationIgnored private let makeBackend: @MainActor (GoogleAccount) -> SyncBackend
+    @ObservationIgnored private let transport: GoogleTransport
     @ObservationIgnored private var backend: SyncBackend?
-    @ObservationIgnored private var googleAccount: GoogleAccount?
+    @ObservationIgnored private var googleAccount: (any GoogleAccountProtocol)?
     @ObservationIgnored private var sealer: VaultSealer?
     @ObservationIgnored private var state: SyncLocalState
     @ObservationIgnored private var pending: Task<Void, Never>?
@@ -229,18 +229,36 @@ public final class SyncEngine {
         updateSession(in: secrets) { $0.vaultKey = key }
     }
 
+#if !os(Windows)
     public convenience init(configuration: SyncConfiguration) {
         self.init(configuration: configuration,
                   secrets: SecretStore(service: configuration.keychainService),
-                  makeBackend: { GoogleDriveBackend(account: $0) })
+                  transport: .urlSession)
     }
 
     /// Tests: any secret store and any backend.
-    public init(configuration: SyncConfiguration, secrets: SecretStoring,
-                makeBackend: @escaping @MainActor (GoogleAccount) -> SyncBackend) {
+    public convenience init(configuration: SyncConfiguration, secrets: SecretStoring,
+                            makeBackend: @escaping @MainActor (GoogleAccount) -> SyncBackend) {
+        // The backend factory is @MainActor (as it always was) and `attach` runs on the main actor.
+        self.init(configuration: configuration, secrets: secrets, transport: GoogleTransport(
+            exchangeCode: GoogleTransport.urlSession.exchangeCode,
+            makeAccount: { client, token, rotated in
+                let account = GoogleAccount(client: client, refreshToken: token, onNewRefreshToken: rotated)
+                let backend = MainActor.assumeIsolated { makeBackend(account) }
+                return (account, backend)
+            }))
+    }
+#endif
+
+    /// A platform's own Google transport (Windows: WinHTTP).
+    public convenience init(configuration: SyncConfiguration, transport: GoogleTransport) {
+        self.init(configuration: configuration, secrets: SecretStore(service: configuration.keychainService), transport: transport)
+    }
+
+    public init(configuration: SyncConfiguration, secrets: SecretStoring, transport: GoogleTransport) {
         config = configuration
         self.secrets = secrets
-        self.makeBackend = makeBackend
+        self.transport = transport
         state = Self.loadState(configuration)
         lastSync = state.lastSync
         phase = configuration.google.isConfigured ? .signedOut : .notConfigured
@@ -336,10 +354,7 @@ public final class SyncEngine {
             let parameters = try await receiver.waitForRedirect(timeout: 300)
             loopback = nil
             let code = try GoogleOAuth.code(from: parameters, expectedState: expected)
-            let (data, response) = try await URLSession.shared.data(
-                for: GoogleOAuth.codeExchangeRequest(client: config.google, code: code, pkce: pkce,
-                                                     redirectURI: redirect))
-            let answer = try GoogleOAuth.parseTokenResponse(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+            let answer = try await transport.exchangeCode(config.google, code, pkce, redirect)
             try ensure(started)
             guard let refresh = answer.refreshToken else {
                 throw GoogleOAuth.OAuthError.server("Google did not grant offline access")
@@ -398,11 +413,11 @@ public final class SyncEngine {
 
     private func attach(refreshToken: String) {
         let secrets = self.secrets
-        let account = GoogleAccount(client: config.google, refreshToken: refreshToken) { rotated in
+        let made = transport.makeAccount(config.google, refreshToken) { rotated in
             SyncEngine.setRefreshToken(rotated, in: secrets)
         }
-        googleAccount = account
-        backend = makeBackend(account)
+        googleAccount = made.account
+        backend = made.backend
     }
 
     private func ensure(_ started: Int) throws {

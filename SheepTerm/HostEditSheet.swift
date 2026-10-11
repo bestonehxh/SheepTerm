@@ -21,6 +21,7 @@ struct HostEditSheet: View {
     @State private var cipherMode: CipherMode
     @State private var agentForward: Bool
     @State private var disablePaging: Bool
+    @State private var noLog: Bool
     @State private var jumpHostID: UUID?
     /// The "Via jump host" field: a saved host's `user@address` while
     /// `jumpHostID` is set, else the typed bastion (`Host.jumpSpec`).
@@ -64,6 +65,7 @@ struct HostEditSheet: View {
         _cipherMode = State(initialValue: host.cipherMode ?? .auto)
         _agentForward = State(initialValue: host.agentForward ?? false)
         _disablePaging = State(initialValue: host.disablePaging ?? false)
+        _noLog = State(initialValue: host.skipsLog)
         // An id naming this host itself was never followed (`JumpTarget
         // .resolve`): shown as None rather than as an error.
         let jumpID = host.jumpHostID == host.id ? nil : host.jumpHostID
@@ -173,6 +175,8 @@ struct HostEditSheet: View {
                     }
                 }
                 .help("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
+                Toggle("Don't log this session", isOn: $noLog)
+                    .help("This host never writes a session log, even with Log Sessions to File on.")
                 if original.kind == .ssh {
                     // Greyed out, not explained: a family with no paging
                     // command (Auto, FortiOS) has nothing to send.
@@ -340,6 +344,7 @@ struct HostEditSheet: View {
         // Auto would let the completion path in `Host.completed` hand this
         // host another entry's family the next time it is opened as a target.
         host.vendor = vendor
+        host.noLog = noLog ? true : nil
         switch original.kind {
         case .ssh:
             // isValid already guarantees a parsed in-range port; the

@@ -4,8 +4,8 @@ import CryptoKit
 import Crypto
 #endif
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
+#if canImport(FoundationNetworking) && !os(Windows)
+import FoundationNetworking      // Windows talks to Google through its own transport (GoogleTransport): no libcurl there
 #endif
 
 /// The app's registration with Google (Google Cloud Console → Clients →
@@ -108,7 +108,7 @@ public enum GoogleOAuth {
         return parts.url!
     }
 
-    static func form(_ fields: [(String, String)]) -> Data {
+    public static func form(_ fields: [(String, String)]) -> Data {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         return Data(fields.map { name, value in
@@ -116,6 +116,24 @@ public enum GoogleOAuth {
         }.joined(separator: "&").utf8)
     }
 
+    /// The form fields of each token call, for a transport that builds its own POST (Windows). The URLRequest builders below use them too.
+    public static func codeExchangeFields(client: GoogleClient, code: String, pkce: PKCE, redirectURI: String) -> [(String, String)] {
+        var fields = [("client_id", client.clientID), ("code", code), ("code_verifier", pkce.verifier),
+                      ("grant_type", "authorization_code"), ("redirect_uri", redirectURI)]
+        if let secret = client.clientSecret, !secret.isEmpty { fields.append(("client_secret", secret)) }
+        return fields
+    }
+
+    public static func refreshFields(client: GoogleClient, refreshToken: String) -> [(String, String)] {
+        var fields = [("client_id", client.clientID), ("grant_type", "refresh_token"),
+                      ("refresh_token", refreshToken)]
+        if let secret = client.clientSecret, !secret.isEmpty { fields.append(("client_secret", secret)) }
+        return fields
+    }
+
+    public static func revokeFields(token: String) -> [(String, String)] { [("token", token)] }
+
+#if !os(Windows)
     static func post(_ url: URL, _ fields: [(String, String)]) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -126,22 +144,17 @@ public enum GoogleOAuth {
 
     public static func codeExchangeRequest(client: GoogleClient, code: String, pkce: PKCE,
                                            redirectURI: String) -> URLRequest {
-        var fields = [("client_id", client.clientID), ("code", code), ("code_verifier", pkce.verifier),
-                      ("grant_type", "authorization_code"), ("redirect_uri", redirectURI)]
-        if let secret = client.clientSecret, !secret.isEmpty { fields.append(("client_secret", secret)) }
-        return post(tokenEndpoint, fields)
+        post(tokenEndpoint, codeExchangeFields(client: client, code: code, pkce: pkce, redirectURI: redirectURI))
     }
 
     public static func refreshRequest(client: GoogleClient, refreshToken: String) -> URLRequest {
-        var fields = [("client_id", client.clientID), ("grant_type", "refresh_token"),
-                      ("refresh_token", refreshToken)]
-        if let secret = client.clientSecret, !secret.isEmpty { fields.append(("client_secret", secret)) }
-        return post(tokenEndpoint, fields)
+        post(tokenEndpoint, refreshFields(client: client, refreshToken: refreshToken))
     }
 
     public static func revokeRequest(token: String) -> URLRequest {
-        post(revokeEndpoint, [("token", token)])
+        post(revokeEndpoint, revokeFields(token: token))
     }
+#endif
 
     public struct TokenResponse: Equatable, Sendable {
         public var accessToken: String

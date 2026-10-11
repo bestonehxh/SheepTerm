@@ -59,7 +59,9 @@ struct QuickConnectSheet: View {
     @State private var saveSession = false
     @State private var groupSelection = QuickConnectSheet.defaultGroup
     @State private var newGroupName = ""
-    @State private var saveLog = UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true
+    /// "Don't log this session" -> `Host.noLog` (SSH and serial alike). Unticked =
+    /// follow File > Log Sessions to File.
+    @State private var noLog = false
 
     private static let defaultGroup = "Quick Connect"
     private static let newGroupTag = "\u{0}new-group"
@@ -195,9 +197,9 @@ struct QuickConnectSheet: View {
                             TextField("Group name", text: $newGroupName, prompt: Text("Branch — BKK"))
                         }
                     }
-                } else {
-                    Toggle("Save session log", isOn: $saveLog)
                 }
+                Toggle("Don't log this session", isOn: $noLog)
+                    .help("This session never writes a log file, even with Log Sessions to File on. Saved with the host if you save it.")
             }
             .textFieldStyle(.roundedBorder)
 
@@ -452,6 +454,7 @@ struct QuickConnectSheet: View {
         // endpoint. HostEditSheet has always stored the literal — the two
         // doors now say the same thing.
         host.vendor = vendor
+        host.noLog = noLog ? true : nil
         if kind == .ssh {
             host.disablePaging = disablePaging
             // Travels with the host into the session, a recent and a saved group.
@@ -488,7 +491,7 @@ struct QuickConnectSheet: View {
             host: host,
             saveTo: targetGroup,
             password: sessionPassword,
-            serialLog: kind == .serial ? saveLog : nil
+            serialLog: nil
         )
         dismiss()
     }

@@ -87,6 +87,24 @@ struct Host: Identifiable, Codable, Hashable {
     /// hosts.json written before it decodes unchanged. Unlike the id it
     /// travels in a `.sheepterm`: it means the same thing on any Mac.
     var jumpSpec: String? = nil
+    /// "Don't log this session": when true this host's sessions never create a
+    /// log file, whatever File > Log Sessions to File says. JSON key `noLog`
+    /// (same key on SheepTerm for Windows, so sync carries it). Optional like
+    /// the other flags so every file written before it decodes unchanged and
+    /// `false` is never written (nil = follow the global setting). Not a
+    /// secret: it travels in a `.sheepterm` and in Sync.
+    var noLog: Bool? = nil
+
+    /// Whether this host opts out of session logging, nil = no.
+    var skipsLog: Bool { noLog ?? false }
+
+    /// The one decision "does this session get a log file": a host that opts
+    /// out never does; every other one follows the global setting.
+    /// `override` is the Quick Connect serial choice (nil = none).
+    static func shouldLogSession(host: Host, global: Bool, override: Bool? = nil) -> Bool {
+        if host.skipsLog { return false }
+        return override ?? global
+    }
 
     /// The typed bastion as a VALUE: nil, "" and "   " all mean "none".
     var jumpSpecValue: String? {
@@ -148,6 +166,7 @@ struct Host: Identifiable, Codable, Hashable {
         if filled.agentForward == nil { filled.agentForward = match.agentForward }
         if filled.vendor == nil { filled.vendor = match.vendor }
         if filled.disablePaging == nil { filled.disablePaging = match.disablePaging }
+        if filled.noLog == nil { filled.noLog = match.noLog }
         // The path is one answer: a target that names a bastion either way
         // keeps it, and only one that names none takes the saved host's.
         if filled.jumpHostID == nil && filled.jumpSpecValue == nil {
@@ -2275,7 +2294,8 @@ enum BulkHostParser {
                          credentialID: UUID?,
                          credentialUsername: String?,
                          pastedUsername: String,
-                         section: String? = nil) -> Host? {
+                         section: String? = nil,
+                         noLog: Bool = false) -> Host? {
         let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
 
@@ -2313,7 +2333,8 @@ enum BulkHostParser {
                     port: port,
                     username: username,
                     credentialID: credentialID,
-                    section: (label?.isEmpty ?? true) ? nil : label)
+                    section: (label?.isEmpty ?? true) ? nil : label,
+                    noLog: noLog ? true : nil)
     }
 }
 
@@ -3268,6 +3289,7 @@ final class HostStore: ObservableObject {
             // Same reasoning: a file that changes only this must raise the
             // conflict, or Replace would silently keep the old answer.
             && (a.disablePaging ?? false) == (b.disablePaging ?? false)
+            && a.skipsLog == b.skipsLog
         // jumpHostID and jumpSpec are NOT compared: ShareCodec strips both
         // ways, so a file can never carry either and a Replace keeps ours
         // (like cipherMode).
@@ -3532,6 +3554,7 @@ final class HostStore: ObservableObject {
             recents[index].agentForward = new.agentForward
             recents[index].vendor = new.vendor
             recents[index].disablePaging = new.disablePaging
+            recents[index].noLog = new.noLog
             recents[index].jumpHostID = new.jumpHostID
             recents[index].jumpSpec = new.jumpSpec
             changed = true

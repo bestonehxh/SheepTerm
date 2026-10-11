@@ -861,6 +861,9 @@ final class AppModel: ObservableObject {
         if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
             diffs.append("disable paging: \((existing.disablePaging ?? false) ? "on" : "off") → \((incoming.disablePaging ?? false) ? "on" : "off")")
         }
+        if incoming.skipsLog != existing.skipsLog {
+            diffs.append("don't log this session: \(existing.skipsLog ? "on" : "off") → \(incoming.skipsLog ? "on" : "off")")
+        }
         // The saved-bastion id never travels (ShareCodec strips it, a Replace
         // keeps ours); a TYPED bastion does, and `sameForImport` compares it.
         if incoming.jumpSpecValue != existing.jumpSpecValue {
@@ -1470,6 +1473,9 @@ final class AppModel: ObservableObject {
         if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
             let label = { (on: Bool) in on ? "on" : "off" }
             changes.append("disable paging: \(label(existing.disablePaging ?? false)) → \(label(incoming.disablePaging ?? false))")
+        }
+        if incoming.skipsLog != existing.skipsLog {
+            changes.append("don't log this session: \(existing.skipsLog ? "on" : "off") → \(incoming.skipsLog ? "on" : "off")")
         }
         // The id and the typed spec are one answer ("which path"), described
         // as one line: the typed text is shown, a saved reference as "saved host".

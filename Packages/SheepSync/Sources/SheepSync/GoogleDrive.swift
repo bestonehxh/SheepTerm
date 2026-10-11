@@ -1,3 +1,6 @@
+// The Google Drive / token transport over URLSession. Apple only: Windows supplies its own `GoogleTransport` (WinHTTP), so SheepSync never
+// links FoundationNetworking / libcurl there. The pure parts (PKCE, URLs, form fields, parsing) stay in GoogleOAuth.swift.
+#if !os(Windows)
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -5,7 +8,7 @@ import FoundationNetworking
 
 /// A signed-in Google account: turns the stored refresh token into short-
 /// lived access tokens, one refresh at a time.
-public actor GoogleAccount {
+public actor GoogleAccount: GoogleAccountProtocol {
     public let client: GoogleClient
     private var refreshToken: String
     private var accessToken: String?
@@ -257,3 +260,18 @@ public actor GoogleDriveBackend: SyncBackend {
         throw SyncBackendError.notAuthorized
     }
 }
+
+extension GoogleTransport {
+    /// Today's behaviour on Apple platforms: URLSession for the code exchange, token refreshes and every Drive call.
+    public static let urlSession = GoogleTransport(
+        exchangeCode: { client, code, pkce, redirectURI in
+            let (data, response) = try await URLSession.shared.data(
+                for: GoogleOAuth.codeExchangeRequest(client: client, code: code, pkce: pkce, redirectURI: redirectURI))
+            return try GoogleOAuth.parseTokenResponse(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        },
+        makeAccount: { client, refreshToken, onNewRefreshToken in
+            let account = GoogleAccount(client: client, refreshToken: refreshToken, onNewRefreshToken: onNewRefreshToken)
+            return (account, GoogleDriveBackend(account: account))
+        })
+}
+#endif

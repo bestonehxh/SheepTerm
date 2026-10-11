@@ -43,6 +43,9 @@ struct AddHostsSheet: View {
     /// lands 40 rows off the bottom of the view is otherwise indistinguishable
     /// from one that landed nothing.
     @State private var status: String?
+    /// One box for the whole batch (no CSV column): every host added/imported
+    /// here gets `Host.noLog`.
+    @State private var noLog = false
 
     /// Which group the hosts land in. An enum rather than `UUID?`, because
     /// nil would have to mean both "create a new one" and "nothing picked".
@@ -246,6 +249,8 @@ struct AddHostsSheet: View {
                     .font(.system(size: 10))
                     .foregroundStyle(status == nil ? .secondary : .primary)
                 Spacer()
+                Toggle("Don't log this session", isOn: $noLog)
+                    .help("Hosts added here never write a session log, even with Log Sessions to File on.")
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button(addLabel) { add() }
@@ -1165,7 +1170,8 @@ struct AddHostsSheet: View {
                 credentialID: chosen?.id,
                 credentialUsername: chosen?.username,
                 pastedUsername: typedUsername,
-                section: label.isEmpty ? nil : label
+                section: label.isEmpty ? nil : label,
+                noLog: noLog
             ) else {
                 skipped += 1
                 continue

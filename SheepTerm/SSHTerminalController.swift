@@ -560,7 +560,7 @@ final class SSHTerminalController: NSObject {
             // controller that opened it is on its way out.
             adoptLogNotices(logger)
             printNotice("logging continues to \(logger.url.path)")
-        } else if UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true {
+        } else if Host.shouldLogSession(host: host, global: UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true) {
             do {
                 let opened = try SessionLogger.open(sessionName: sessionName)
                 adoptLogNotices(opened)
