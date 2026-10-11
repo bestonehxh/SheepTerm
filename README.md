@@ -14,6 +14,13 @@ config pasting.
 
 ## ⬇️ Download
 
+| Platform | Download | Requirements |
+|---|---|---|
+| 🍎 macOS | [**Latest release**](https://github.com/bestonehxh/SheepTerm/releases/latest) | macOS 26.4 (Tahoe) or later, Apple Silicon |
+| 🪟 Windows | [**Latest release**](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest) (portable zip) | Windows 10 / 11, 64-bit (x64) |
+| 🐧 Linux | Coming Soon | — |
+
+
 [![Download SheepTerm for macOS](https://img.shields.io/badge/Download-SheepTerm_5.0_%2815%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTerm/releases/latest)
 
 **[Get the latest release →](https://github.com/bestonehxh/SheepTerm/releases/latest)** — download `SheepTerm-5.0-15.zip`, unzip, and drag **SheepTerm.app** into `Applications`.
