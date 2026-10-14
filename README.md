@@ -20,7 +20,7 @@ config pasting.
 - **Optional Google sign-in** for passphrase-encrypted sync through your own Drive.
 - **Share host groups** through `.sheepterm` exports that strip credentials.
 
-[Website & screenshots](https://bestonehxh.github.io/sheepterm/) · [macOS download](https://github.com/bestonehxh/SheepTerm/releases/latest) · [Windows download](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest)
+[Website & screenshots](https://sheepterm.com/) · [macOS download](https://github.com/bestonehxh/SheepTerm/releases/latest) · [Windows download](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest)
 
 <table>
 <tr><td><img src="https://bestonehxh.github.io/assets/mac/st-highlight.webp" alt="Vendor-aware Aruba CX output highlighting" width="560"></td><td><img src="https://bestonehxh.github.io/assets/mac/st-split.webp" alt="Split terminal panes" width="560"></td></tr>
