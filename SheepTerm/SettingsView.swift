@@ -8,9 +8,26 @@ import UniformTypeIdentifiers
 /// only the one pane — the chrome, sidebar, connection, backup and library
 /// sections.
 struct SettingsView: View {
+    private enum Tab: Hashable { case general, ai }
+    /// Always opens on General (the window keeps its view between openings).
+    @State private var tab = Tab.general
+
     var body: some View {
-        GeneralSettingsView()
-            .frame(width: 700, height: 500)
+        TabView(selection: $tab) {
+            // General is exactly the pane it was before the tabs: 700 × 500.
+            GeneralSettingsView()
+                .frame(width: 700, height: 500)
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(Tab.general)
+            // AI sizes to its content.
+            AISettingsView()
+                .frame(width: 700)
+                .fixedSize(horizontal: false, vertical: true)
+                .tabItem { Label("AI", systemImage: "sparkles") }
+                .tag(Tab.ai)
+        }
+        .onAppear { tab = .general }
+        .onDisappear { tab = .general }
     }
 }
 
@@ -22,6 +39,7 @@ struct GeneralSettingsView: View {
     @AppStorage(ChromeStyle.storageKey) private var chromeStyle = ChromeStyle.glass
     @AppStorage(SessionTerminalHost.clipboardWriteKey) private var allowClipboardWrite = false
     @AppStorage(UpdateCore.autoCheckKey) private var checkForUpdatesAutomatically = true
+    @AppStorage(ShellIntegration.defaultsKey) private var realNetworkInfo = true
 
     var body: some View {
         Form {
@@ -41,8 +59,20 @@ struct GeneralSettingsView: View {
                 Picker("Font", selection: $model.terminalFontFamily) {
                     Text(Theme.fontFamilyLabel(Theme.systemFontFamily)).tag(Theme.systemFontFamily)
                     Divider()
-                    ForEach(Theme.availableMonospaceFamilies, id: \.self) { family in
+                    ForEach(Theme.terminalFontSections.platform, id: \.self) { family in
                         Text(family).tag(family)
+                    }
+                    if !Theme.terminalFontSections.bundled.isEmpty {
+                        Divider()
+                        ForEach(Theme.terminalFontSections.bundled, id: \.self) { family in
+                            Text(family).tag(family)
+                        }
+                    }
+                    if !Theme.terminalFontSections.other.isEmpty {
+                        Divider()
+                        ForEach(Theme.terminalFontSections.other, id: \.self) { family in
+                            Text(family).tag(family)
+                        }
                     }
                 }
                 Stepper(value: $model.terminalFontSize, in: Theme.fontSizeRange, step: 1) {
@@ -58,6 +88,10 @@ struct GeneralSettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 Toggle("Font smoothing", isOn: $model.terminalFontSmoothing)
+                if ShellIntegration.isNeeded {
+                    Toggle("Real MAC and ARP in local tabs", isOn: $realNetworkInfo)
+                        .help("macOS 27 hides MAC addresses and the ARP table from commands in a local tab. On: ifconfig, arp, ndp, netstat and networksetup run through launchd and show the real values. Applies to new local tabs.")
+                }
                 Text("Applied to every open tab immediately; the grid re-measures, so columns and rows change with it. Also in View → Terminal Font, with ⌘+ / ⌘− for the size. On a display running a scaled resolution (the 13″ Air's stock 1470 × 956 is one) the whole screen is resampled before it reaches the eye, and a larger or heavier face survives that better than a thin one; Termius draws roughly 14 pt Semibold. Font smoothing is macOS's stroke thickening: on it makes light-on-dark text bolder with a soft grey edge, off (the default) draws thinner, cleaner stems — the same edge the Claude app's text has.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)

@@ -40,6 +40,37 @@ struct WorkspaceView: NSViewRepresentable {
     }
 }
 
+/// What a pane holds: a session's terminal (`SessionTerminalHost`) or a web
+/// page (`WebTabController`). The pane tree only places `paneView`, hands
+/// the keyboard to `keyView`, and tells the content when it leaves the
+/// screen — the same view is reparented, never recreated.
+@MainActor
+protocol PaneContent: AnyObject {
+    /// The view the pane hosts.
+    var paneView: NSView { get }
+    /// What gets the keyboard when the pane is focused.
+    var keyView: NSView { get }
+    /// A connection / certificate card is up in this pane.
+    var hasPrompt: Bool { get }
+    var promptHasKeyboard: Bool { get }
+    @discardableResult func focusPrompt() -> Bool
+    /// Off screen (hidden pane, tab switched away, moved): stop anything
+    /// that must not run unseen (Safe Paste).
+    func paneDidHide()
+    /// Several panes: the first click only focuses (terminals).
+    func setPointerNeedsFocus(_ needsFocus: Bool)
+    /// The pane was reparented with the keyboard still on it.
+    func refreshFocusAppearance()
+}
+
+extension SessionTerminalHost: PaneContent {
+    var paneView: NSView { terminalView }
+    var keyView: NSView { terminalView }
+    func paneDidHide() { cancelSafePaste(reason: .sessionEnded) }
+    func setPointerNeedsFocus(_ needsFocus: Bool) { terminalView.pointerNeedsFocus = needsFocus }
+    func refreshFocusAppearance() { terminalView.setNeedsFrame() }
+}
+
 /// The AppKit side: leaf containers placed by `PaneLayout.rects`, divider
 /// strips between siblings. Flipped, so the model's top-left geometry maps
 /// straight onto view coordinates.
@@ -72,18 +103,18 @@ final class PaneTreeView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func terminalView(for session: UUID) -> TerminalView? {
-        leaves[session]?.terminalView
+    func keyView(for session: UUID) -> NSView? {
+        leaves[session]?.content.keyView
     }
 
     /// Give the keyboard to the workspace's focused pane, with the restraint
     /// the single-tab view always had: never take it from a text field or
     /// the sidebar outline.
     func focusFocusedPane() {
-        guard let state, let focused = terminalView(for: state.focused), let window = focused.window else { return }
+        guard let state, let focused = keyView(for: state.focused), let window = focused.window else { return }
         // A connection question up in the focused pane (4.2 (9)): the keyboard
         // goes to its card instead of the terminal — same restraint.
-        if let host = leaves[state.focused]?.host, host.hasPrompt {
+        if let host = leaves[state.focused]?.content, host.hasPrompt {
             if host.promptHasKeyboard { return }
             guard !keyboardIsElsewhere(in: window) else { return }
             host.focusPrompt()
@@ -94,9 +125,12 @@ final class PaneTreeView: NSView {
             // still on it — no become/resign, so nothing asked for the frame
             // that draws its cursor solid again (measured: the moved pane
             // kept a hollow cursor).
-            focused.setNeedsFrame()
+            leaves[state.focused]?.content.refreshFocusAppearance()
             return
         }
+        // Inside the pane already (a web page's own field, the web bar).
+        if let responder = window.firstResponder as? NSView, let pane = leaves[state.focused]?.content.paneView,
+           responder.isDescendant(of: pane) { return }
         guard !keyboardIsElsewhere(in: window) else { return }
         window.makeFirstResponder(focused)
     }
@@ -140,8 +174,8 @@ final class PaneTreeView: NSView {
             leaves[id] = nil
         }
         for id in workspace.sessions where leaves[id] == nil {
-            guard let host = AppModel.shared.terminalHost(ofSession: id) else { continue }
-            let leaf = PaneLeafView(host: host, session: id)
+            guard let content = AppModel.shared.paneContent(ofSession: id) else { continue }
+            let leaf = PaneLeafView(content: content, session: id)
             leaves[id] = leaf
             // Below the dividers, so their 9 pt grab stays theirs; a leaf
             // added on top of them had left about 4 pt (review finding).
@@ -177,7 +211,7 @@ final class PaneTreeView: NSView {
             // With several panes the pointer only reaches a pane's device once
             // that pane holds the keyboard (first click focuses; the wheel
             // scrolls our own scrollback). A lone pane: exactly as before.
-            leaf.terminalView.pointerNeedsFocus = several
+            leaf.content.setPointerNeedsFocus(several)
             leaf.setFocused(id == selected)
             leaf.updateCard()
         }
@@ -359,12 +393,12 @@ final class PaneTreeView: NSView {
     }
 }
 
-/// One session's slot: hosts its `TerminalView` and, when the tab has more
-/// than one pane, a header above it.
+/// One session's slot: hosts its `TerminalView` (or a web tab's view) and,
+/// when the tab has more than one pane, a header above it.
 final class PaneLeafView: NSView {
-    let host: SessionTerminalHost
+    let content: PaneContent
     let session: UUID
-    var terminalView: TerminalView { host.terminalView }
+    var terminalView: NSView { content.paneView }
     /// Space between the pane's edge and the terminal (set by the tree).
     var insets = NSEdgeInsets() {
         didSet { needsLayout = true }
@@ -380,8 +414,8 @@ final class PaneLeafView: NSView {
     private let header: PaneHeaderView
     private var titleWatch: AnyCancellable?
 
-    init(host: SessionTerminalHost, session: UUID) {
-        self.host = host
+    init(content: PaneContent, session: UUID) {
+        self.content = content
         self.session = session
         header = PaneHeaderView(session: session)
         super.init(frame: .zero)
@@ -390,10 +424,10 @@ final class PaneLeafView: NSView {
             guard let self, let window = self.window else { return }
             // The terminal's focus hook hands the keyboard on to a
             // connection question's card when one is up.
-            window.makeFirstResponder(self.terminalView)
+            window.makeFirstResponder(self.content.keyView)
         }
-        host.terminalView.autoresizingMask = [.width, .height]
-        addSubview(host.terminalView)
+        content.paneView.autoresizingMask = [.width, .height]
+        addSubview(content.paneView)
         addSubview(header)
         // The title and the connection status change under us (OSC titles,
         // reconnects); DetailPane does not re-render for a SessionTab's own
@@ -405,6 +439,7 @@ final class PaneLeafView: NSView {
                     guard let self, let tab else { return }
                     self.header.setTitle(title, detail: PaneHeaderView.detail(of: tab, title: title, status: status),
                                          dot: PaneHeaderView.dotColor(of: tab, status: status))
+                    self.header.isWeb = { if case .web = tab.content { return true } else { return false } }()
                 }
         }
     }
@@ -453,7 +488,7 @@ final class PaneLeafView: NSView {
     /// what stops it, as for a hidden tab.
     func hide() {
         if !isHidden {
-            host.cancelSafePaste(reason: .sessionEnded)
+            content.paneDidHide()
             if terminalView.superview === self { terminalView.removeFromSuperview() }
         }
         isHidden = true
@@ -479,7 +514,7 @@ final class PaneLeafView: NSView {
     /// home and the tab showed nothing (measured, 4.2 (7)).
     func detach() {
         guard terminalView.superview === self else { return }
-        host.cancelSafePaste(reason: .sessionEnded)
+        content.paneDidHide()
         terminalView.removeFromSuperview()
     }
 }
@@ -525,7 +560,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         closeButton.font = .systemFont(ofSize: 11)
         closeButton.target = self
         closeButton.action = #selector(closePane)
-        closeButton.toolTip = "Close Pane"
         closeButton.contentTintColor = NSColor(Theme.dimText)
         addSubview(closeButton)
         applyColors()
@@ -553,6 +587,9 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             return down ? "\(address) · disconnected" : address
         case .serial:
             return status
+        case .web(let controller):
+            let host = WebAddress.displayHost(of: controller.currentURL)
+            return host == title ? nil : host
         }
     }
 
@@ -564,7 +601,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         case .local: return NSColor(Theme.ok)
         case .ssh: return down ? SheepAlert.destructiveRed : NSColor(Theme.accent)
         case .serial: return down ? SheepAlert.destructiveRed : NSColor(Theme.warn)
+        case .web: return NSColor(Theme.web)
         }
+    }
+
+    /// A web tab: a globe instead of the status dot (no favicons).
+    var isWeb = false {
+        didSet { if isWeb != oldValue { needsDisplay = true } }
     }
 
     func setTitle(_ title: String, detail: String?, dot: NSColor) {
@@ -602,9 +645,38 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         bounds.fill()
         // Drawn, not a layer: the drag image is a cacheDisplay snapshot,
         // which only sees what draw(_:) paints.
+        if isWeb, let globe = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold)) {
+            let tinted = NSImage(size: globe.size, flipped: false) { rect in
+                globe.draw(in: rect)
+                self.dot.set()
+                rect.fill(using: .sourceAtop)
+                return true
+            }
+            let size = globe.size
+            tinted.draw(in: CGRect(x: 8 + (Self.dotSize - size.width) / 2, y: (bounds.height - size.height) / 2,
+                                   width: size.width, height: size.height),
+                        from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            return
+        }
         dot.setFill()
         NSBezierPath(ovalIn: CGRect(x: 8, y: (bounds.height - Self.dotSize) / 2,
                                     width: Self.dotSize, height: Self.dotSize)).fill()
+    }
+
+    /// Right-click on a web pane's header: Save as Host….
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard isWeb else { return nil }
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Save as Host…", action: #selector(saveAsHost), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func saveAsHost() {
+        guard let tab = AppModel.shared.tab(id: session) else { return }
+        AppModel.shared.saveWebTabAsHost(tab)
     }
 
     @objc private func closePane() {

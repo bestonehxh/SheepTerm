@@ -186,13 +186,15 @@ struct SessionStatusText: View {
             return tab.statusInfo ?? "connecting to \(controller.host.address)…"
         case .serial(let controller):
             return tab.statusInfo ?? "opening \(controller.host.address)…"
+        case .web(let controller):
+            return tab.statusInfo ?? "loading \(WebAddress.displayHost(of: controller.host.address))…"
         }
     }
 
     private var isRemote: Bool {
         switch tab.content {
         case .ssh, .serial: return true
-        case .local: return false
+        case .local, .web: return false
         }
     }
 
@@ -250,7 +252,6 @@ struct SessionStatusText: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("\(connectionStateText) · Highlight \(tab.highlightEnabled ? "ON" : "OFF") — click to toggle (⌘⇧H)")
                 // The pack this session colours with, and a one-click way to
                 // correct it: a serial console does not announce its vendor,
                 // so the first thing you learn about a box is often that it
@@ -271,7 +272,6 @@ struct SessionStatusText: View {
                 .fixedSize()
                 .foregroundStyle(Theme.dimText)
                 .opacity(tab.highlightEnabled ? 1 : 0.4)
-                .help("Highlight rules for this session — \(tab.highlightVendor.label)")
             }
         }
     }

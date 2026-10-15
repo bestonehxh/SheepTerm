@@ -182,10 +182,24 @@ nonisolated enum UpdateCore {
     static let checkInterval: TimeInterval = 24 * 60 * 60
     /// The largest zip an update may be (the app is ~10 MB).
     static let maxZipBytes = 300 * 1024 * 1024
+    /// The largest release-JSON response read (GitHub's is a few KB).
+    static let maxReleaseJSONBytes = 1_000_000
+    /// A deferred automatic offer (another dialog was up) is retried this
+    /// often until the screen is quiet — not left for the next 300 s tick.
+    static let deferredRetryDelay: TimeInterval = 5
     /// A base64 Ed25519 signature is 88 characters; anything past this is not one.
     static let maxSignatureBytes = 1024
     static let notesMaxCharacters = 4000
     static let notesMaxLines = 60
+
+    /// Whether a streamed body has passed its cap (checked WHILE it streams).
+    static func exceedsCap(received: Int64, max: Int) -> Bool { received > Int64(max) }
+
+    /// "3.2 of 9.8 MB" for the progress panel; "3.2 MB" when the total is unknown.
+    static func megabytes(_ got: Int64, of total: Int64) -> String {
+        func mb(_ n: Int64) -> String { String(format: "%.1f", Double(n) / 1_048_576) }
+        return total > 0 ? "\(mb(got)) of \(mb(total)) MB" : "\(mb(got)) MB"
+    }
 
     // MARK: UserDefaults keys (the app's own domain, so no prefix is needed)
 

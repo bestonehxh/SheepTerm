@@ -18,6 +18,24 @@ nonisolated struct Snippet: Identifiable, Codable, Hashable, Sendable {
     var payload: String { sendReturn ? text + "\n" : text }
 }
 
+/// How app-composed text reaches the device (Snippets, Broadcast): the body
+/// is PASTED and the Return is its own CR afterwards. Folding the newline into
+/// the paste puts the CR inside ESC[200~…ESC[201~ when the shell asked for
+/// bracketed paste (bash/zsh), so the command is inserted but never run. A
+/// network CLI that never asked for it sees body then CR, the same bytes as
+/// before. Same shape as the Windows port.
+nonisolated enum CommandSendPlan {
+    /// `payload` as `Snippet.payload` / `BroadcastPlan.sends` build it: one
+    /// trailing LF means "press Return"; everything before it is the body.
+    static func split(_ payload: String) -> (body: String, thenReturn: Bool) {
+        guard payload.hasSuffix("\n") else { return (payload, false) }
+        return (String(payload.dropLast()), true)
+    }
+
+    /// The bytes of the separate Return.
+    static let returnKey: [UInt8] = [0x0D]
+}
+
 // MainActor (not `nonisolated`): `ConfigurationHygiene.cleanedName` is main-actor bound.
 enum SnippetCodec {
     /// Same hygiene every other name in the app gets: control characters
@@ -128,7 +146,7 @@ nonisolated enum BroadcastPlan {
         /// disconnected or reconnecting — the text would go nowhere, or to
         /// a login prompt.
         var eligible: Bool {
-            guard kind != .local, let status else { return false }
+            guard kind.isDeviceSession, let status else { return false }
             return !status.hasPrefix("disconnected") && !status.hasPrefix("reconnect")
         }
     }

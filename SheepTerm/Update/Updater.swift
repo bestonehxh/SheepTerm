@@ -93,6 +93,22 @@ final class Updater {
         }
     }
 
+    /// A deferred offer is retried every `deferredRetryDelay` until no modal
+    /// is up; this does not touch the background check schedule.
+    private var deferredTimer: Timer?
+    private func scheduleDeferredRetry() {
+        deferredTimer?.invalidate()
+        deferredTimer = Timer.scheduledTimer(withTimeInterval: UpdateCore.deferredRetryDelay, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                self.deferredTimer = nil
+                guard let deferred = self.deferredOffer else { return }
+                if Self.modalIsUp { self.scheduleDeferredRetry(); return }
+                self.deferredOffer = nil
+                self.presentOffer(deferred.0, current: deferred.1, manual: false)
+            }
+        }
+    }
+
     private func tick() {
         if let deferred = deferredOffer, !Self.modalIsUp {
             deferredOffer = nil
@@ -140,7 +156,8 @@ final class Updater {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue(config.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, response): (Data, URLResponse)
-        do { (data, response) = try await session.data(for: request) }
+        do { (data, response) = try await capped(request, maxBytes: UpdateCore.maxReleaseJSONBytes) }
+        catch let error as UpdateError { throw error }
         catch { throw UpdateError.notInstallable("Could not reach GitHub. Check the internet connection.\n\n\(error.localizedDescription)") }
         if let http = response as? HTTPURLResponse, let error = UpdateCore.statusError(http.statusCode) {
             throw error
@@ -190,6 +207,7 @@ final class Updater {
                 let offer = try UpdateCore.offer(from: release, config: config)
                 if !manual, Self.modalIsUp {
                     deferredOffer = (offer, current)
+                    scheduleDeferredRetry()
                     return
                 }
                 presentOffer(offer, current: current, manual: manual)
@@ -355,7 +373,13 @@ final class Updater {
         try Task.checkCancellation()
         var request = URLRequest(url: offer.zipURL)
         request.setValue(config.userAgent, forHTTPHeaderField: "User-Agent")
-        let (tmp, response) = try await session.download(for: request)
+        let (tmp, response) = try await UpdateDownloader.download(
+            request, maxBytes: UpdateCore.maxZipBytes,
+            progress: { got, total in
+                Task { @MainActor in
+                    progress.setProgress(got, of: total > 0 ? total : Int64(offer.zipSize))
+                }
+            })
         try Task.checkCancellation()
         if let http = response as? HTTPURLResponse, let error = UpdateCore.statusError(http.statusCode) {
             throw error
@@ -392,12 +416,25 @@ final class Updater {
     private func fetch(_ url: URL, maxBytes: Int) async throws -> Data {
         var request = URLRequest(url: url)
         request.setValue(config.userAgent, forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await capped(request, maxBytes: maxBytes)
         if let http = response as? HTTPURLResponse, let error = UpdateCore.statusError(http.statusCode) {
             throw error
         }
-        guard data.count <= maxBytes else { throw UpdateError.tooLarge(url.lastPathComponent) }
         return data
+    }
+
+    /// A small body read with a hard cap WHILE it streams: stops at the cap
+    /// instead of buffering whatever the server sends.
+    private func capped(_ request: URLRequest, maxBytes: Int) async throws -> (Data, URLResponse) {
+        let name = request.url?.lastPathComponent ?? "response"
+        let (bytes, response) = try await session.bytes(for: request)
+        if response.expectedContentLength > Int64(maxBytes) { throw UpdateError.tooLarge(name) }
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > maxBytes { throw UpdateError.tooLarge(name) }
+        }
+        return (data, response)
     }
 
     /// A tool's exit status, waited for off the main thread.
@@ -486,6 +523,7 @@ final class UpdateProgressPanel: NSObject {
     var onCancel: (() -> Void)?
     private let panel: NSPanel
     private let label: NSTextField
+    private let bar: NSProgressIndicator
     private var closed = false
 
     init(title: String) {
@@ -526,6 +564,7 @@ final class UpdateProgressPanel: NSObject {
         panel.contentView = content
         self.panel = panel
         self.label = label
+        self.bar = bar
         super.init()
         cancel.target = self
         cancel.action = #selector(cancelPressed)
@@ -543,7 +582,20 @@ final class UpdateProgressPanel: NSObject {
         panel.orderFront(nil)
     }
 
-    func setStatus(_ text: String) { label.stringValue = text }
+    func setStatus(_ text: String) {
+        label.stringValue = text
+        if text == "Verifying…" { bar.isIndeterminate = true; bar.startAnimation(nil) }
+    }
+
+    /// Determinate "x of y MB" once the download reports its size.
+    func setProgress(_ got: Int64, of total: Int64) {
+        guard !closed else { return }
+        if total > 0 {
+            if bar.isIndeterminate { bar.stopAnimation(nil); bar.isIndeterminate = false; bar.minValue = 0; bar.maxValue = 1 }
+            bar.doubleValue = min(1, Double(got) / Double(total))
+        }
+        label.stringValue = "Downloading… " + UpdateCore.megabytes(got, of: total)
+    }
 
     func close() {
         guard !closed else { return }
@@ -554,5 +606,72 @@ final class UpdateProgressPanel: NSObject {
     @objc private func cancelPressed() {
         onCancel?()
         close()
+    }
+}
+
+/// The zip download: a delegate task so the byte count is seen WHILE it
+/// streams and the transfer is cut off past `maxBytes`, instead of after the
+/// whole file landed. The finished file is moved out of the session's temp
+/// location inside the delegate callback (it is deleted when it returns).
+final class UpdateDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let maxBytes: Int
+    private let progress: @Sendable (Int64, Int64) -> Void
+    private var continuation: CheckedContinuation<(URL, URLResponse), Error>?
+    private var session: URLSession?
+    private var tooBig = false
+    private var moved: URL?
+
+    private init(maxBytes: Int, progress: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.maxBytes = maxBytes
+        self.progress = progress
+    }
+
+    static func download(_ request: URLRequest, maxBytes: Int,
+                         progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse) {
+        let worker = UpdateDownloader(maxBytes: maxBytes, progress: progress)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 600
+        let session = URLSession(configuration: configuration, delegate: worker, delegateQueue: nil)
+        worker.session = session
+        let task = session.downloadTask(with: request)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<(URL, URLResponse), Error>) in
+                worker.continuation = c
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        if UpdateCore.exceedsCap(received: totalBytesWritten, max: maxBytes)
+            || UpdateCore.exceedsCap(received: totalBytesExpectedToWrite, max: maxBytes) {
+            tooBig = true
+            downloadTask.cancel()
+            return
+        }
+        progress(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        let keep = FileManager.default.temporaryDirectory.appendingPathComponent("update-\(UUID().uuidString).zip")
+        do { try FileManager.default.moveItem(at: location, to: keep); moved = keep } catch { moved = nil }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        defer { session.finishTasksAndInvalidate(); continuation = nil }
+        if tooBig {
+            continuation?.resume(throwing: UpdateError.tooLarge("the update"))
+        } else if let error {
+            continuation?.resume(throwing: error)
+        } else if let moved, let response = task.response {
+            continuation?.resume(returning: (moved, response))
+        } else {
+            continuation?.resume(throwing: UpdateError.notInstallable("The download could not be saved."))
+        }
     }
 }

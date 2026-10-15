@@ -226,7 +226,7 @@ nonisolated enum CommandHistory {
     /// shell has none — it is not a device.
     static func key(kind: ConnectionKind, savedID: UUID?, username: String, address: String, port: Int) -> String? {
         switch kind {
-        case .local:
+        case .local, .web, .unsupported:
             return nil
         case .ssh, .serial:
             if let savedID { return "host:" + savedID.uuidString }

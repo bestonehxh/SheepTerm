@@ -136,7 +136,43 @@ final class SessionTerminalHost {
     func sendCommand(_ text: String) -> Bool {
         sendingCommand = true
         defer { sendingCommand = false }
-        return terminalView.pasteText(text)
+        // Body pasted, Return as its own CR (`CommandSendPlan`): inside a
+        // bracketed paste the CR would not run the command. A veto (Safe
+        // Paste paces the lines itself, each with its own CR) sends no extra.
+        let plan = CommandSendPlan.split(text)
+        guard !plan.body.isEmpty else {
+            if plan.thenReturn { terminalView.send(CommandSendPlan.returnKey, keystroke: false) }
+            return plan.thenReturn
+        }
+        guard terminalView.pasteText(plan.body) else { return false }
+        if plan.thenReturn { terminalView.send(CommandSendPlan.returnKey, keystroke: false) }
+        return true
+    }
+
+    /// The AI panel's "Paste into Tab" (`AIPasteRoute`): one line is typed
+    /// with no Return; several lines ALWAYS get the Safe Paste review — in
+    /// every tab kind, whatever the Safe Paste setting — with no "Paste
+    /// Immediately", and the last line is left typed without its CR. The
+    /// model can never run anything; the user presses Return.
+    @discardableResult
+    func pasteFromAI(_ code: String) -> Bool {
+        switch AIPasteRoute.route(code) {
+        case .empty:
+            return false
+        case .typeLine(let line):
+            // One line, no line break: nothing to review and nothing runs.
+            pastingImmediately = true
+            defer { pastingImmediately = false }
+            return terminalView.pasteText(line)
+        case .review(let plan):
+            guard !pastePromptPresented else { NSSound.beep(); return false }
+            if pastePacer.isActive { cancelSafePaste(reason: .replaced) }
+            presentSafePasteConfirmation(plan: plan, originalText: plan.lines.joined(separator: "\n"), allowImmediate: false)
+            return false
+        case .refused(let error):
+            showPasteLimitAlert(error == .tooManyLines ? "The block contains more than 10,000 lines." : "The block is larger than 5 MB.")
+            return false
+        }
     }
 
     private static let pasteDelayKey = "safePasteDelayMilliseconds"
@@ -571,7 +607,7 @@ final class SessionTerminalHost {
         return CommandHistoryCapture.command(fromRow: line)
     }
 
-    private func presentSafePasteConfirmation(plan: SafePastePlan, originalText: String) {
+    private func presentSafePasteConfirmation(plan: SafePastePlan, originalText: String, allowImmediate: Bool = true) {
         let alert = SheepAlert()
         alert.alertStyle = .informational
         // A working dialog, landscape and one fixed size (the accessory's
@@ -581,7 +617,7 @@ final class SessionTerminalHost {
         let target = sessionLabel.map { " to \($0)" } ?? ""
         alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending\(target)."
         alert.addButton(withTitle: "Send Line by Line")
-        alert.markCaution(alert.addButton(withTitle: "Paste Immediately"))
+        if allowImmediate { alert.markCaution(alert.addButton(withTitle: "Paste Immediately")) }
         alert.addButton(withTitle: "Cancel")
 
         let reviewLabel = NSTextField(labelWithString: "Commands to send:")
@@ -665,7 +701,7 @@ final class SessionTerminalHost {
                 let delay = popup?.selectedItem?.representedObject as? Int ?? 200
                 UserDefaults.standard.set(delay, forKey: Self.pasteDelayKey)
                 self.startSafePaste(plan: plan, delayMilliseconds: delay)
-            case .alertSecondButtonReturn:
+            case .alertSecondButtonReturn where allowImmediate:
                 self.sendImmediatePaste(originalText)
             default:
                 break

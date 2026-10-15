@@ -55,6 +55,14 @@ final class SheepTermSync: SyncDataSource {
         let secret = (info["SheepSyncGoogleClientSecret"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         let id = SyncPolicy.usableClientID(id: info["SheepSyncGoogleClientID"] as? String ?? "", secret: secret)
         let client = GoogleClient(clientID: id, clientSecret: secret)
+#if DEBUG
+        // Debug builds only: SHEEPTERM_SYNC_ENDPOINTS=http://127.0.0.1:<port> points every Google URL at Tools/fake-google-share.py
+        // (loopback only). Compiled out of Release, so no shipped app can be redirected.
+        if let raw = ProcessInfo.processInfo.environment["SHEEPTERM_SYNC_ENDPOINTS"], let url = URL(string: raw),
+           url.scheme == "http", url.host == "127.0.0.1" {
+            GoogleOAuth.endpointBase = url
+        }
+#endif
         // Sync's session (refresh token + vault key) lives in the same
         // one-item PasswordVault as the host passwords: one Keychain prompt
         // per update for everything, not one more for Sync.
@@ -63,6 +71,16 @@ final class SheepTermSync: SyncDataSource {
             stateDirectory: BackupManager.baseDirectory, deviceName: ShareCodec.deviceName),
             secrets: VaultSecretStore(), makeBackend: { GoogleDriveBackend(account: $0) })
         engine.openURL = { NSWorkspace.shared.open($0) }
+#if DEBUG
+        // Debug builds only: SHEEPTERM_SYNC_OPEN=fetch follows the (loopback fake) authorization URL with URLSession instead of opening the
+        // user's browser. Never used for anything but http://127.0.0.1.
+        if ProcessInfo.processInfo.environment["SHEEPTERM_SYNC_OPEN"] == "fetch" {
+            engine.openURL = { url in
+                guard url.scheme == "http", url.host == "127.0.0.1" else { return }
+                Task { _ = try? await URLSession.shared.data(from: url) }
+            }
+        }
+#endif
         engine.dataSource = self
     }
 
@@ -281,7 +299,10 @@ final class SheepTermSync: SyncDataSource {
             let key = String(id.dropFirst("setting:".count))
             guard Self.syncedSettingKeys.contains(key) else { continue }
             if let data = change, let value = try? decoder.decode(BackupManager.Setting.self, from: data) {
-                UserDefaults.standard.set(value.objectValue, forKey: key)
+                // Clamped into the range the app enforces locally (a
+                // NaN has nothing to clamp to: not applied, counted failed).
+                guard let bounded = value.boundedObject(forKey: key) else { failed.insert(id); continue }
+                UserDefaults.standard.set(bounded, forKey: key)
                 // Only the key written: a setting the user changed meanwhile
                 // must still look changed to the defaults observer.
                 lastSettings[key] = data

@@ -21,9 +21,18 @@ public struct GoogleTransport: Sendable {
     /// An account for a stored refresh token, with the Drive backend that uses it. `onNewRefreshToken` is called when Google rotates it.
     public var makeAccount: @Sendable (_ client: GoogleClient, _ refreshToken: String, _ onNewRefreshToken: @escaping @Sendable (String) -> Void) -> (account: any GoogleAccountProtocol, backend: SyncBackend)
 
+    /// Share links: the Drive calls for one account. nil = this platform has no share support (yet).
+    public var makeShareBackend: (@Sendable (_ account: any GoogleAccountProtocol) -> ShareBackend)?
+    /// Share links, recipient side: the public download (no account, no scope).
+    public var makeShareDownloader: (@Sendable () -> ShareDownloader)?
+
     public init(exchangeCode: @escaping @Sendable (GoogleClient, String, GoogleOAuth.PKCE, String) async throws -> GoogleOAuth.TokenResponse,
-                makeAccount: @escaping @Sendable (GoogleClient, String, @escaping @Sendable (String) -> Void) -> (account: any GoogleAccountProtocol, backend: SyncBackend)) {
+                makeAccount: @escaping @Sendable (GoogleClient, String, @escaping @Sendable (String) -> Void) -> (account: any GoogleAccountProtocol, backend: SyncBackend),
+                makeShareBackend: (@Sendable (any GoogleAccountProtocol) -> ShareBackend)? = nil,
+                makeShareDownloader: (@Sendable () -> ShareDownloader)? = nil) {
         self.exchangeCode = exchangeCode
         self.makeAccount = makeAccount
+        self.makeShareBackend = makeShareBackend
+        self.makeShareDownloader = makeShareDownloader
     }
 }

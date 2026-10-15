@@ -1,0 +1,19 @@
+#!/bin/sh
+# SheepTerm shell integration (ARCHITECTURE.md §23): installed as ifconfig, arp, ndp, netstat and networksetup in a local
+# tab's PATH. macOS 27 hides link-layer addresses and the neighbour tables from programs started inside an app without a
+# Developer ID; run-outside runs the REAL command as a launchd job, where it sees them. Output is never edited.
+name=${0##*/}
+case $name in
+    ifconfig) real=/sbin/ifconfig ;;
+    arp) real=/usr/sbin/arp ;;
+    ndp) real=/usr/sbin/ndp ;;
+    netstat) real=/usr/sbin/netstat ;;
+    networksetup)
+        real=/usr/sbin/networksetup
+        # Only the read-only listings; anything that may ask for a password keeps its terminal.
+        case $1 in -listallhardwareports|-getmacaddress) ;; *) exec "$real" "$@" ;; esac ;;
+    *) echo "sheepterm: no such wrapper: $name" >&2; exit 127 ;;
+esac
+# root already sees everything, and has no GUI launchd domain to run in.
+[ "$(/usr/bin/id -u)" = 0 ] && exec "$real" "$@"
+exec "${0%/*}/../run-outside" "$real" "$@"

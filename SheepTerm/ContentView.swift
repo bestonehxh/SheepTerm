@@ -214,6 +214,23 @@ struct SidebarResizeHandle: View {
 struct DetailPane: View {
     @EnvironmentObject var model: AppModel
 
+    /// The terminal's margin (10 / 4 / 6, unchanged) — except where a web
+    /// page is shown: a lone web pane fills the area edge to edge (its bar
+    /// is the top edge), and a split holding one gets the same 4 pt as the
+    /// gaps between panes on every side, so nothing sits off-centre.
+    static func inset(for workspace: WorkspaceState, model: AppModel) -> (leading: CGFloat, trailing: CGFloat, top: CGFloat) {
+        func isWeb(_ id: UUID) -> Bool {
+            if case .web? = model.tab(id: id)?.content { return true }
+            return false
+        }
+        let terminal: (CGFloat, CGFloat, CGFloat) = (10, 4, 6)
+        if let zoomed = workspace.zoomed { return isWeb(zoomed) ? (0, 0, 0) : terminal }
+        guard workspace.sessions.contains(where: isWeb) else { return terminal }
+        if workspace.paneCount == 1 { return (0, 0, 0) }
+        let gap = PaneTreeView.dividerThickness
+        return (gap, gap, gap)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
@@ -224,15 +241,17 @@ struct DetailPane: View {
                 // The selected WORKSPACE: one pane, or several split
                 // (4.2 (7)). Hidden workspaces hold no views at all.
                 if let workspace = model.selectedWorkspace {
+                    let inset = Self.inset(for: workspace, model: model)
                     WorkspaceView(workspace: workspace, selectedSession: model.selectedID)
-                        .padding(.leading, 10)
-                        .padding(.trailing, 4)
-                        .padding(.top, 6)
+                        .padding(.leading, inset.leading)
+                        .padding(.trailing, inset.trailing)
+                        .padding(.top, inset.top)
                         .id(workspace.id)
                 } else {
                     EmptyPaneView()
                 }
             }
+            .aiPanel()
             if model.showStatusBar
                 && (model.statusShowSession || model.statusShowHints
                     || model.statusShowIP || model.statusShowClock) {
@@ -244,7 +263,11 @@ struct DetailPane: View {
         // chrome OVER the tab bar living in that row.
         .background(Theme.chrome, ignoresSafeAreaEdges: [])
         .sheet(item: $model.quickConnect) { request in
-            QuickConnectSheet(kind: request.kind, addOnly: request.addOnly)
+            if request.addOnly {
+                AddHostSheet(kind: request.kind, webPrefill: request.webPrefill)
+            } else {
+                QuickConnectSheet(kind: request.kind, addOnly: request.addOnly)
+            }
         }
         .sheet(isPresented: $model.showCredentials) {
             CredentialsSheet()
@@ -254,6 +277,9 @@ struct DetailPane: View {
         }
         .sheet(isPresented: $model.showLogSearch) {
             LogSearchSheet()
+        }
+        .sheet(isPresented: $model.showNetworkInfo) {
+            NetworkInfoSheet()
         }
         .sheet(isPresented: $model.showSnippets) {
             SnippetsSheet()
@@ -281,6 +307,15 @@ struct DetailPane: View {
         }
         .sheet(item: $model.groupCredentialRequest) { request in
             GroupCredentialSheet(request: request)
+        }
+        .sheet(item: $model.shareLinkRequest) { request in
+            ShareLinkSheet(request: request)
+        }
+        .sheet(item: $model.importLinkRequest) { request in
+            ImportLinkSheet(request: request)
+        }
+        .sheet(isPresented: $model.showSharedLinks) {
+            SharedLinksSheet()
         }
     }
 }
@@ -322,7 +357,6 @@ struct TopBarView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.dimText)
-                .help("Toggle sidebar (⌘0)")
 
                 Button {
                     model.showQuickSearch = true
@@ -334,7 +368,6 @@ struct TopBarView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.dimText)
-                .help("Quick Connect (⌘K)")
             }
             .popover(isPresented: $model.showQuickSearch, arrowEdge: .bottom) {
                 QuickSearchView()
@@ -355,6 +388,7 @@ struct TopBarView: View {
                 Divider()
                 Button("New SSH Connection…") { model.openQuickConnect(.ssh) }
                 Button("New Serial Console…") { model.openQuickConnect(.serial) }
+                Button("New Web Tab") { model.newWebTab() }
                 Divider()
                 Button("Credentials…") { model.showCredentials = true }
             } label: {
@@ -367,7 +401,8 @@ struct TopBarView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("New session")
+
+            AIPanelToggleButton()
         }
         .padding(.horizontal, 8)
         .frame(height: 30)

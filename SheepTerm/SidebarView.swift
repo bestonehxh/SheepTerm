@@ -232,7 +232,7 @@ struct SidebarView: View {
     }
 
     private var searchConnectTarget: Host? {
-        ConnectParser.parse(searchText)
+        ConnectParser.parseConnectBox(searchText)
     }
 
     var body: some View {
@@ -245,7 +245,10 @@ struct SidebarView: View {
             recentsShown: recentsShown,
             collapsedGroups: $collapsedGroups,
             collapsedHostSections: $collapsedHostSections,
-            onEditHost: { editTarget = $0 },
+            onEditHost: { host in
+                // A kind this build does not know is kept, never rewritten.
+                if host.kind == .unsupported { model.refuseUnsupported(host) } else { editTarget = host }
+            },
             onRenameGroup: { renameTarget = firstGroup(withID: $0.id) },
             onReorderGroups: { model.showReorderGroups = true },
             onDeleteGroup: { group in
@@ -270,6 +273,7 @@ struct SidebarView: View {
                     model.exportGroup(original)
                 }
             },
+            onShareGroup: { model.showShareLink(groupID: $0.id) },
             onAddHosts: { model.showAddHosts(groupID: $0.id) },
             onSetGroupCredential: { model.showGroupCredential(groupID: $0.id) },
             onDeleteGroups: { ids in
@@ -301,6 +305,13 @@ struct SidebarView: View {
         .onChange(of: collapsedGroups) { _, _ in persistCollapsed() }
         .onChange(of: collapsedHostSections) { _, _ in persistCollapsedSections() }
         .onAppear {
+#if DEBUG
+            // SHEEPTERM_DEBUG_SHEET=edithost:<uuid> (scratch runs): Edit Host on that saved host.
+            if let sheet = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SHEET"], sheet.hasPrefix("edithost:"),
+               let id = UUID(uuidString: String(sheet.dropFirst("edithost:".count))) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { editTarget = model.savedHost(id: id) }
+            }
+#endif
             pruneCollapsedGroups()
             isFullScreen = NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false
         }
@@ -372,7 +383,11 @@ struct SidebarView: View {
             }
         }
         .sheet(item: $editTarget) { host in
-            HostEditSheet(host: host)
+            if host.kind == .web {
+                WebHostSheet(mode: .edit(host))
+            } else {
+                HostEditSheet(host: host)
+            }
         }
     }
 
@@ -437,7 +452,6 @@ struct SidebarView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .foregroundStyle(.secondary)
-            .help("Groups and hosts")
             .accessibilityLabel("Groups and Hosts")
         }
         .padding(.horizontal, 12)
@@ -501,7 +515,6 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Clear the search")
                 .accessibilityLabel("Clear Search")
             }
         }

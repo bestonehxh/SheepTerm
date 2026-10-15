@@ -1,0 +1,6 @@
+# SheepTerm shell integration — see .zshenv.
+ZDOTDIR=$_st_user
+[[ -r $ZDOTDIR/.zlogin ]] && builtin source $ZDOTDIR/.zlogin
+_st_user=$ZDOTDIR
+ZDOTDIR=$_st_dir
+(( ${+functions[_st_finish]} )) && _st_finish

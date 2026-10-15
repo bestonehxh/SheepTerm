@@ -11,7 +11,7 @@ struct QuickSearchView: View {
     @State private var highlightedKey: String?
 
     private var connectTarget: Host? {
-        ConnectParser.parse(text)
+        ConnectParser.parseConnectBox(text)
     }
 
     /// Computed ONCE per body evaluation. It used to be read twice — for the
@@ -109,10 +109,11 @@ struct QuickSearchView: View {
 
             if let target = connectTarget {
                 paletteRow(
-                    badge: "SSH",
-                    badgeColor: Theme.accent,
-                    name: target.name,
-                    detail: "port \(target.port) · press ↩"
+                    badge: target.kind.badge,
+                    badgeColor: Theme.kindColor(target.kind),
+                    symbol: target.kind == .web ? "globe" : nil,
+                    name: target.kind == .web ? "Open \(target.address)" : target.name,
+                    detail: target.kind == .web ? "web tab · press ↩" : "port \(target.port) · press ↩"
                 ) {
                     connect(target)
                 }
@@ -124,7 +125,8 @@ struct QuickSearchView: View {
                     paletteRow(
                         isHighlighted: highlightedKey == host.connectionKey,
                         badge: host.kind.badge,
-                        badgeColor: host.kind == .serial ? Theme.warn : Theme.accent,
+                        badgeColor: Theme.kindColor(host.kind),
+                        symbol: host.kind == .web ? "globe" : nil,
                         name: host.name,
                         detail: Self.detail(for: host, query: query)
                     ) {
@@ -146,18 +148,29 @@ struct QuickSearchView: View {
         isHighlighted: Bool = false,
         badge: String,
         badgeColor: Color,
+        symbol: String? = nil,
         name: String,
         detail: String?,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Text(badge)
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1.5)
-                    .background(badgeColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
-                    .foregroundStyle(badgeColor)
+                if let symbol {
+                    // The sidebar's web pill: the globe in a 28 x 14 pill of the kind's colour.
+                    Image(systemName: symbol)
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 28, height: 14)
+                        .background(badgeColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
+                        .foregroundStyle(badgeColor)
+                        .accessibilityLabel(badge)
+                } else {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1.5)
+                        .background(badgeColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
+                        .foregroundStyle(badgeColor)
+                }
                 Text(name)
                     .font(.system(size: 12.5))
                     .lineLimit(1)

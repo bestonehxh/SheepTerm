@@ -418,7 +418,7 @@ nonisolated enum PromptName {
     static func applies(name: String, address: String, kind: ConnectionKind) -> Bool {
         let name = name.trimmingCharacters(in: .whitespaces)
         switch kind {
-        case .local:
+        case .local, .web, .unsupported:
             return false
         case .serial:
             return name.isEmpty || name == address || name == (address as NSString).lastPathComponent

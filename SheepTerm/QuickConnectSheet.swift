@@ -8,6 +8,8 @@ struct QuickConnectSheet: View {
     let kind: ConnectionKind
     /// Add Host… (sidebar ≡): save to a group, connect nothing. SSH only.
     var addOnly = false
+    /// Add Host…: the SSH | Web switch (`AddHostSheet`); nil elsewhere.
+    var kindSwitch: Binding<ConnectionKind>? = nil
 
     @EnvironmentObject var model: AppModel
     /// Observed explicitly: `credentials` is @Published on CredentialStore,
@@ -82,16 +84,21 @@ struct QuickConnectSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(addOnly ? "Add Host" : kind == .ssh ? "New SSH Connection" : "New Serial Console")
                 .font(.headline)
+            if let kindSwitch {
+                HostKindSwitch(kind: kindSwitch)
+            }
 
             Form {
                 if kind == .ssh {
                     TextField("Host / IP", text: $address, prompt: Text("10.10.1.1"))
+                        .formRow("Host / IP")
                     if let addressError {
                         Text(addressError)
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.destructive)
                     }
                     TextField("Port", text: $port, prompt: Text("22"))
+                        .formRow("Port")
                         .onChange(of: port) { portEdited = true }
                     if let portError {
                         Text(portError)
@@ -99,35 +106,30 @@ struct QuickConnectSheet: View {
                             .foregroundStyle(Theme.destructive)
                     }
 
-                    Picker("Credential", selection: $credentialSelection) {
-                        Text("Enter manually").tag(UUID?.none)
-                        ForEach(model.credentialStore.credentials) { credential in
-                            Text("\(credential.name) (\(credential.username))")
-                                .tag(UUID?.some(credential.id))
-                        }
-                    }
+                    FormPopup(selection: $credentialSelection,
+                              items: [.option("Enter manually", nil)] + model.credentialStore.credentials.map {
+                                  .option("\($0.name) (\($0.username))", $0.id)
+                              })
+                    .formRow("Credential")
 
                     if credentialSelection == nil {
                         TextField("Username", text: $username, prompt: Text("admin"))
+                            .formRow("Username")
                         RevealableSecureField(title: "Password", text: $password)
+                            .formRow("Password")
                         Toggle("Save as credential", isOn: $saveCredential)
                         if saveCredential {
                             TextField("Credential name", text: $credentialName,
                                       prompt: Text(defaultCredentialName))
+                                .formRow("Credential name")
                         }
                     }
 
-                    Picker("Cipher mode", selection: $cipherMode) {
-                        ForEach(CipherMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
+                    FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
+                        .formRow("Cipher mode")
 
-                    Picker("Device family", selection: $vendor) {
-                        ForEach(Vendor.allCases) { family in
-                            Text(family.label).tag(family)
-                        }
-                    }
+                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.label, $0) })
+                        .formRow("Device family")
 
                     Toggle("Forward SSH agent", isOn: $agentForward)
                     JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
@@ -141,7 +143,8 @@ struct QuickConnectSheet: View {
                     Toggle("Disable paging on connect", isOn: $disablePaging)
                         .disabled(vendor.disablePagingCommand == nil)
 
-                    TextField("Session name (optional)", text: $name)
+                    TextField("Name", text: $name, prompt: Text("optional"))
+                        .formRow("Name")
                 } else {
                     HStack {
                         Picker("Device", selection: $device) {
@@ -167,16 +170,10 @@ struct QuickConnectSheet: View {
                         .foregroundStyle(.secondary)
                         .help("Rescan serial devices (plug the console cable into a powered switch first)")
                     }
-                    Picker("Baud rate", selection: $baud) {
-                        ForEach(Self.baudRates, id: \.self) { rate in
-                            Text(String(rate)).tag(rate)
-                        }
-                    }
-                    Picker("Device family", selection: $vendor) {
-                        ForEach(Vendor.allCases) { family in
-                            Text(family.label).tag(family)
-                        }
-                    }
+                    FormPopup(selection: $baud, items: Self.baudRates.map { .option(String($0), $0) })
+                        .formRow("Baud rate")
+                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.label, $0) })
+                        .formRow("Device family")
                 }
 
                 Divider()
@@ -186,15 +183,12 @@ struct QuickConnectSheet: View {
                         Toggle("Save session to group", isOn: $saveSession)
                     }
                     if saveSession || addOnly {
-                        Picker("Group", selection: $groupSelection) {
-                            ForEach(groupNames, id: \.self) { name in
-                                Text(name).tag(name)
-                            }
-                            Divider()
-                            Text("New group…").tag(Self.newGroupTag)
-                        }
+                        FormPopup(selection: $groupSelection,
+                                  items: groupNames.map { .option($0, $0) } + [.separator, .option("New group…", Self.newGroupTag)])
+                            .formRow("Group")
                         if groupSelection == Self.newGroupTag {
                             TextField("Group name", text: $newGroupName, prompt: Text("Branch — BKK"))
+                                .formRow("Group name")
                         }
                     }
                 }
@@ -213,7 +207,7 @@ struct QuickConnectSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 400)
+        .frame(width: SheetLayout.width)
         .sheepSheetChrome()
         .noAutoFill()
         // Add Host opens nothing, so a typed password has no session to go

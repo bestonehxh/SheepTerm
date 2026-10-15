@@ -104,6 +104,8 @@ public enum SyncEngineError: Error, Equatable, LocalizedError {
     /// its result belongs to a vault that is no longer this Mac's.
     case superseded
     case stateNotSaved(String)
+    /// The browser signed in as a different Google account than the one Sync uses.
+    case differentAccount(String)
 
     public var errorDescription: String? {
         switch self {
@@ -112,6 +114,7 @@ public enum SyncEngineError: Error, Equatable, LocalizedError {
         case .notReady: return "Sync is not set up on this Mac."
         case .superseded: return "Cancelled — sync was signed out or reset meanwhile."
         case .stateNotSaved(let why): return "Sync could not save its state on this Mac (\(why))."
+        case .differentAccount(let expected): return "Google answered for a different account \u{2014} choose \(expected) to continue."
         }
     }
 }
@@ -129,6 +132,8 @@ struct SyncLocalState: Codable, Equatable {
     /// Until each lands, its local copy still yields to the cloud's — it
     /// must not be uploaded over the vault the moment it becomes readable.
     var joinPending: Set<String>?
+    /// Scopes the stored refresh token covers beyond sign-in (share links). nil = never asked.
+    var scopes: [String]?
     var lastSync: Date?
     /// Tie-breaker in stamps; stable per Mac.
     var device: String
@@ -246,7 +251,9 @@ public final class SyncEngine {
                 let account = GoogleAccount(client: client, refreshToken: token, onNewRefreshToken: rotated)
                 let backend = MainActor.assumeIsolated { makeBackend(account) }
                 return (account, backend)
-            }))
+            },
+            makeShareBackend: GoogleTransport.urlSession.makeShareBackend,
+            makeShareDownloader: GoogleTransport.urlSession.makeShareDownloader))
     }
 #endif
 
@@ -369,6 +376,7 @@ public final class SyncEngine {
             }
             state.account = answer.email
             state.picture = answer.picture
+            state.scopes = answer.scopes
             account = answer.email
             accountPicture = answer.picture
             saveState()
@@ -385,6 +393,71 @@ public final class SyncEngine {
     }
 
     public func cancelSignIn() { loopback?.cancel() }
+
+    // MARK: Incremental scopes (share links)
+
+    /// True while the browser page of an incremental authorization is open.
+    public private(set) var isAuthorizing = false
+
+    /// Whether the stored sign-in already covers `scope` (a share scope is asked for only when first needed).
+    public func hasGranted(_ scope: String) -> Bool { state.scopes?.contains(scope) ?? false }
+
+    /// Asks Google for one more scope on top of what is granted (PKCE loopback, `include_granted_scopes`), checks the browser signed in
+    /// as the SAME account, and keeps the new refresh token (it carries every scope). Sync itself is untouched: the phase, the vault
+    /// and the shadow are not involved, so a failure or a cancel leaves everything as it was.
+    public func authorize(adding scope: String) async throws {
+        guard let current = state.account, googleAccount != nil, config.google.isConfigured,
+              phase != .signedOut, phase != .notConfigured, phase != .signingIn else { throw ShareError.notSignedIn }
+        if hasGranted(scope) { return }
+        guard !isAuthorizing else { return }
+        isAuthorizing = true
+        defer { isAuthorizing = false; loopback = nil }
+        let started = epoch
+        let receiver = try LoopbackReceiver(appName: config.appName)
+        loopback = receiver
+        do {
+            let pkce = try GoogleOAuth.PKCE.make()
+            let expected = try GoogleOAuth.makeState()
+            let redirect = try await receiver.start(expectedState: expected)
+            openURL(GoogleOAuth.authorizationURL(client: config.google, redirectURI: redirect, pkce: pkce, state: expected,
+                                                 loginHint: current, scopes: GoogleOAuth.incrementalScopes(adding: scope),
+                                                 includeGrantedScopes: true))
+            let parameters = try await receiver.waitForRedirect(timeout: 300)
+            let code = try GoogleOAuth.code(from: parameters, expectedState: expected)
+            let answer = try await transport.exchangeCode(config.google, code, pkce, redirect)
+            try ensure(started)
+            guard answer.email?.lowercased() == current.lowercased() else { throw SyncEngineError.differentAccount(current) }
+            guard let refresh = answer.refreshToken else {
+                throw GoogleOAuth.OAuthError.server("Google did not grant offline access")
+            }
+            if let granted = answer.scopes, !granted.contains(scope) {
+                throw GoogleOAuth.OAuthError.denied("the permission was not granted")
+            }
+            guard Self.setRefreshToken(refresh, in: secrets) else {
+                throw GoogleOAuth.OAuthError.server("the Keychain refused to store the sign-in")
+            }
+            var scopes = Set(state.scopes ?? [])
+            scopes.formUnion(answer.scopes ?? [scope])
+            state.scopes = scopes.sorted()
+            saveState()
+            // A sync running right now finishes on the account it started with.
+            if let run = currentRun { await run.value }
+            try ensure(started)
+            attach(refreshToken: refresh)
+        } catch {
+            receiver.cancel()
+            throw error
+        }
+    }
+
+    /// The recipient's public download for share links (no account involved); nil when the platform has none.
+    public func makeShareDownloader() -> ShareDownloader? { transport.makeShareDownloader?() }
+
+    /// The Drive calls for share links on the signed-in account; nil when signed out or the platform has none.
+    public func makeShareService(records: ShareRecordStore, now: @escaping @Sendable () -> Date = { Date() }) -> ShareService? {
+        guard let googleAccount, let account, let make = transport.makeShareBackend else { return nil }
+        return ShareService(backend: make(googleAccount), sender: account, records: records, now: now)
+    }
 
     /// Forgets the sign-in and the vault key on this Mac. The app's data and
     /// the cloud copy are left alone — and so is what this Mac remembers of

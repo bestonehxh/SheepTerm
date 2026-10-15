@@ -272,6 +272,8 @@ extension GoogleTransport {
         makeAccount: { client, refreshToken, onNewRefreshToken in
             let account = GoogleAccount(client: client, refreshToken: refreshToken, onNewRefreshToken: onNewRefreshToken)
             return (account, GoogleDriveBackend(account: account))
-        })
+        },
+        makeShareBackend: { GoogleDriveShareBackend(account: $0) },
+        makeShareDownloader: { PublicDriveDownloader() })
 }
 #endif

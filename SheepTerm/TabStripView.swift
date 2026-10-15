@@ -395,14 +395,28 @@ struct TabItemView: View {
         case .local: return Theme.ok
         case .ssh: return isDisconnected ? Theme.destructive : Theme.accent
         case .serial: return isDisconnected ? Theme.destructive : Theme.warn
+        case .web: return Theme.web
         }
+    }
+
+    private var isWeb: Bool {
+        if case .web = tab.content { return true }
+        return false
     }
 
     var body: some View {
         HStack(spacing: 7) {
-            Circle()
-                .fill(indicatorColor)
-                .frame(width: 7, height: 7)
+            // A web tab wears a globe (no favicons), the others the dot.
+            if isWeb {
+                Image(systemName: "globe")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(indicatorColor)
+                    .frame(width: 9, height: 9)
+            } else {
+                Circle()
+                    .fill(indicatorColor)
+                    .frame(width: 7, height: 7)
+            }
             Text(paneCount > 1 ? "\(tab.title) · \(paneCount)" : tab.title)
                 .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
@@ -451,6 +465,10 @@ struct TabItemView: View {
             case .ssh, .serial:
                 Button("Reconnect") { onReconnect() }
                 Toggle("Highlight", isOn: $tab.highlightEnabled)
+                Divider()
+            case .web:
+                Button("Reload") { onReconnect() }
+                Button("Save as Host…") { AppModel.shared.saveWebTabAsHost(tab) }
                 Divider()
             case .local:
                 EmptyView()

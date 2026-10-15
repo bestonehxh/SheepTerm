@@ -47,7 +47,23 @@ nonisolated final class PasswordVault: @unchecked Sendable {
     }
 
     static let account = "vault"
+#if DEBUG
+    /// Debug builds only (compiled out of Release): SHEEPTERM_MEMORY_KEYCHAIN=1 keeps every secret in memory, so a scratch run
+    /// (screenshots, the fake-Google live check) can never read or write the real login keychain.
+    static let shared = PasswordVault(backend: ProcessInfo.processInfo.environment["SHEEPTERM_MEMORY_KEYCHAIN"] == "1"
+                                      ? MemoryBackend() : KeychainBackend(service: "Bestchaan.SheepTerm"))
+    nonisolated static var usesMemoryKeychain: Bool { ProcessInfo.processInfo.environment["SHEEPTERM_MEMORY_KEYCHAIN"] == "1" }
+    nonisolated final class MemoryBackend: Backend, @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [String: Data] = [:]
+        func read(_ account: String, interactive: Bool) -> ReadResult { lock.withLock { items[account].map { .found($0) } ?? .missing } }
+        func write(_ account: String, _ value: Data, exists: Bool, interactive: Bool) -> Bool { lock.withLock { items[account] = value }; return true }
+        func delete(_ account: String, interactive: Bool) -> Bool { lock.withLock { items[account] = nil }; return true }
+    }
+#else
+    nonisolated static var usesMemoryKeychain: Bool { false }
     static let shared = PasswordVault(backend: KeychainBackend(service: "Bestchaan.SheepTerm"))
+#endif
 
     private let backend: Backend
     private let lock = NSLock()

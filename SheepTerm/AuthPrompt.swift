@@ -335,7 +335,6 @@ struct PopupTextEntry: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help(revealed ? "Hide password" : "Show password")
                 }
             }
             .padding(.horizontal, 12)

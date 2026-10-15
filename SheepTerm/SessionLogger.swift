@@ -623,22 +623,47 @@ nonisolated final class SessionLogger: Sendable {
         state = Mutex(State())
     }
 
-    /// A session name made safe to be a file name: no path separator, no
-    /// `:` (Finder's separator), no NUL, no control characters. Shared by
-    /// the open and by `rename`, so a prompt-learned name obeys exactly the
-    /// rules a host name does.
+    /// A session name made safe to be a file name: no path separator, none
+    /// of `\ : < > " | ? *`, no NUL, no C0/C1 control characters, no
+    /// trailing dot or space. The same rule as SheepTerm for Windows
+    /// (`LogNaming.safeFileName`), so one host name gives one log name on
+    /// both. Shared by the open and by `rename`, so a prompt-learned name
+    /// obeys exactly the rules a host name does.
     static func safeFileName(_ sessionName: String) -> String {
-        sessionName
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
+        var out = String.UnicodeScalarView()
+        for ch in sessionName.unicodeScalars {
+            switch ch {
             // A NUL ends the C string the kernel actually sees, so `url` and
-            // the file on disk would disagree about the name. Fold it away
-            // rather than let the two drift apart.
-            .replacingOccurrences(of: "\0", with: "-")
-            // Every other control character too: legal on APFS, hostile in
-            // Finder and in a shell — a host named with a CR LF in it made a
-            // two-line file name.
-            .components(separatedBy: .controlCharacters).joined()
+            // the file on disk would disagree about the name: fold it away.
+            case "/", "\\", ":", "<", ">", "\"", "|", "?", "*", "\0": out.append("-")
+            default:
+                // Every control character too: legal on APFS, hostile in
+                // Finder and in a shell — a host named with a CR LF in it
+                // made a two-line file name.
+                if ch.value < 0x20 || ch.value == 0x7F || (ch.value >= 0x80 && ch.value < 0xA0) { continue }
+                // Invisible format characters and line/paragraph separators:
+                // an RTL override (U+202E) makes "evil\u{202E}gol.txt" read
+                // as "eviltxt.log" in Finder; zero-width and bidi isolates
+                // hide what the name really is; U+2028/2029 break the line.
+                switch ch.properties.generalCategory {
+                case .format, .lineSeparator, .paragraphSeparator: continue
+                default: break
+                }
+                out.append(ch)
+            }
+        }
+        var name = String(out)
+        // Windows strips a trailing dot or space silently, so the name on
+        // disk would differ from the one asked for.
+        while let last = name.last, last == "." || last == " " { name.removeLast() }
+        // A name of nothing but dots ("." / "..") trims to nothing; it was a
+        // name, so it becomes "-" rather than an empty or space-led file
+        // name (same on Windows). A blank name stays blank: not a rename.
+        if name.trimmingCharacters(in: .whitespaces).isEmpty,
+           !sessionName.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "-"
+        }
+        return name
     }
 
     /// Cuts `name` to at most `units` UTF-16 code units on a Character

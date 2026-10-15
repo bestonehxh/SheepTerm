@@ -62,6 +62,13 @@ public enum GoogleOAuth {
     /// profile picture, to show who is signed in.
     public static let scopes = ["https://www.googleapis.com/auth/drive.appdata", "openid", "email", "profile"]
 
+    /// Share links (ShareService). Never asked for at sign-in: `driveFile` the first time the user shares (files the app creates in the
+    /// user's own Drive). Importing a link needs no Drive scope at all.
+    public static let driveFileScope = "https://www.googleapis.com/auth/drive.file"
+    /// The scope list of an INCREMENTAL authorization: just the new scope plus the identity ones (so the answer's id token names the
+    /// account and can be checked against the signed-in one). Google adds everything granted earlier (`include_granted_scopes`).
+    public static func incrementalScopes(adding scope: String) -> [String] { [scope, "openid", "email"] }
+
     public struct PKCE: Sendable, Equatable {
         public var verifier: String
         public var challenge: String
@@ -86,13 +93,14 @@ public enum GoogleOAuth {
     }
 
     public static func authorizationURL(client: GoogleClient, redirectURI: String, pkce: PKCE,
-                                        state: String, loginHint: String? = nil) -> URL {
+                                        state: String, loginHint: String? = nil,
+                                        scopes requested: [String]? = nil, includeGrantedScopes: Bool = false) -> URL {
         var parts = URLComponents(url: authorizationEndpoint, resolvingAgainstBaseURL: false)!
         var items = [
             URLQueryItem(name: "client_id", value: client.clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
+            URLQueryItem(name: "scope", value: (requested ?? scopes).joined(separator: " ")),
             URLQueryItem(name: "code_challenge", value: pkce.challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "state", value: state),
@@ -104,6 +112,7 @@ public enum GoogleOAuth {
             URLQueryItem(name: "prompt", value: "consent"),
         ]
         if let loginHint { items.append(URLQueryItem(name: "login_hint", value: loginHint)) }
+        if includeGrantedScopes { items.append(URLQueryItem(name: "include_granted_scopes", value: "true")) }
         parts.queryItems = items
         return parts.url!
     }
@@ -162,6 +171,8 @@ public enum GoogleOAuth {
         public var refreshToken: String?
         public var email: String?
         public var picture: URL?
+        /// The `scope` field of the answer: everything the refresh token now covers. nil when Google did not say.
+        public var scopes: [String]? = nil
     }
 
     public enum OAuthError: Error, Equatable, Sendable, LocalizedError {
@@ -203,7 +214,8 @@ public enum GoogleOAuth {
                              refreshToken: object["refresh_token"] as? String,
                              email: claims["email"] as? String,
                              picture: (claims["picture"] as? String).flatMap(URL.init(string:))
-                                .flatMap { $0.scheme == "https" ? $0 : nil })
+                                .flatMap { $0.scheme == "https" ? $0 : nil },
+                             scopes: (object["scope"] as? String).map { $0.split(separator: " ").map(String.init) })
     }
 
     /// The `email` claim of an ID token. Display only — the token came

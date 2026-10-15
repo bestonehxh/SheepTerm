@@ -143,6 +143,23 @@ enum BackupManager {
             case .strings(let value): return value
             }
         }
+
+        /// What goes into UserDefaults for `key`: numbers with a local range
+        /// (`SettingBounds`) are clamped into it. nil = not a usable number
+        /// (NaN/infinity) — leave the stored value alone.
+        func boundedObject(forKey key: String) -> Any? {
+            switch self {
+            case .int(let value):
+                guard let c = SettingBounds.clamp(key: key, Double(value)) else { return objectValue }
+                return key == "terminalFontSize" || key == "sidebarWidth" ? c as Any : Int(c) as Any
+            case .double(let value):
+                guard SettingBounds.isUsable(key: key, value) else { return nil }
+                guard let c = SettingBounds.clamp(key: key, value) else { return objectValue }
+                return key == "terminalFontSize" || key == "sidebarWidth" ? c as Any
+                    : ["recentsShown", "scrollbackLines", "safePasteDelayMilliseconds"].contains(key) ? Int(c) as Any : c as Any
+            default: return objectValue
+            }
+        }
     }
 
     struct Payload: Codable {
@@ -593,7 +610,7 @@ enum BackupManager {
         let absent = Set(payload.absentSettings ?? [])
         for key in settingKeys {
             if let setting = payload.settings[key] {
-                defaults.set(setting.objectValue, forKey: key)
+                if let value = setting.boundedObject(forKey: key) { defaults.set(value, forKey: key) }
             } else if absent.contains(key) {
                 // Had no stored value when the snapshot was taken, so it must
                 // have none now: removing it is what restores the DEFAULT,

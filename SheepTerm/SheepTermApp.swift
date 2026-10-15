@@ -21,7 +21,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 NSApp?.activate(ignoringOtherApps: true)
                 for url in urls {
-                    AppModel.shared.importFile(at: url)
+                    // sheepterm://share#v1.… = a share link; anything else is a .sheepterm file.
+                    if url.scheme?.lowercased() == "sheepterm" {
+                        ShareLinks.shared.handle(url: url)
+                    } else {
+                        AppModel.shared.importFile(at: url)
+                    }
                 }
             }
         }
@@ -38,6 +43,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                      + ["sheepsync.session"])   // SyncEngine.sessionAccount
         AppUpdater.shared.start()
         SheepTermSync.shared.start()
+        ShareLinks.shared.startExpiryWatch()
+#if DEBUG
+        // Memory-keychain scratch runs: every credential gets a demo password so the screens have something to share.
+        if PasswordVault.usesMemoryKeychain {
+            for credential in AppModel.shared.credentialStore.credentials where Keychain.passwordWithoutPrompt(for: credential.id) == nil {
+                _ = Keychain.setPasswordWithoutPrompt("demo-password-\(credential.name)", for: credential.id)
+            }
+        }
+        // Debug builds only: SHEEPTERM_DEBUG_SHARE_GROUP=<group name> opens that group's Share Link sheet at launch (screenshots, scripted live check).
+        let env = ProcessInfo.processInfo.environment
+        if let link = env["SHEEPTERM_DEBUG_IMPORT_LINK"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AppModel.shared.closeCurrentWorkspace()
+                AppModel.shared.showImportLink(link)
+            }
+        }
+        if env["SHEEPTERM_DEBUG_NETWORK_INFO"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AppModel.shared.closeCurrentWorkspace()
+                AppModel.shared.showNetworkInfo = true
+            }
+        }
+        if env["SHEEPTERM_DEBUG_SHARED_LINKS"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AppModel.shared.closeCurrentWorkspace()
+                AppModel.shared.showSharedLinks = true
+            }
+        }
+        // SHEEPTERM_DEBUG_SHEET=addhost-ssh|addhost-web opens Add Host on that kind
+        // (edithost:<uuid> is SidebarView's); SHEEPTERM_DEBUG_OPEN_URLS="u1 u2" opens
+        // each like ⌘K would; SHEEPTERM_DEBUG_SIDEBAR=1 shows the sidebar. Scratch runs only.
+        if env["SHEEPTERM_DEBUG_SIDEBAR"] == "1" || (env["SHEEPTERM_DEBUG_SHEET"] ?? "").hasPrefix("edithost:") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.sidebarShown = true }
+        }
+        if let urls = env["SHEEPTERM_DEBUG_OPEN_URLS"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                for text in urls.split(separator: " ") {
+                    if let host = ConnectParser.parseConnectBox(String(text)) { AppModel.shared.open(host: host) }
+                }
+                if env["SHEEPTERM_DEBUG_SIDEBAR"] == "1" { AppModel.shared.sidebarShown = true }
+            }
+        }
+        if env["SHEEPTERM_DEBUG_SHEET"] == "newwebtab" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.newWebTab() }
+        }
+        if let sheet = env["SHEEPTERM_DEBUG_SHEET"], sheet.hasPrefix("addhost-") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AppModel.shared.closeCurrentWorkspace()
+                AppModel.shared.quickConnect = QuickConnectRequest(kind: sheet == "addhost-web" ? .web : .ssh,
+                                                                   addOnly: sheet != "addhost-newssh")
+            }
+        }
+        if let name = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SHARE_GROUP"], !name.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AppModel.shared.closeCurrentWorkspace()   // no local-shell prompt behind the sheet in screenshots
+                if let group = AppModel.shared.store.groups.first(where: { $0.name == name }) {
+                    AppModel.shared.showShareLink(groupID: group.id)
+                }
+            }
+        }
+#endif
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -273,6 +339,7 @@ final class MainWindowKeyMonitor: NSObject, ObservableObject {
 struct SheepTermCommands: Commands {
     @ObservedObject private var model = AppModel.shared
     @ObservedObject private var mainWindowKey = MainWindowKeyMonitor.shared
+    @ObservedObject private var aiPanel = AIPanelChrome.shared
 
     /// Highlighting only means something for a remote session. On a local
     /// shell the Device Family menu still opened and still moved its
@@ -284,7 +351,22 @@ struct SheepTermCommands: Commands {
     private var isRemoteSessionSelected: Bool {
         switch model.selectedTab?.content {
         case .ssh, .serial: return true
-        case .local, nil: return false
+        case .local, .web, nil: return false
+        }
+    }
+
+    private var isWebSelected: Bool {
+        if case .web? = model.selectedTab?.content { return true }
+        return false
+    }
+
+    /// View → Terminal Font: one checkable item per family.
+    private func fontToggles(_ families: [String]) -> some View {
+        ForEach(families, id: \.self) { family in
+            Toggle(family, isOn: Binding(
+                get: { model.terminalFontFamily == family },
+                set: { _ in model.terminalFontFamily = family }
+            ))
         }
     }
 
@@ -308,6 +390,9 @@ struct SheepTermCommands: Commands {
             Button("New SSH Connection…") { model.openQuickConnect(.ssh) }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             Button("New Serial Console…") { model.openQuickConnect(.serial) }
+            // No shortcut: ⌘T is New Terminal Tab, and ⌘N would read as a
+            // new window to anyone coming from a browser.
+            Button("New Web Tab") { model.newWebTab() }
             // Main window only — while Settings is key, ⌘⇧W must not close
             // a terminal tab in the background.
             Button("Close Tab") { model.closeCurrentWorkspace() }
@@ -325,6 +410,8 @@ struct SheepTermCommands: Commands {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
             Divider()
             Button("Import Group…") { model.importGroupViaPanel() }
+            Button("Import from Link…") { model.showImportLink() }
+            Button("Shared Links…") { model.showSharedLinks = true }
             Divider()
             Button("Back Up Configuration…") { BackupManager.backUp() }
             Button("Restore Configuration…") { BackupManager.restore() }
@@ -365,6 +452,10 @@ struct SheepTermCommands: Commands {
                 Label("Toggle Sidebar", systemImage: "sidebar.leading")
             }
             .keyboardShortcut("0", modifiers: .command)
+            Toggle(isOn: Binding(get: { aiPanel.shown }, set: { _ in aiPanel.toggle() })) {
+                Label("Show AI Panel", systemImage: "sidebar.trailing")
+            }
+            .keyboardShortcut("a", modifiers: [.command, .option])
             Button {
                 model.showReorderGroups = true
             } label: {
@@ -399,16 +490,57 @@ struct SheepTermCommands: Commands {
                 Label("Device Family", systemImage: "cpu")
             }
             .disabled(!isRemoteSessionSelected)
-            Button {
-                model.clearScrollback()
-            } label: {
-                Label("Clear Scrollback", systemImage: "eraser")
-            }
             // ⌘K already belongs to Quick Connect here, so this takes ⌘L.
             // Only the history above the screen goes — the visible screen and
-            // the remote session are untouched.
+            // the remote session are untouched. On a web tab the same key is
+            // the browser's: the URL field (one item, so one owner of ⌘L).
+            Button {
+                model.commandL()
+            } label: {
+                if isWebSelected {
+                    Label("Open Location", systemImage: "link")
+                } else {
+                    Label("Clear Scrollback", systemImage: "eraser")
+                }
+            }
             .keyboardShortcut("l", modifiers: .command)
             .disabled(model.selectedTab == nil)
+            // Web tabs only (greyed elsewhere): ⌘R / ⌘[ / ⌘] are free in a
+            // terminal app and mean the browser's thing here.
+            Button {
+                model.reloadWebPage()
+            } label: {
+                Label("Reload Page", systemImage: "arrow.clockwise")
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(!isWebSelected)
+            Button {
+                model.webGoBack()
+            } label: {
+                Label("Back", systemImage: "chevron.left")
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(!isWebSelected)
+            Button {
+                model.webGoForward()
+            } label: {
+                Label("Forward", systemImage: "chevron.right")
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(!isWebSelected)
+            Button {
+                model.clearWebsiteData()
+            } label: {
+                Label("Clear Website Data…", systemImage: "trash")
+            }
+            // macOS 27 hides link addresses and the ARP table from a local
+            // tab's commands; the app reads them itself (NetworkTables).
+            Button {
+                model.showNetworkInfo = true
+            } label: {
+                Label("Network Info…", systemImage: "network")
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
             Divider()
             Toggle(isOn: $model.showStatusBar) {
                 Label("Show Bottom Bar", systemImage: "rectangle.bottomthird.inset.filled")
@@ -445,11 +577,16 @@ struct SheepTermCommands: Commands {
                     get: { model.terminalFontFamily == Theme.systemFontFamily },
                     set: { _ in model.terminalFontFamily = Theme.systemFontFamily }
                 ))
-                ForEach(Theme.availableMonospaceFamilies, id: \.self) { family in
-                    Toggle(family, isOn: Binding(
-                        get: { model.terminalFontFamily == family },
-                        set: { _ in model.terminalFontFamily = family }
-                    ))
+                // Same grouping as the Settings picker: system | platform | bundled | other.
+                Divider()
+                fontToggles(Theme.terminalFontSections.platform)
+                if !Theme.terminalFontSections.bundled.isEmpty {
+                    Divider()
+                    fontToggles(Theme.terminalFontSections.bundled)
+                }
+                if !Theme.terminalFontSections.other.isEmpty {
+                    Divider()
+                    Menu("Other Installed") { fontToggles(Theme.terminalFontSections.other) }
                 }
                 Divider()
                 ForEach(Theme.TerminalFontWeight.allCases) { weight in
@@ -476,7 +613,7 @@ struct SheepTermCommands: Commands {
             } else {
                 ForEach(model.snippetStore.snippets) { snippet in
                     Button(snippet.name) { model.sendSnippet(snippet) }
-                        .disabled(model.selectedTab == nil)
+                        .disabled(model.selectedTab == nil || isWebSelected)
                 }
             }
             Divider()

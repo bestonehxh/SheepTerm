@@ -14,51 +14,10 @@ struct TerminalTheme: Identifiable {
 enum Theme {
     // MARK: Terminal themes
 
-    static let terminalThemes: [TerminalTheme] = [
-        TerminalTheme(
-            id: "sheepterm", name: "SheepTerm",
-            // Foreground brightened from D6DAE2 in 3.0 (8) to match the
-            // Claude app's text (luminance 238 vs 220) — same reason as the
-            // 15 pt default: contrast that survives the scaled display.
-            // Background lifted from 15171C in 3.0 (10): a near-black ground
-            // makes bright strokes bloom on an LCD, and this display already
-            // resamples everything. 1E2128 keeps 14:1 contrast with EDEFF3
-            // and measured 5% fewer grey fringe pixels after the resample.
-            background: 0x1E2128, foreground: 0xEDEFF3,
-            ansi: [0x1C1F26, 0xED7A7A, 0x7DD98C, 0xE8D06B, 0x6CA9E0, 0xE08BC7, 0x6CD1E0, 0xD6DAE2,
-                   0x565D6B, 0xF29B9B, 0x9BE8A8, 0xF2E29B, 0x93C4F0, 0xF0AEDC, 0x9BE4F0, 0xF2F4F8]
-        ),
-        TerminalTheme(
-            id: "dracula", name: "Dracula",
-            background: 0x282A36, foreground: 0xF8F8F2,
-            ansi: [0x21222C, 0xFF5555, 0x50FA7B, 0xF1FA8C, 0xBD93F9, 0xFF79C6, 0x8BE9FD, 0xF8F8F2,
-                   0x6272A4, 0xFF6E6E, 0x69FF94, 0xFFFFA5, 0xD6ACFF, 0xFF92DF, 0xA4FFFF, 0xFFFFFF]
-        ),
-        TerminalTheme(
-            id: "nord", name: "Nord",
-            background: 0x2E3440, foreground: 0xD8DEE9,
-            ansi: [0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0,
-                   0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4]
-        ),
-        TerminalTheme(
-            id: "onedark", name: "One Dark",
-            background: 0x282C34, foreground: 0xABB2BF,
-            ansi: [0x282C34, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
-                   0x5C6370, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xFFFFFF]
-        ),
-        TerminalTheme(
-            id: "solarized", name: "Solarized Dark",
-            background: 0x002B36, foreground: 0x839496,
-            ansi: [0x073642, 0xDC322F, 0x859900, 0xB58900, 0x268BD2, 0xD33682, 0x2AA198, 0xEEE8D5,
-                   0x002B36, 0xCB4B16, 0x586E75, 0x657B83, 0x839496, 0x6C71C4, 0x93A1A1, 0xFDF6E3]
-        ),
-        TerminalTheme(
-            id: "gruvbox", name: "Gruvbox Dark",
-            background: 0x282828, foreground: 0xEBDBB2,
-            ansi: [0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
-                   0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2]
-        ),
-    ]
+    /// The schemes live in `TerminalPalettes.swift` (shared with Windows through SheepTermCore).
+    static let terminalThemes: [TerminalTheme] = TerminalPalette.all.map {
+        TerminalTheme(id: $0.id, name: $0.name, background: $0.background, foreground: $0.foreground, ansi: $0.ansi)
+    }
 
     // MARK: Terminal font — Settings → Terminal and View → Terminal Font
     //
@@ -109,6 +68,15 @@ enum Theme {
             case .bold: return "Bold"
             }
         }
+        /// NSFontManager's weight scale (what `availableMembers` reports).
+        var managerWeight: Int {
+            switch self {
+            case .regular: return 5
+            case .medium: return 6
+            case .semibold: return 8
+            case .bold: return 9
+            }
+        }
         var nsWeight: NSFont.Weight {
             switch self {
             case .regular: return .regular
@@ -123,9 +91,15 @@ enum Theme {
         family == systemFontFamily ? "SF Mono (System)" : family
     }
 
-    /// Every installed family with a fixed-pitch member, once per launch.
-    /// The system font is not among them and is offered separately.
+    /// Every installed family with a fixed-pitch member, once per launch —
+    /// the bundled faces (`TerminalFonts.bundled`) are registered first, so
+    /// they are among them. The system font is not, and is offered separately.
     static let availableMonospaceFamilies: [String] = {
+        let resources = Bundle.main.resourceURL
+        let fontsDir = resources?.appendingPathComponent("Fonts")
+        let dir = fontsDir.map { FileManager.default.fileExists(atPath: $0.path) } == true ? fontsDir : resources
+        let failed = TerminalFonts.registerBundled(in: dir)
+        if !failed.isEmpty { NSLog("SheepTerm: bundled fonts not registered: %@", failed.joined(separator: ", ")) }
         let manager = NSFontManager.shared
         let fixed = NSFontTraitMask.fixedPitchFontMask.rawValue
         return manager.availableFontFamilies.filter { family in
@@ -136,6 +110,9 @@ enum Theme {
             }
         }
     }()
+
+    /// The View menu / Settings list, curated like SheepTerm for Windows.
+    static let terminalFontSections = TerminalFonts.sections(installed: availableMonospaceFamilies)
 
     static var terminalFontFamily: String {
         let saved = UserDefaults.standard.string(forKey: fontFamilyKey) ?? systemFontFamily
@@ -166,9 +143,23 @@ enum Theme {
         guard family != systemFontFamily else {
             return NSFont.monospacedSystemFont(ofSize: size, weight: weight.nsWeight)
         }
-        // Ask for the family at the requested weight; a family that lacks that
-        // weight gets its closest face, and a family that vanished entirely
-        // falls back to the system font rather than to Helvetica.
+        // The family's own faces first: the nearest weight it really has
+        // (`TerminalFonts.nearestWeight` — Medium on a Regular/Bold family is
+        // Regular, not Bold). Then the descriptor match, and a family that
+        // vanished entirely falls back to the system font, not Helvetica.
+        let manager = NSFontManager.shared
+        let members = manager.availableMembers(ofFontFamily: family) ?? []
+        let upright = members.filter { member in
+            let traits = (member.count > 3 ? (member[3] as? UInt) ?? 0 : 0)
+            return traits & NSFontTraitMask.italicFontMask.rawValue == 0
+        }
+        let weights = upright.compactMap { $0.count > 2 ? $0[2] as? Int : nil }
+        if let pick = TerminalFonts.nearestWeight(weight.managerWeight, available: weights),
+           let member = upright.first(where: { ($0[2] as? Int) == pick }),
+           let name = member.first as? String,
+           let font = NSFont(name: name, size: size) {
+            return font
+        }
         let descriptor = NSFontDescriptor(fontAttributes: [
             .family: family,
             .traits: [NSFontDescriptor.TraitKey.weight: weight.nsWeight.rawValue],
@@ -203,14 +194,31 @@ enum Theme {
     static let controlFill = nsColorValue(0x30343D)
     static let tabActive = nsColorValue(0x15171C)
     static let tabText = nsColorValue(0xFFFFFF)
-    static let dimText = nsColorValue(0x7D8492)
+    /// 888E9B since 5.0 (17) (was 7D8492: 4.4 on the chrome, 3.3 on a control) — 5.0 / 3.8 now.
+    static let dimText = nsColorValue(0x888E9B)
     static let accent = nsColorValue(0x5AA5D6)
     static let ok = nsColorValue(0x7DD98C)
     static let warn = nsColorValue(0xFEBC2E)
+    /// Web hosts / web tabs (5.0 web tabs): their own hue beside SSH's
+    /// accent blue and serial's amber, so a globe pill never reads as SSH.
+    /// Slightly lighter than `accent` (luminance 0.37 vs 0.34) — not used for
+    /// any other meaning in the app's own UI.
+    static let web = nsColorValue(0xB392F0)
     /// Every red in the app's own UI — error lines, trash buttons, a dropped
     /// session's dot — is the popups' soft red (the user, 2026-10-09: one
     /// tone family, not SwiftUI's saturated `.red`).
     static let destructive = SwiftUI.Color(nsColor: SheepAlert.destructiveRed)
+
+    /// The colour a host's kind badge wears (sidebar, Quick Search, recents).
+    static func kindColor(_ kind: ConnectionKind) -> SwiftUI.Color {
+        switch kind {
+        case .ssh: return accent
+        case .serial: return warn
+        case .local: return ok
+        case .web: return web
+        case .unsupported: return dimText
+        }
+    }
 
     private static func nsColorValue(_ hex: UInt32) -> SwiftUI.Color {
         SwiftUI.Color(nsColor: nsColor(hex))

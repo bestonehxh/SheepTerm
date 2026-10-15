@@ -1,18 +1,41 @@
 import Combine
 import Foundation
 
-enum ConnectionKind: String, Codable {
+nonisolated enum ConnectionKind: String, Codable, Sendable {
     case ssh
     case serial
     case local
+    /// A web page (device web UI) opened in a WKWebView tab. `Host.address`
+    /// holds the URL (see `WebAddress`, WebTabs.swift, and ARCHITECTURE.md
+    /// "Web tabs"). JSON value "web" — SheepTerm for Windows reads it too.
+    case web
+    /// A kind this build does not know: written by a newer SheepTerm (or the
+    /// Windows port). Never written as itself — `Host` keeps the raw string
+    /// (`unknownKind`) and writes it back, so a hosts.json that holds one is
+    /// neither quarantined nor silently turned into SSH. Such a host shows
+    /// in the sidebar and opens nothing.
+    case unsupported
+
+    /// Tolerant: one unknown string must not throw the whole hosts.json into
+    /// quarantine (the `Vendor` / `CipherMode` rule).
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ConnectionKind(rawValue: raw) ?? .unsupported
+    }
 
     var badge: String {
         switch self {
         case .ssh: return "SSH"
         case .serial: return "SER"
         case .local: return "ZSH"
+        case .web: return "WEB"
+        case .unsupported: return "?"
         }
     }
+
+    /// Kinds that are a terminal session on a device (highlight, snippets,
+    /// broadcast, history, paging, logging).
+    var isDeviceSession: Bool { self == .ssh || self == .serial }
 }
 
 enum CipherMode: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -94,6 +117,14 @@ struct Host: Identifiable, Codable, Hashable {
     /// `false` is never written (nil = follow the global setting). Not a
     /// secret: it travels in a `.sheepterm` and in Sync.
     var noLog: Bool? = nil
+    /// Web hosts only: lowercase hex SHA-256 of the leaf certificate the user
+    /// chose "Trust & Connect" for (`WebTrust`). Local trust, like
+    /// known_hosts: never travels in a `.sheepterm` / Share Link (ShareCodec
+    /// strips it); Sync and Backup carry it (the user's own Macs).
+    var webTrustedCertSHA256: String? = nil
+    /// The raw `kind` string of a host whose kind this build does not know
+    /// (`kind == .unsupported`); written back as-is. Not a JSON key.
+    var unknownKind: String? = nil
 
     /// Whether this host opts out of session logging, nil = no.
     var skipsLog: Bool { noLog ?? false }
@@ -174,6 +205,67 @@ struct Host: Identifiable, Codable, Hashable {
             filled.jumpSpec = match.jumpSpec
         }
         return filled
+    }
+}
+
+/// Hand-written Codable (5.0 web tabs) for ONE reason: an unknown `kind`
+/// must survive a load/save round trip (`unknownKind`). Written in an
+/// extension so the memberwise init stays. Keeps the synthesized contract
+/// exactly: id/name/kind/address/port/username required, every optional
+/// read with decodeIfPresent and written only when non-nil. A new field must
+/// be added to `CodingKeys`, `init(from:)` and `encode(to:)`.
+extension Host {
+    enum CodingKeys: String, CodingKey {
+        case id, name, kind, address, port, username, credentialID, section, cipherMode, agentForward,
+             vendor, disablePaging, jumpHostID, jumpSpec, noLog, webTrustedCertSHA256
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        let rawKind = try c.decode(String.self, forKey: .kind)
+        if let known = ConnectionKind(rawValue: rawKind), known != .unsupported {
+            kind = known
+            unknownKind = nil
+        } else {
+            kind = .unsupported
+            unknownKind = rawKind
+        }
+        address = try c.decode(String.self, forKey: .address)
+        port = try c.decode(Int.self, forKey: .port)
+        username = try c.decode(String.self, forKey: .username)
+        credentialID = try c.decodeIfPresent(UUID.self, forKey: .credentialID)
+        section = try c.decodeIfPresent(String.self, forKey: .section)
+        cipherMode = try c.decodeIfPresent(CipherMode.self, forKey: .cipherMode)
+        agentForward = try c.decodeIfPresent(Bool.self, forKey: .agentForward)
+        vendor = try c.decodeIfPresent(Vendor.self, forKey: .vendor)
+        disablePaging = try c.decodeIfPresent(Bool.self, forKey: .disablePaging)
+        jumpHostID = try c.decodeIfPresent(UUID.self, forKey: .jumpHostID)
+        jumpSpec = try c.decodeIfPresent(String.self, forKey: .jumpSpec)
+        noLog = try c.decodeIfPresent(Bool.self, forKey: .noLog)
+        webTrustedCertSHA256 = try c.decodeIfPresent(String.self, forKey: .webTrustedCertSHA256)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(kind == .unsupported ? (unknownKind ?? ConnectionKind.unsupported.rawValue) : kind.rawValue,
+                     forKey: .kind)
+        try c.encode(address, forKey: .address)
+        try c.encode(port, forKey: .port)
+        try c.encode(username, forKey: .username)
+        try c.encodeIfPresent(credentialID, forKey: .credentialID)
+        try c.encodeIfPresent(section, forKey: .section)
+        try c.encodeIfPresent(cipherMode, forKey: .cipherMode)
+        try c.encodeIfPresent(agentForward, forKey: .agentForward)
+        try c.encodeIfPresent(vendor, forKey: .vendor)
+        try c.encodeIfPresent(disablePaging, forKey: .disablePaging)
+        try c.encodeIfPresent(jumpHostID, forKey: .jumpHostID)
+        try c.encodeIfPresent(jumpSpec, forKey: .jumpSpec)
+        try c.encodeIfPresent(noLog, forKey: .noLog)
+        try c.encodeIfPresent(webTrustedCertSHA256, forKey: .webTrustedCertSHA256)
     }
 }
 
@@ -382,7 +474,7 @@ extension Host {
         switch kind {
         case .ssh: return Host.sshPortRange.contains(port)
         case .serial: return Host.serialBaudRange.contains(port)
-        case .local: return true
+        case .local, .web, .unsupported: return true
         }
     }
 }
@@ -596,6 +688,16 @@ enum ConfigurationHygiene {
                 let cleaned = value.components(separatedBy: controlOnly).joined()
                 if cleaned != value {
                     hosts[index][keyPath: keyPath] = cleaned
+                    report.cleanedFields += 1
+                }
+            }
+            // A web host's address never keeps `user:pass@` (a file, a
+            // backup, Sync, a share): hosts.json is plaintext and the sidebar
+            // shows the address.
+            if hosts[index].kind == .web {
+                let stripped = WebAddress.strippingUserInfo(hosts[index].address)
+                if stripped != hosts[index].address {
+                    hosts[index].address = stripped
                     report.cleanedFields += 1
                 }
             }
@@ -890,6 +992,16 @@ enum ConnectParser {
             guard !zone.isEmpty, zone.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else { return false }
         }
         return true
+    }
+
+    /// The sidebar connect box and Quick Search (⌘K): an `http(s)://` URL is
+    /// a web target, anything else goes through `parse`. Forms keep calling
+    /// `parse` — a URL in an SSH Host field is not a host name.
+    static func parseConnectBox(_ text: String) -> Host? {
+        if WebAddress.hasWebScheme(text) {
+            return Host.web(name: "", url: text)
+        }
+        return parse(text)
     }
 
     static func parse(_ text: String, requireHostShape: Bool = true) -> Host? {
@@ -1988,6 +2100,7 @@ enum BulkHostParser {
     static func looksLikeAddress(_ s: String) -> Bool {
         let text = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !text.contains(where: { $0.isWhitespace }) else { return false }
+        if WebAddress.hasWebScheme(text) { return true }
         // A user@ can only be a login target.
         if text.contains("@") { return true }
         if text.hasPrefix("["), text.contains("]") { return true }
@@ -2298,6 +2411,16 @@ enum BulkHostParser {
                          noLog: Bool = false) -> Host? {
         let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
+        // An http(s):// URL in the Host / IP cell is a WEB host (5.0 web
+        // tabs): the URL is its address, the credential works as for SSH.
+        if WebAddress.hasWebScheme(raw) {
+            let pasted = pastedUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+            let user = (credentialUsername?.isEmpty == false ? credentialUsername : nil) ?? pasted
+            guard var web = Host.web(name: name, url: raw, username: user, credentialID: credentialID) else { return nil }
+            let label = section?.trimmingCharacters(in: .whitespacesAndNewlines)
+            web.section = (label?.isEmpty ?? true) ? nil : label
+            return web
+        }
 
         let host: String
         let port: Int
@@ -3408,6 +3531,10 @@ final class HostStore: ObservableObject {
                     // (ShareCodec strips it), so Replace keeps what we had.
                     merged.jumpHostID = current.jumpHostID
                     merged.jumpSpec = current.jumpSpec
+                    // A web host's trusted certificate is ours too (the file
+                    // never carries one) — kept while the URL is the same.
+                    merged.webTrustedCertSHA256 = merged.address == current.address
+                        ? current.webTrustedCertSHA256 : nil
                     // In place: the slot is claimed by this row alone, so no
                     // later row can read or overwrite what was just written.
                     groups[index].hosts[hostIndex] = merged

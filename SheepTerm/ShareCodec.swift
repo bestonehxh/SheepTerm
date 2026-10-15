@@ -109,6 +109,11 @@ enum ShareCodec {
             // author's choosing is a phishing vector (4.2 (9) review).
             host.jumpHostID = nil
             host.jumpSpec = nil
+            // A web host's trusted certificate is this Mac's decision (like
+            // known_hosts): a file must not pre-trust a certificate for us.
+            host.webTrustedCertSHA256 = nil
+            // Never a `user:pass@` in a web host's URL, either way.
+            if host.kind == .web { host.address = WebAddress.strippingUserInfo(host.address) }
             return host
         }
         return copy
@@ -130,6 +135,11 @@ enum ShareCodec {
             // The importer sets a jump host by hand, in Edit Host.
             host.jumpHostID = nil
             host.jumpSpec = nil
+            // A web host's trusted certificate is this Mac's decision (like
+            // known_hosts): a file must not pre-trust a certificate for us.
+            host.webTrustedCertSHA256 = nil
+            // Never a `user:pass@` in a web host's URL, either way.
+            if host.kind == .web { host.address = WebAddress.strippingUserInfo(host.address) }
             return host
         }
         return copy

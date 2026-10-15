@@ -34,6 +34,12 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				ShellIntegration/run-outside,
+				ShellIntegration/wrapper,
+				ShellIntegration/zlogin,
+				ShellIntegration/zprofile,
+				ShellIntegration/zshenv,
+				ShellIntegration/zshrc,
 			);
 			target = 5EEB00000000000000000010 /* SheepTerm */;
 		};
@@ -81,6 +87,7 @@
 				5EEB00000000000000000030 /* Sources */,
 				5EEB00000000000000000031 /* Frameworks */,
 				5EEB00000000000000000032 /* Resources */,
+				5EEB00000000000000000034 /* Shell Integration */,
 			);
 			buildRules = (
 			);
@@ -149,6 +156,44 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		5EEB00000000000000000034 /* Shell Integration */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/SheepTerm/ShellIntegration/zshenv",
+				"$(SRCROOT)/SheepTerm/ShellIntegration/zprofile",
+				"$(SRCROOT)/SheepTerm/ShellIntegration/zshrc",
+				"$(SRCROOT)/SheepTerm/ShellIntegration/zlogin",
+				"$(SRCROOT)/SheepTerm/ShellIntegration/run-outside",
+				"$(SRCROOT)/SheepTerm/ShellIntegration/wrapper",
+			);
+			name = "Shell Integration";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/zsh/.zshenv",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/zsh/.zprofile",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/zsh/.zshrc",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/zsh/.zlogin",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/run-outside",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/bin/ifconfig",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/bin/arp",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/bin/ndp",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/bin/netstat",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ShellIntegration/bin/networksetup",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n# ARCHITECTURE.md §23: the zsh files and network wrappers for local tabs, laid out inside the bundle (signed, read-only).\nsrc=\"$SRCROOT/SheepTerm/ShellIntegration\"\ndst=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ShellIntegration\"\nrm -rf \"$dst\"\nmkdir -p \"$dst/zsh\" \"$dst/bin\"\nfor f in zshenv zprofile zshrc zlogin; do cp \"$src/$f\" \"$dst/zsh/.$f\"; done\ncp \"$src/run-outside\" \"$dst/run-outside\"\nfor c in ifconfig arp ndp netstat networksetup; do cp \"$src/wrapper\" \"$dst/bin/$c\"; done\nchmod 755 \"$dst/run-outside\" \"$dst\"/bin/*\nchmod 644 \"$dst\"/zsh/.z*\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		5EEB00000000000000000030 /* Sources */ = {
@@ -292,7 +337,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 18;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -323,7 +368,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 18;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;

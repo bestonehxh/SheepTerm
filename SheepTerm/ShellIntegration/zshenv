@@ -1,0 +1,10 @@
+# SheepTerm shell integration (ARCHITECTURE.md §23) — loaded only in SheepTerm's local tabs, read-only inside the app bundle.
+# Each of these files sources the user's own file of the same name from their real ZDOTDIR (default $HOME), so their setup
+# loads exactly as in Terminal.app; the last one puts SheepTerm's network commands first in PATH and gives ZDOTDIR back.
+_st_dir=$ZDOTDIR
+ZDOTDIR=${SHEEPTERM_USER_ZDOTDIR:-$HOME}
+[[ -r $ZDOTDIR/.zshenv ]] && builtin source $ZDOTDIR/.zshenv
+_st_user=$ZDOTDIR
+# /etc/zshrc_Apple_Terminal would put sessions under OUR (read-only) dir.
+[[ -z $SHELL_SESSION_DIR ]] && SHELL_SESSION_DIR=$_st_user/.zsh_sessions
+ZDOTDIR=$_st_dir

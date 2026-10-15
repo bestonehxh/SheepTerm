@@ -4,6 +4,7 @@ import SheepVTRender
 import SheepJump
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 
 extension Notification.Name {
     /// A `.sheeptermbackup` has just been applied: every piece of state that
@@ -19,6 +20,8 @@ final class SessionTab: ObservableObject, Identifiable {
         case local(LocalTerminalController)
         case ssh(SSHTerminalController)
         case serial(SerialTerminalController)
+        /// A web page (ConnectionKind.web) — no terminal, no worker, no log.
+        case web(WebTabController)
     }
 
     let id = UUID()
@@ -30,7 +33,7 @@ final class SessionTab: ObservableObject, Identifiable {
             switch content {
             case .ssh(let controller): controller.setHighlightEnabled(highlightEnabled)
             case .serial(let controller): controller.setHighlightEnabled(highlightEnabled)
-            case .local: return
+            case .local, .web: return
             }
             // The default for the NEXT tab follows whichever toggle was used
             // last — ⇧⌘H, the status-bar sheep, or the tab's context menu.
@@ -47,7 +50,7 @@ final class SessionTab: ObservableObject, Identifiable {
             switch content {
             case .ssh(let controller): controller.adoptVendor(highlightVendor)
             case .serial(let controller): controller.adoptVendor(highlightVendor)
-            case .local: break
+            case .local, .web: break
             }
         }
     }
@@ -80,6 +83,9 @@ struct QuickConnectRequest: Identifiable {
     /// The sidebar's ≡ → Add Host…: the same form, but it SAVES one host to
     /// a group and opens nothing.
     var addOnly = false
+    /// "Save as Host…" on a web tab: the Add Host form starts on Web with
+    /// these (name, URL).
+    var webPrefill: (name: String, url: String)? = nil
 }
 
 /// One showing of the "Add Hosts…" sheet. `groupID` is the group it was
@@ -97,6 +103,17 @@ struct AddHostsRequest: Identifiable {
 struct GroupCredentialRequest: Identifiable {
     let id = UUID()
     let groupID: UUID
+}
+
+/// Share Link sheets (ShareLinkSheets.swift). `groupID` is the group being shared; `link` is a pasted or opened link to import.
+struct ShareLinkRequest: Identifiable {
+    let id = UUID()
+    let groupID: UUID
+}
+
+struct ImportLinkRequest: Identifiable {
+    let id = UUID()
+    let link: String?
 }
 
 /// Read once. `ProcessInfo.environment` builds a fresh dictionary on every
@@ -159,7 +176,7 @@ final class AppModel: ObservableObject {
         // A prompt-named title already carries the cable / address.
         if tab.promptName != nil { return tab.title }
         switch tab.content {
-        case .local:
+        case .local, .web:
             return tab.title
         case .ssh(let controller):
             let address = controller.host.address
@@ -184,6 +201,13 @@ final class AppModel: ObservableObject {
     func terminalHost(ofSession id: UUID) -> SessionTerminalHost? {
         tab(id: id).flatMap { terminalHost(of: $0) }
     }
+
+    /// What a pane shows for a session: its terminal, or its web page.
+    func paneContent(ofSession id: UUID) -> PaneContent? {
+        guard let tab = tab(id: id) else { return nil }
+        if case .web(let controller) = tab.content { return controller }
+        return terminalHost(of: tab)
+    }
     // Launch clean like Terminal.app — the sidebar opens with ⌘0 or the
     // toolbar button when needed.
     @Published var sidebarShown = false
@@ -199,6 +223,8 @@ final class AppModel: ObservableObject {
     @Published var knownHostsRequest: KnownHostsRequest?
     /// File → Search Logs… (4.2 (4)).
     @Published var showLogSearch = false
+    /// View → Network Info… (5.0 (17)).
+    @Published var showNetworkInfo = false
     /// Snippets → Edit Snippets… / Broadcast to Tabs… (4.2 (4)).
     @Published var showSnippets = false
     @Published var showBroadcast = false
@@ -209,6 +235,9 @@ final class AppModel: ObservableObject {
     @Published var showReorderGroups = false
     @Published var addHostsRequest: AddHostsRequest?
     @Published var groupCredentialRequest: GroupCredentialRequest?
+    @Published var shareLinkRequest: ShareLinkRequest?
+    @Published var importLinkRequest: ImportLinkRequest?
+    @Published var showSharedLinks = false
     @Published var sessionLogging: Bool {
         didSet {
             UserDefaults.standard.set(sessionLogging, forKey: "logSessions")
@@ -235,7 +264,7 @@ final class AppModel: ObservableObject {
                     controller.terminalHost.cancelSafePaste(reason: .stopped)
                 case .serial(let controller):
                     controller.terminalHost.cancelSafePaste(reason: .stopped)
-                case .local:
+                case .local, .web:
                     break
                 }
             }
@@ -307,6 +336,7 @@ final class AppModel: ObservableObject {
             case .local(let controller): Theme.apply(to: controller.terminalView)
             case .ssh(let controller): Theme.apply(to: controller.terminalView)
             case .serial(let controller): Theme.apply(to: controller.terminalView)
+            case .web: break
             }
         }
     }
@@ -438,6 +468,7 @@ final class AppModel: ObservableObject {
         for key in ["teamVaultPath", "teamVaultSkippedFiles", "teamPassphrase", "teamKeySalt"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        guard !PasswordVault.usesMemoryKeychain else { return }
         SecItemDelete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "Bestchaan.SheepTerm",
@@ -450,6 +481,15 @@ final class AppModel: ObservableObject {
     /// Groups is: the sidebar leaves the hierarchy when it is hidden.
     func showAddHosts(groupID: UUID? = nil) {
         addHostsRequest = AddHostsRequest(groupID: groupID)
+    }
+
+    func showShareLink(groupID: UUID) {
+        shareLinkRequest = ShareLinkRequest(groupID: groupID)
+    }
+
+    /// File → Import from Link… (nil), or an opened sheepterm:// link (prefilled).
+    func showImportLink(_ link: String? = nil) {
+        importLinkRequest = ImportLinkRequest(link: link)
     }
 
     func showGroupCredential(groupID: UUID) {
@@ -571,7 +611,7 @@ final class AppModel: ObservableObject {
             switch tab.content {
             case .ssh(let controller): flushes.append(controller.beginShutdownForQuit())
             case .serial(let controller): flushes.append(controller.beginShutdownForQuit())
-            case .local: break          // no worker, no log
+            case .local, .web: break    // no worker, no log
             }
         }
         guard !flushes.isEmpty else { return }
@@ -889,6 +929,7 @@ final class AppModel: ObservableObject {
         case .local(let controller): view = controller.terminalView
         case .ssh(let controller): view = controller.terminalView
         case .serial(let controller): view = controller.terminalView
+        case .web(let controller): view = controller.keyView
         }
         view.window?.makeFirstResponder(view)
     }
@@ -901,6 +942,7 @@ final class AppModel: ObservableObject {
         case .local(let controller): return controller.terminalView
         case .ssh(let controller): return controller.terminalView
         case .serial(let controller): return controller.terminalView
+        case .web: return nil
         }
     }
 
@@ -912,6 +954,15 @@ final class AppModel: ObservableObject {
     /// sidebar search field or the find bar's own field focused, chain
     /// dispatch would land somewhere else entirely.
     private func sendFinderAction(_ action: NSTextFinder.Action) {
+        // A web tab has its own find field in its bar (WKWebView.find).
+        if let web = selectedWebController {
+            switch action {
+            case .nextMatch: web.findNext(backwards: false)
+            case .previousMatch: web.findNext(backwards: true)
+            default: web.showFind()
+            }
+            return
+        }
         guard let view = activeTerminalView else { return }
         // The view reads the requested action off the sender's tag, so the
         // sender has to be a tagged NSMenuItem.
@@ -930,6 +981,94 @@ final class AppModel: ObservableObject {
     /// Clear Scrollback, not a reset).
     func clearScrollback() {
         activeTerminalView?.clearScrollback()
+    }
+
+    // MARK: - Web tabs
+
+    /// The focused session's web controller, when it is a web tab.
+    var selectedWebController: WebTabController? {
+        if case .web(let controller)? = selectedTab?.content { return controller }
+        return nil
+    }
+
+    /// ⌘L: the URL field on a web tab, Clear Scrollback anywhere else.
+    func commandL() {
+        if let web = selectedWebController { web.focusLocation() } else { clearScrollback() }
+    }
+
+    func reloadWebPage() { selectedWebController?.reload() }
+    func webGoBack() { selectedWebController?.goBack() }
+    func webGoForward() { selectedWebController?.goForward() }
+
+    /// View → Clear Website Data…: every cookie, cache and storage the web
+    /// tabs keep (`WKWebsiteDataStore.default()`), after a confirm.
+    func clearWebsiteData() {
+        let alert = SheepAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Clear website data?"
+        alert.informativeText = "Cookies, logins and caches of every web tab are removed. Open pages may sign you out."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Clear")
+        guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
+        let store = WKWebsiteDataStore.default()
+        store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
+    }
+
+    /// File / ＋ → New Web Tab: an empty web tab, URL field focused — no form.
+    func newWebTab() {
+        open(host: .emptyWebTab())
+    }
+
+    /// Web tab chip / pane header → Save as Host…: Add Host on Web, prefilled
+    /// with the page's title and URL. Nothing for an empty tab.
+    func saveWebTabAsHost(_ tab: SessionTab) {
+        guard case .web(let controller) = tab.content, let prefill = controller.saveAsHostPrefill else {
+            NSSound.beep()
+            return
+        }
+        quickConnect = QuickConnectRequest(kind: .web, addOnly: true, webPrefill: prefill)
+    }
+
+    private func openWeb(_ host: Host) {
+        let controller = WebTabController(host: host)
+        let tab = SessionTab(content: .web(controller), title: host.name)
+        controller.onTitleChange = { [weak tab] title in tab?.title = title }
+        controller.onStatus = { [weak tab] status in tab?.statusInfo = status }
+        controller.onFocus = { [weak self, weak tab] in
+            guard let self, let tab, self.selectedID != tab.id else { return }
+            self.selectedID = tab.id
+        }
+        controller.onFirstLoad = { [weak self, weak tab] in
+            guard let self, let tab, !tab.didNoteRecent else { return }
+            tab.didNoteRecent = true
+            tab.wasConnected = true
+            if case .web(let controller) = tab.content {
+                let entry = controller.recentEntry
+                // A search-results page is not a place: its address is the query.
+                guard !WebAddress.isSearchResultsURL(entry.address) else { return }
+                controller.notedRecentName = entry.name
+                self.store.noteRecent(entry)
+            }
+        }
+        controller.onRecentRename = { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            let entry = controller.recentEntry
+            guard !WebAddress.isSearchResultsURL(entry.address) else { return }
+            controller.notedRecentName = entry.name
+            self.store.noteRecent(entry)
+        }
+        if attach(tab) { selectedID = tab.id }
+        controller.start()
+    }
+
+    /// A host whose kind this build does not know (`ConnectionKind
+    /// .unsupported`): said once, nothing opened.
+    func refuseUnsupported(_ host: Host) {
+        let alert = SheepAlert()
+        alert.messageText = "“\(Self.sanitizedForDialog(host.name))” can’t be opened here"
+        alert.informativeText = "It was made by a newer SheepTerm (kind “\(Self.sanitizedForDialog(host.unknownKind ?? "?"))”). It is kept as it is."
+        alert.addButton(withTitle: "OK")
+        alert.sheepStyled().runModal()
     }
 
     /// Snippets menu: type a saved command into the current tab, the way a
@@ -1007,6 +1146,7 @@ final class AppModel: ObservableObject {
         case .local(let controller): return controller.terminalHost
         case .ssh(let controller): return controller.terminalHost
         case .serial(let controller): return controller.terminalHost
+        case .web: return nil
         }
     }
 
@@ -1045,7 +1185,7 @@ final class AppModel: ObservableObject {
     var liveRemoteSessions: [SessionTab] {
         tabs.filter { tab in
             switch tab.content {
-            case .local: return false
+            case .local, .web: return false
             case .ssh, .serial:
                 guard let status = tab.statusInfo else { return true }
                 return !status.hasPrefix("disconnected")
@@ -1090,6 +1230,10 @@ final class AppModel: ObservableObject {
         switch host.kind {
         case .local:
             newLocalTab()
+        case .web:
+            openWeb(host)
+        case .unsupported:
+            refuseUnsupported(host)
         case .ssh:
             // A target inherits credential/username/cipher/family from the
             // saved host on the same endpoint; an answer is taken as it is.
@@ -1498,6 +1642,8 @@ final class AppModel: ObservableObject {
             controller.stop()
         case .serial(let controller):
             controller.stop()
+        case .web(let controller):
+            controller.close()
         }
         tabs.remove(at: index)
         // A reconnect keeps the pane: the successor takes the place.
@@ -1543,7 +1689,7 @@ final class AppModel: ObservableObject {
         switch tab.content {
         case .ssh(let controller): host = controller.host
         case .serial(let controller): host = controller.host
-        case .local: return
+        case .local, .web: return
         }
         let attempts = tab.autoReconnectAttempts
         guard attempts < 3 else {
@@ -1608,6 +1754,10 @@ final class AppModel: ObservableObject {
             // Carry the per-session logging choice into the new session.
             serialLog = controller.logOverride
             handedLogger = controller.handOverLogger()
+        case .web(let controller):
+            // "Reconnect" on a web tab is a reload: same page, same session.
+            controller.reload()
+            return
         case .local: return
         }
         // The successor tab is rebuilt from scratch, so its highlight state
@@ -1652,7 +1802,7 @@ final class AppModel: ObservableObject {
                 switch newTab.content {
                 case .ssh(let controller): controller.suppressVendorDetection()
                 case .serial(let controller): controller.suppressVendorDetection()
-                case .local: break
+                case .local, .web: break
                 }
             }
             // didSet on these re-applies the family (adoptVendor → repaint if
@@ -1663,7 +1813,7 @@ final class AppModel: ObservableObject {
                 switch newTab.content {
                 case .ssh(let controller): controller.carryAutoDetected(oldVendor)
                 case .serial(let controller): controller.carryAutoDetected(oldVendor)
-                case .local: break
+                case .local, .web: break
                 }
             }
             // Carrying the toggle over is not the user toggling: the didSet
@@ -1748,6 +1898,13 @@ final class AppModel: ObservableObject {
             open(host: host, completeness: .complete)
         case .serial:
             NSSound.beep()
+        case .web(let controller):
+            // The same site beside it, on the page the tab is on now.
+            var host = controller.host
+            if let url = controller.webView.url?.absoluteString, WebAddress.sameOrigin(url, host.address) {
+                host.address = url
+            }
+            open(host: host, completeness: .complete)
         }
         pendingPlacement = .newTab
     }
@@ -1860,6 +2017,7 @@ final class AppModel: ObservableObject {
         // state that reads as if something had happened. The menu disables the
         // item too; this is the half that cannot be reached around.
         if case .local = tab.content { return }
+        if case .web = tab.content { return }
         // Mark the choice as the user's BEFORE changing the vendor, and stop
         // passive detection on the controller — a deliberate pick (including
         // an explicit Auto) must never be undone by the stream fingerprint.
@@ -1871,7 +2029,7 @@ final class AppModel: ObservableObject {
         case .serial(let controller):
             controller.suppressVendorDetection()
             store.setVendor(vendor, matching: controller.host)
-        case .local: break
+        case .local, .web: break
         }
         tab.highlightVendor = vendor
     }
@@ -1881,7 +2039,7 @@ final class AppModel: ObservableObject {
         switch tab.content {
         case .ssh, .serial:
             tab.highlightEnabled.toggle() // didSet records the new default
-        case .local:
+        case .local, .web:
             break
         }
     }

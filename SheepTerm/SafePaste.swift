@@ -15,6 +15,9 @@ nonisolated struct SafePastePlan: Equatable, Sendable {
 
     let lines: [String]
     let sourceByteCount: Int
+    /// The AI panel's "Paste into Tab": the LAST line is typed without its
+    /// CR, so the user presses Return on it themselves (`AIPasteRoute`).
+    var finalLineWithoutReturn = false
 
     static func parse(
         _ text: String,
@@ -74,7 +77,51 @@ nonisolated struct SafePastePlan: Equatable, Sendable {
     /// newline. Safe mode deliberately submits the final line too; the user
     /// chose "Send N Lines", rather than byte-for-byte immediate paste.
     func bytes(forLine index: Int) -> [UInt8] {
-        Array(lines[index].utf8) + [0x0D]
+        if finalLineWithoutReturn, index == lines.count - 1 { return Array(lines[index].utf8) }
+        return Array(lines[index].utf8) + [0x0D]
+    }
+}
+
+/// How an AI answer's code block reaches a session ("Paste into Tab"). The
+/// model must never be able to run anything:
+/// - one line → typed with NO Return, no question;
+/// - several lines → ALWAYS the Safe Paste review (also in a local tab and
+///   with Safe Paste off in Settings), sent line by line, the last line
+///   typed WITHOUT its CR — the user reads it on the prompt and presses
+///   Return. There is no "Paste Immediately" for it (that would send every
+///   line's newline).
+/// Ordinary pastes (⌘V, snippets, broadcast) never come here.
+nonisolated enum AIPasteRoute: Equatable {
+    case empty
+    case typeLine(String)
+    case review(SafePastePlan)
+    case refused(SafePastePlan.ParseError)
+
+    static func route(_ code: String) -> AIPasteRoute {
+        let text = AIAnswerParser.pasteText(code)
+        guard !text.isEmpty else { return .empty }
+        do {
+            var plan = try SafePastePlan.parse(text)
+            plan.finalLineWithoutReturn = true
+            return .review(plan)
+        } catch SafePastePlan.ParseError.singleLine {
+            // `pasteText` already removed every line break; belt and braces.
+            return .typeLine(text.filter { $0 != "\n" && $0 != "\r" && $0 != "\r\n" })
+        } catch let error as SafePastePlan.ParseError {
+            return .refused(error)
+        } catch {
+            return .refused(.tooManyBytes)
+        }
+    }
+
+    /// Every byte the route would hand the session, in order (tests; the
+    /// review case as the pacer sends it after "Send Line by Line").
+    var wireBytes: [UInt8] {
+        switch self {
+        case .empty, .refused: return []
+        case .typeLine(let line): return Array(line.utf8)
+        case .review(let plan): return plan.lines.indices.flatMap { plan.bytes(forLine: $0) }
+        }
     }
 }
 

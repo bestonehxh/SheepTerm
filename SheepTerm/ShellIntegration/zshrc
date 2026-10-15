@@ -1,0 +1,15 @@
+# SheepTerm shell integration — see .zshenv.
+# /etc/zshrc just set HISTFILE from OUR ZDOTDIR; point it where Terminal.app would.
+[[ $HISTFILE == $_st_dir/* ]] && HISTFILE=$_st_user/${HISTFILE##*/}
+ZDOTDIR=$_st_user
+[[ -r $ZDOTDIR/.zshrc ]] && builtin source $ZDOTDIR/.zshrc
+_st_user=$ZDOTDIR
+ZDOTDIR=$_st_dir
+_st_finish() {
+    emulate -L zsh    # the user's options (ksh_arrays, …) must not change what this does
+    ZDOTDIR=$_st_user
+    [[ -n $SHEEPTERM_SHELL_BIN ]] && path=("$SHEEPTERM_SHELL_BIN" "${(@)path:#$SHEEPTERM_SHELL_BIN}")
+    unset _st_dir _st_user
+    unfunction _st_finish
+}
+[[ -o login ]] || _st_finish

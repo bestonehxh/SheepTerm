@@ -1,0 +1,47 @@
+#!/bin/sh
+# SheepTerm shell integration (ARCHITECTURE.md §23): run ONE command as a launchd job in the user's GUI domain, streaming its
+# stdout/stderr back through FIFOs and returning its exit status. Ctrl+C boots the job out. Any failure falls back to
+# running the command directly (redacted output beats no output).
+real=$1; shift
+# Leftovers of a wrapper killed with SIGKILL (its trap never ran) are swept after an hour — never one whose wrapper
+# (the pid in its name) is still running: `netstat -w 1` may legitimately run for hours.
+for old in "${TMPDIR:-/tmp}"/sheepterm-net.*; do
+  [ -d "$old" ] && [ ! -L "$old" ] || continue
+  pid=${old##*/sheepterm-net.}; pid=${pid%%.*}
+  case $pid in ''|*[!0-9]*) ;; *) /bin/kill -0 "$pid" 2>/dev/null && continue ;; esac
+  [ -n "$(/usr/bin/find "$old" -maxdepth 0 -user "$(/usr/bin/id -u)" -mmin +60 2>/dev/null)" ] && /bin/rm -rf "$old"
+done
+d=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/sheepterm-net.$$.XXXXXX") || exec "$real" "$@"
+uid=$(/usr/bin/id -u); label="com.bestchaan.sheepterm.net.$$"; plist="$d/job.plist"
+fallback() { /bin/rm -rf "$d"; exec "$real" "$@"; }
+/usr/bin/plutil -create xml1 "$plist" 2>/dev/null &&
+/usr/bin/plutil -insert Label -string "$label" "$plist" &&
+/usr/bin/plutil -insert ProgramArguments -array "$plist" &&
+/usr/bin/plutil -insert RunAtLoad -bool true "$plist" &&
+/usr/bin/plutil -insert LaunchOnlyOnce -bool true "$plist" &&
+/usr/bin/plutil -insert ProcessType -string Interactive "$plist" &&
+/usr/bin/plutil -insert StandardOutPath -string "$d/out" "$plist" &&
+/usr/bin/plutil -insert StandardErrorPath -string "$d/err" "$plist" &&
+# "/" — never the tab's folder: a job started in ~/Documents or a cloud folder would raise a privacy prompt for /bin/sh,
+# and none of the wrapped commands reads its working directory.
+/usr/bin/plutil -insert WorkingDirectory -string / "$plist" || fallback "$@"
+for a in /bin/sh -c '"$@"; echo $? > "$0.t" && /bin/mv "$0.t" "$0"' "$d/status" "$real" "$@"; do
+  /usr/bin/plutil -insert ProgramArguments -string "$a" -append "$plist" || fallback "$@"
+done
+/usr/bin/mkfifo "$d/out" "$d/err" || fallback "$@"
+/bin/cat "$d/out" & c1=$!
+/bin/cat "$d/err" >&2 & c2=$!
+stop() { /bin/launchctl bootout "gui/$uid/$label" 2>/dev/null; }
+trap 'stop; kill $c1 $c2 2>/dev/null; /bin/rm -rf "$d"; exit 130' INT TERM HUP
+if ! /bin/launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; then
+  : > "$d/out" & : > "$d/err" &
+  wait; /bin/rm -rf "$d"; exec "$real" "$@"
+fi
+# stdout's reader ending = done. launchd opens the FIFOs read-write, so the job never sees EPIPE when a downstream
+# `head` / `less` quits: it would block on a full pipe forever. Normally c1 ends only after the job exited and the
+# bootout is a no-op; after a SIGPIPE it kills the writer, and stderr's reader then sees EOF.
+wait $c1
+st=1; [ -f "$d/status" ] && st=$(/bin/cat "$d/status")
+stop
+wait $c2
+/bin/rm -rf "$d"; exit "$st"

@@ -225,6 +225,20 @@ final class CredentialStore: ObservableObject {
         return credential
     }
 
+    /// Share Link import: credentials whose passwords are ALREADY in the Keychain, added in one save. False (nothing added) when
+    /// credentials.json did not take them — `save()` has told the user, and the caller removes the passwords.
+    func addImported(_ list: [Credential]) -> Bool {
+        guard !list.isEmpty else { return true }
+        noteUserMutation()
+        credentials.append(contentsOf: list)
+        guard save() else {
+            let ids = Set(list.map(\.id))
+            credentials.removeAll { ids.contains($0.id) }
+            return false
+        }
+        return true
+    }
+
     private static func reportKeychainFailure(for credential: Credential) {
         let alert = SheepAlert()
         alert.alertStyle = .warning

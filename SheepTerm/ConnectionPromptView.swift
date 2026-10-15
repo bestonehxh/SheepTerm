@@ -92,6 +92,20 @@ struct ConnectionCardHeader {
     let windowTitle: String
 }
 
+/// A web tab's untrusted certificate (`WebTabController`): the same question
+/// as an SSH host key, on the same card.
+struct WebCertificateQuestion {
+    /// The server the certificate is for ("10.0.0.1:8443").
+    let server: String
+    /// Lowercase hex SHA-256 of the leaf (`WebTrust.hex`).
+    let fingerprint: String
+    /// A different certificate was trusted for this host before.
+    let changed: Bool
+    /// "Trust & Connect" is offered only for the saved host's own server —
+    /// a third-party server on the page can be let in once, never pinned.
+    let canTrust: Bool
+}
+
 /// What the card shows below the stage track.
 enum ConnectionCardPage {
     /// "Connecting…" / "Authenticating…" with a spinner; Close cancels the
@@ -102,6 +116,8 @@ enum ConnectionCardPage {
     /// The connection failed: the reason in red, Close (and, for a pinned
     /// key that no longer matches, Open Known Hosts…).
     case failure(title: String, message: String, hostKeyProblem: Bool, offersKnownHosts: Bool)
+    /// A web tab's certificate question (answers .trust / .trustOnce / .cancel).
+    case certificate(WebCertificateQuestion)
 }
 
 /// What the user did on the card.
@@ -147,8 +163,14 @@ final class ConnectionCardModel: ObservableObject {
         onAction(action)
     }
 
+    /// The stage track: SSH's five nodes, or a web tab's three (`webTrack`).
+    @Published var webTrack = false
+
     func escape() {
-        if case .question = page { send(.answer(.cancel)) } else { send(.close) }
+        switch page {
+        case .question, .certificate: send(.answer(.cancel))
+        default: send(.close)
+        }
     }
 
     var hasField: Bool {
@@ -295,7 +317,7 @@ final class ConnectionCardView: NSView {
             switch model.page {
             case .progress: NSSound.beep()
             case .failure: model.send(.close)
-            case .question: model.send(.answer(.cancel))
+            case .question, .certificate: model.send(.answer(.cancel))
             }
         default:
             NSSound.beep()
@@ -330,7 +352,11 @@ struct ConnectionCardContent: View {
             SheepLockBadge(symbol: badge?.symbol, danger: badge?.danger ?? false)
                 .frame(width: 64, height: 64)
             titles
-            StageTrack(current: model.stage, failed: isFailure)
+            if model.webTrack {
+                StageTrack(nodes: StageTrack.webNodes, current: model.stage == .connect ? 0 : 1, failed: isFailure)
+            } else {
+                StageTrack(current: model.stage, failed: isFailure)
+            }
             // Not `.id(pageID)`-swapped: replacing the whole page re-created
             // the glass and flickered between steps (the user, 2026-10-09).
             // Pages switch in place, without animation; the entry page
@@ -376,6 +402,8 @@ struct ConnectionCardContent: View {
             }
         case .failure(_, _, let problem, _):
             return .init(symbol: "exclamationmark.triangle.fill", danger: problem)
+        case .certificate(let question):
+            return .init(symbol: "key.fill", danger: question.changed)
         }
     }
 
@@ -422,6 +450,21 @@ struct ConnectionCardContent: View {
                 secondary(model.header.subtitle)
                 // A paragraph: its lines start under each other, not centred.
                 secondary(message).lineLimit(4).multilineTextAlignment(.leading).textSelection(.enabled)
+            case .certificate(let question):
+                title(model.header.title)
+                secondary(question.server)
+                Group {
+                    if question.changed {
+                        Text("The certificate has CHANGED since you trusted it.")
+                            .foregroundStyle(Color(nsColor: SheepAlert.destructiveRed))
+                    } else {
+                        Text("Untrusted certificate — compare the fingerprint before you trust it.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.system(size: 12))
+                .lineLimit(1).minimumScaleFactor(0.9)
+                .padding(.top, 2)
             }
         }
     }
@@ -449,6 +492,8 @@ struct ConnectionCardContent: View {
             } else {
                 EntryPage(model: model, prompt: prompt)
             }
+        case .certificate(let question):
+            CertificatePage(model: model, question: question)
         case .failure(_, _, _, let offersKnownHosts):
             // Apple's order: the dismiss left of the action.
             CardPage(content: { EmptyView() }, buttons: {
@@ -593,6 +638,48 @@ private struct HostKeyPage: View {
     }
 }
 
+/// A web tab's certificate: HostKeyPage's layout and buttons — the
+/// fingerprint as two lines of colon pairs (a SHA-256 in hex is too long for
+/// one), Connect Once / Cancel / Trust & Connect. Return and Escape answer
+/// Cancel (the card's keyDown), never Trust.
+private struct CertificatePage: View {
+    @ObservedObject var model: ConnectionCardModel
+    let question: WebCertificateQuestion
+
+    var body: some View {
+        let lines = WebTrust.displayLines(question.fingerprint)
+        CardPage(content: {
+            VStack(spacing: 6) {
+                Text("Certificate · SHA-256")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                VStack(spacing: 1) {
+                    Text(lines.0)
+                    Text(lines.1)
+                }
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.07)))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.14), lineWidth: 1))
+            }
+        }, buttons: {
+            CardButton("Connect Once", role: .caution,
+                       help: "Open this time only — nothing is saved and the next visit asks again") { model.send(.answer(.trustOnce)) }
+            Spacer(minLength: 16)
+            CardButton("Cancel", role: .neutral,
+                       help: "Don't trust this certificate — nothing is loaded or saved (Return / Esc)") { model.send(.answer(.cancel)) }
+            if question.canTrust {
+                CardButton("Trust & Connect", role: .green,
+                           help: question.changed ? "Replace the trusted certificate with this one and open the page"
+                                                  : "Remember this certificate for this host and open the page") { model.send(.answer(.trust)) }
+            }
+        })
+    }
+}
+
 /// The app icon at the popups' 64 pt with a small round badge on its
 /// bottom-right edge naming the stage (the user's picture): a dark disc with
 /// a lighter rim and a soft shadow, the symbol in the icon's own cream so the
@@ -633,34 +720,58 @@ struct AppIconBadge: View {
 /// Reached nodes in the accent, the line filled up to the current node,
 /// future nodes grey; a failure paints the current node red.
 struct StageTrack: View {
-    let current: ConnectionStage
+    struct Node {
+        let label: String
+        let symbol: String
+    }
+    /// A web tab's track: Connect · Certificate · Page.
+    static let webNodes = [Node(label: "Connect", symbol: ConnectionStage.connect.symbol),
+                           Node(label: "Certificate", symbol: "key.fill"),
+                           Node(label: "Page", symbol: "globe")]
+
+    let nodes: [Node]
+    let current: Int
     let failed: Bool
     private static let node: CGFloat = 24
 
+    init(current: ConnectionStage, failed: Bool) {
+        nodes = ConnectionStage.allCases.map { Node(label: $0.label, symbol: $0.symbol) }
+        self.current = current.rawValue
+        self.failed = failed
+    }
+
+    init(nodes: [Node], current: Int, failed: Bool) {
+        self.nodes = nodes
+        self.current = current
+        self.failed = failed
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            ForEach(ConnectionStage.allCases, id: \.rawValue) { stage in
-                if stage != .connect {
+            ForEach(nodes.indices, id: \.self) { index in
+                if index != 0 {
                     Rectangle()
-                        .fill(stage.rawValue <= current.rawValue ? Theme.accent : Theme.controlFill)
+                        .fill(index <= current ? Theme.accent : Theme.controlFill)
                         .frame(height: 3)
                         .padding(.top, (Self.node - 3) / 2)
                 }
-                column(stage)
+                column(index)
             }
         }
         // The edge labels hang past the first and last node.
         .padding(.horizontal, 12)
     }
 
-    private func column(_ stage: ConnectionStage) -> some View {
-        let reached = stage.rawValue <= current.rawValue
-        let fill: Color = stage == current && failed ? Color(nsColor: SheepAlert.destructiveRed)
+    private func column(_ index: Int) -> some View {
+        let stage = nodes[index]
+        let reached = index <= current
+        let isCurrent = index == current
+        let fill: Color = isCurrent && failed ? Color(nsColor: SheepAlert.destructiveRed)
             : (reached ? Theme.accent : Theme.controlFill)
         return VStack(spacing: 4) {
             ZStack {
                 Circle().fill(fill)
-                if stage == current {
+                if isCurrent {
                     Circle().stroke(fill.opacity(0.45), lineWidth: 1.5).padding(-3)
                 }
                 Image(systemName: stage.symbol)
@@ -669,8 +780,8 @@ struct StageTrack: View {
             }
             .frame(width: Self.node, height: Self.node)
             Text(stage.label)
-                .font(.system(size: 10, weight: stage == current ? .semibold : .regular))
-                .foregroundStyle(stage == current ? Color.primary : Color.secondary)
+                .font(.system(size: 10, weight: isCurrent ? .semibold : .regular))
+                .foregroundStyle(isCurrent ? Color.primary : Color.secondary)
                 .fixedSize()
                 .frame(width: Self.node)
         }

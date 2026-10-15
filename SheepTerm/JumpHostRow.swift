@@ -21,7 +21,7 @@ struct JumpHostRow: View {
     let render: (Host) -> String
 
     var body: some View {
-        LabeledContent("Via jump host") {
+        LabeledContent {
             HStack(spacing: 4) {
                 TextField("Via jump host", text: typed, prompt: Text("user@host"))
                     .labelsHidden()
@@ -46,9 +46,11 @@ struct JumpHostRow: View {
                 .menuIndicator(.hidden)
                 .foregroundStyle(.secondary)
                 .fixedSize()
-                .help("Pick a saved host")
                 .accessibilityLabel("Saved jump hosts")
             }
+            .frame(width: SheetLayout.fieldWidth, alignment: .leading)
+        } label: {
+            SheetLabel("Via jump host")
         }
         .help("Logs into this host first and tunnels the connection through it (ProxyJump). Type user@host[:port] or pick a saved host; empty = direct. The jump host needs TCP forwarding allowed.")
     }

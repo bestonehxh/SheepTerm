@@ -105,27 +105,28 @@ struct HostEditSheet: View {
             // controls: the user found the form cluttered (2026-10-08).
             Form {
                 TextField("Name", text: $name)
+                    .formRow("Name")
                 if original.kind == .ssh {
                     TextField("Host / IP", text: $address)
+                        .formRow("Host / IP")
                     if let addressError {
                         Text(addressError)
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.destructive)
                     }
                     TextField("Port", text: $port)
+                        .formRow("Port")
                         .onChange(of: port) { portEdited = true }
                     if parsedPort == nil {
                         Text("Port must be 1-65535")
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.destructive)
                     }
-                    Picker("Credential", selection: $credentialSelection) {
-                        Text("None (enter manually)").tag(UUID?.none)
-                        ForEach(model.credentialStore.credentials) { credential in
-                            Text("\(credential.name) (\(credential.username))")
-                                .tag(UUID?.some(credential.id))
-                        }
-                    }
+                    FormPopup(selection: $credentialSelection,
+                              items: [.option("None (enter manually)", nil)] + model.credentialStore.credentials.map {
+                                  .option("\($0.name) (\($0.username))", $0.id)
+                              })
+                        .formRow("Credential")
                     if let credential = selectedCredential {
                         // Shown, not hidden. While this field was hidden the
                         // form saved the host's OLD username beside the NEW
@@ -135,22 +136,24 @@ struct HostEditSheet: View {
                         // the host. The two halves of one identity now travel
                         // together, and the name that will be saved is on
                         // screen while the choice is being made.
-                        LabeledContent("Username") {
+                        LabeledContent {
                             Text(effectiveUsername.isEmpty ? "—" : effectiveUsername)
                                 .font(.system(size: 12, design: .monospaced))
+                                .frame(width: SheetLayout.fieldWidth, alignment: .leading)
+                        } label: {
+                            SheetLabel("Username")
                         }
                         .help("Comes from “\(credential.name)” — a credential's username and its password are one login. Pick “None (enter manually)” to type a different name.")
                     } else {
                         TextField("Username", text: $username)
+                            .formRow("Username")
                             .onChange(of: username) { usernameEdited = true }
                         RevealableSecureField(title: "Password", text: $password)
+                            .formRow("Password")
                             .help("Passwords live in the Keychain — filling this saves it as a new credential for this host.")
                     }
-                    Picker("Cipher mode", selection: $cipherMode) {
-                        ForEach(CipherMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
+                    FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
+                        .formRow("Cipher mode")
                     Toggle("Forward SSH agent", isOn: $agentForward)
                         .help("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
                     JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
@@ -163,18 +166,13 @@ struct HostEditSheet: View {
                     }
                 } else if original.kind == .serial {
                     TextField("Device path", text: $address)
-                    Picker("Baud rate", selection: $baud) {
-                        ForEach(baudChoices, id: \.self) { rate in
-                            Text(String(rate)).tag(rate)
-                        }
-                    }
+                        .formRow("Device path")
+                    FormPopup(selection: $baud, items: baudChoices.map { .option(String($0), $0) })
+                        .formRow("Baud rate")
                 }
-                Picker("Device family", selection: $vendor) {
-                    ForEach(Vendor.allCases) { family in
-                        Text(family.label).tag(family)
-                    }
-                }
-                .help("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
+                FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.label, $0) })
+                    .formRow("Device family")
+                    .help("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
                 Toggle("Don't log this session", isOn: $noLog)
                     .help("This host never writes a session log, even with Log Sessions to File on.")
                 if original.kind == .ssh {
@@ -197,7 +195,7 @@ struct HostEditSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 400)
+        .frame(width: SheetLayout.width)
         .sheepSheetChrome()
         .noAutoFill()
         .onAppear {
@@ -382,7 +380,7 @@ struct HostEditSheet: View {
             }
         case .serial:
             host.port = baud
-        case .local:
+        case .local, .web, .unsupported:
             break
         }
         // The cached password belongs to the OLD user@address:port.

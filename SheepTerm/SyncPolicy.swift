@@ -243,3 +243,34 @@ nonisolated enum SyncRecordCodec {
         return try canonical(list)
     }
 }
+
+/// Ranges the app already enforces locally, applied to a value that arrived
+/// from the cloud (or a restored backup) so a hand-edited or newer-version
+/// record cannot park a setting outside what the UI can reach. Out of range
+/// is CLAMPED, not rejected (same as the Windows port's SyncSettingsMap).
+/// The literals mirror their owners: `Theme.fontSizeRange`,
+/// `HostStore.maxRecents`, the sidebar drag clamp in ContentView, the
+/// `scrollbackLines` clamp in SessionTerminalHost, `pasteDelayChoices`.
+nonisolated enum SettingBounds {
+    static let safePasteDelays = [50, 100, 200, 300, 500, 1000]
+
+    /// The bounded number for `key`, or nil when the key has no numeric
+    /// bound (use the value as it is) — a non-finite number gives nil too,
+    /// reported through `isUsable`.
+    static func clamp(key: String, _ value: Double) -> Double? {
+        switch key {
+        case "terminalFontSize": return min(max(value.rounded(), 9), 24)
+        case "recentsShown": return min(max(value.rounded(), 1), 20)
+        case "sidebarWidth": return min(max(value, 200), 320)
+        case "scrollbackLines": return min(max(value.rounded(), 500), 200_000)
+        case "safePasteDelayMilliseconds":
+            return Double(safePasteDelays.min { abs(Double($0) - value) < abs(Double($1) - value) } ?? 200)
+        default: return nil
+        }
+    }
+
+    /// False for NaN / infinity on a bounded key: nothing sensible to clamp to.
+    static func isUsable(key: String, _ value: Double) -> Bool {
+        value.isFinite || clamp(key: key, 0) == nil
+    }
+}

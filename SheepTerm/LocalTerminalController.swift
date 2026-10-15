@@ -43,6 +43,19 @@ final class LocalTerminalController: NSObject {
         environment.append("TERM_PROGRAM=Apple_Terminal")
         environment.append("TERM_PROGRAM_VERSION=453")
         if !seen.contains("LANG") { environment.append("LANG=en_US.UTF-8") }
+        // macOS 27: real MAC / ARP for ifconfig & co. in this tab (ShellIntegration, §23). Never inherit another
+        // copy's integration (SheepTerm started from a tab): its ZDOTDIR and SHEEPTERM_* go first.
+        environment.removeAll { entry in
+            ShellIntegration.inheritedKeys.contains { entry.hasPrefix($0 + "=") }
+                || (entry.hasPrefix("ZDOTDIR=") && ShellIntegration.isIntegrationDir(String(entry.dropFirst(8))))
+        }
+        if let extra = ShellIntegration.environment(
+            shell: shell, base: ProcessInfo.processInfo.environment, resources: Bundle.main.resourceURL,
+            enabled: ShellIntegration.isEnabled, needed: ShellIntegration.isNeeded,
+            fileExists: { FileManager.default.fileExists(atPath: $0) }) {
+            environment.removeAll { entry in extra.keys.contains { entry.hasPrefix($0 + "=") } }
+            environment += extra.map { "\($0.key)=\($0.value)" }
+        }
 
         // Leading dash marks the shell as a login shell, same as Terminal.app.
         let started = process.start(

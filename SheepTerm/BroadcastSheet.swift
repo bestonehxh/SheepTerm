@@ -21,6 +21,7 @@ struct BroadcastSheet: View {
             case .local: kind = .local
             case .ssh: kind = .ssh
             case .serial: kind = .serial
+            case .web: kind = .web
             }
             return BroadcastPlan.Candidate(id: tab.id, title: tab.title, kind: kind, status: tab.statusInfo)
         }

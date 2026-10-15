@@ -495,6 +495,81 @@ public final class Terminal: VTActor {
         return out
     }
 
+    /// Scrollback plus screen as LOGICAL lines: a row continued on the next
+    /// one by a soft wrap (the next row's `wrapped`) is joined with it, the
+    /// way `Selection.text()` copies — so one long line is one string, never
+    /// cut at the screen width. Blank lines at the end (the empty screen
+    /// below the cursor) are dropped; then the LAST `limit` lines are
+    /// returned (nil = all). Walks back from the end, so a small `limit`
+    /// builds only that tail.
+    public func logicalLines(limit: Int? = nil) -> [String] {
+        let b = buffer
+        let total = Swift.max(b.lines.count, b.ybase + rows)
+        var out: [String] = []
+        if let limit { out.reserveCapacity(Swift.max(0, Swift.min(limit, total))) }
+        var end = total - 1
+        var trailing = true
+        while end >= 0 {
+            if let limit, out.count >= limit { break }
+            var start = end
+            while start > 0, b.lines.allocatedRow(at: start)?.wrapped == true { start -= 1 }
+            var line = ""
+            for i in start...end {
+                line += b.lines.allocatedRow(at: i)?.string(trimRight: i == end) ?? ""
+            }
+            end = start - 1
+            if trailing, line.allSatisfy({ $0 == " " }) { continue }
+            trailing = false
+            out.append(line)
+        }
+        out.reverse()
+        return out
+    }
+
+    /// The tail of `logicalLines` with each line's ABSOLUTE start row
+    /// (`Buffer.lineNumber`, i.e. `LineRing.trimmed + index`, which never goes
+    /// back when the ring trims) so a caller can remember "up to here" and
+    /// later ask for what came after. Row numbers are reassigned by a reflow
+    /// (`cols` changes) and mean something else on the alternate screen, so
+    /// `cols` and `alternate` are returned for the caller to compare.
+    /// `fromRow` keeps only lines starting at or after it. Same trailing-blank
+    /// and `limit` rules as `logicalLines`.
+    public struct LogicalTail: Equatable, Sendable {
+        public var lines: [String] = []
+        public var startRows: [Int] = []
+        public var cols = 0
+        public var alternate = false
+    }
+
+    public func logicalTail(limit: Int? = nil, fromRow: Int? = nil) -> LogicalTail {
+        let b = buffer
+        let total = Swift.max(b.lines.count, b.ybase + rows)
+        var out = LogicalTail()
+        out.cols = cols
+        out.alternate = isAlternate
+        var end = total - 1
+        var trailing = true
+        while end >= 0 {
+            if let limit, out.lines.count >= limit { break }
+            var start = end
+            while start > 0, b.lines.allocatedRow(at: start)?.wrapped == true { start -= 1 }
+            var line = ""
+            for i in start...end {
+                line += b.lines.allocatedRow(at: i)?.string(trimRight: i == end) ?? ""
+            }
+            let number = b.lineNumber(atIndex: start)
+            end = start - 1
+            if trailing, line.allSatisfy({ $0 == " " }) { continue }
+            trailing = false
+            if let fromRow, number < fromRow { break }
+            out.lines.append(line)
+            out.startRows.append(number)
+        }
+        out.lines.reverse()
+        out.startRows.reverse()
+        return out
+    }
+
     // MARK: - Viewport (user scrollback)
 
     public func scrollViewport(by lines: Int) {

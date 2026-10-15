@@ -67,6 +67,7 @@ struct SidebarOutline: NSViewRepresentable {
     let onReorderGroups: () -> Void
     let onDeleteGroup: (HostGroup) -> Void
     let onExportGroup: (HostGroup) -> Void
+    let onShareGroup: (HostGroup) -> Void
     let onAddHosts: (HostGroup) -> Void
     let onSetGroupCredential: (HostGroup) -> Void
     /// Deletes without asking: the multi-group menu has already asked once,
@@ -249,6 +250,8 @@ final class SidebarRowView: NSTableRowView {
 final class SidebarHostCell: NSView {
     private let badgePill = NSView()
     private let badge = NSTextField(labelWithString: "")
+    /// A web host's globe, in place of the text badge (same pill).
+    private let symbolView = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
 
@@ -265,15 +268,25 @@ final class SidebarHostCell: NSView {
         detail.lineBreakMode = .byTruncatingMiddle
         for view in [badgePill, name, detail] { addSubview(view) }
         badgePill.addSubview(badge)
+        badgePill.addSubview(symbolView)
+        symbolView.isHidden = true
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func configure(badge text: String, color: NSColor, name title: String, detail subtitle: String?) {
+    func configure(badge text: String, color: NSColor, name title: String, detail subtitle: String?,
+                   symbol: String? = nil) {
         badge.stringValue = text
         badge.textColor = color
+        badge.isHidden = symbol != nil
+        symbolView.isHidden = symbol == nil
+        if let symbol {
+            symbolView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: text)?
+                .withSymbolConfiguration(.init(pointSize: 9, weight: .bold))
+            symbolView.contentTintColor = color
+        }
         badgePill.layer?.backgroundColor = color.withAlphaComponent(0.18).cgColor
         name.stringValue = title
         detail.stringValue = subtitle ?? ""
@@ -299,6 +312,7 @@ final class SidebarHostCell: NSView {
         let labelHeight = textSize.height.rounded(.up)
         badge.frame = NSRect(x: 0, y: ((badgeHeight - labelHeight) / 2).rounded(),
                              width: badgeWidth, height: labelHeight)
+        symbolView.frame = NSRect(x: 0, y: 0, width: badgeWidth, height: badgeHeight)
         let textX = Self.leading + badgeWidth + 8
         let textWidth = max(0, bounds.width - textX - 6)
         if detail.isHidden {
@@ -842,11 +856,12 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 let isConnectTarget = node.id == "connect-target"
                 cell.configure(
                     badge: host.kind.badge,
-                    color: NSColor(host.kind == .serial ? Theme.warn : Theme.accent),
-                    name: host.name,
+                    color: NSColor(Theme.kindColor(host.kind)),
+                    name: isConnectTarget && host.kind == .web ? "Open \(host.address)" : host.name,
                     detail: isConnectTarget
-                        ? "port \(host.port) · press ↩ to connect"
-                        : (host.address.isEmpty ? nil : host.address)
+                        ? (host.kind == .web ? "web tab · press ↩ to open" : "port \(host.port) · press ↩ to connect")
+                        : (host.address.isEmpty ? nil : host.kind == .web ? WebAddress.shortLabel(host.address) : host.address),
+                    symbol: host.kind == .web ? "globe" : nil
                 )
             } else {
                 cell.configure(badge: "ZSH", color: NSColor(Theme.ok), name: node.title, detail: nil)
@@ -1270,6 +1285,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         case .group:
             guard let group = node.group else { return nil }
             add(menu, "Export Group…") { [weak self] in self?.parent.onExportGroup(group) }
+            add(menu, "Share Link…") { [weak self] in self?.parent.onShareGroup(group) }
             add(menu, "Add Hosts…") { [weak self] in self?.parent.onAddHosts(group) }
             // Not while a search is on: `buildRoots` hides a heading with no
             // matching hosts, so a heading created mid-search would never
