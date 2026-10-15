@@ -140,4 +140,132 @@ final class AuthTests: XCTestCase {
         let auth = SSHUserAuth(transport: t, username: "admin")
         XCTAssertThrowsError(try auth.tryNone()) { XCTAssertEqual($0 as? UserAuthError, .notReady) }
     }
+
+    // MARK: Trying again on the same transport (SheepTerm 5.0 (19))
+
+    /// A transport past its key exchange, in the clear, with the userauth
+    /// service accepted: what SSHWorker holds when it asks for a password.
+    func clearSession() throws -> (SSHUserAuth, SSHTransport) {
+        let t = SSHTransport(configuration: .init(hostKeyValidator: { _ in true }))
+        t._testEnterRunningInTheClear()
+        let auth = SSHUserAuth(transport: t, username: "admin")
+        var w = SSHWriter()
+        w.writeByte(SSHMessage.serviceAccept)
+        w.writeString("ssh-userauth")
+        XCTAssertEqual(try auth.handle(w.bytes), [.serviceAccepted])
+        return (auth, t)
+    }
+
+    /// The USERAUTH_REQUEST payloads queued on the wire (cleartext packets).
+    func requests(_ t: SSHTransport) -> [[UInt8]] {
+        let bytes = t.takeOutgoing()
+        var out: [[UInt8]] = []
+        var i = 0
+        while i + 5 <= bytes.count {
+            let length = Int(bytes[i]) << 24 | Int(bytes[i + 1]) << 16 | Int(bytes[i + 2]) << 8 | Int(bytes[i + 3])
+            let padding = Int(bytes[i + 4])
+            out.append(Array(bytes[(i + 5)..<(i + 4 + length - padding)]))
+            i += 4 + length
+        }
+        return out
+    }
+
+    func failure(_ methods: [String], partial: Bool = false) -> [UInt8] {
+        var w = SSHWriter()
+        w.writeByte(51)
+        w.writeNameList(methods)
+        w.writeBool(partial)
+        return w.bytes
+    }
+
+    func passwordSent(_ payload: [UInt8]) throws -> String {
+        var r = SSHReader(payload)
+        XCTAssertEqual(try r.readByte(), 50)
+        XCTAssertEqual(try r.readUTF8(), "admin")
+        XCTAssertEqual(try r.readUTF8(), "ssh-connection")
+        XCTAssertEqual(try r.readUTF8(), "password")
+        XCTAssertFalse(try r.readBool())
+        return try r.readUTF8()
+    }
+
+    /// A refused password leaves nothing in flight: the next attempt goes
+    /// out on the SAME transport (no new connection), and it can succeed.
+    func testPasswordRejectedThenRetriedOnTheSameTransport() throws {
+        let (auth, t) = try clearSession()
+        try auth.tryPassword("wrong-1")
+        XCTAssertEqual(try requests(t).map(passwordSent), ["wrong-1"])
+        XCTAssertEqual(try auth.handle(failure(["publickey", "password"])),
+                       [.failure(method: .password, methods: ["publickey", "password"], partialSuccess: false)])
+        XCTAssertFalse(auth.isAuthenticated)
+        try auth.tryPassword("wrong-2")
+        XCTAssertEqual(try auth.handle(failure(["password"])),
+                       [.failure(method: .password, methods: ["password"], partialSuccess: false)])
+        try auth.tryPassword("right")
+        XCTAssertEqual(try requests(t).map(passwordSent), ["wrong-2", "right"], "each retry is one request on the same wire")
+        XCTAssertEqual(try auth.handle([52]), [.success])
+        XCTAssertTrue(auth.isAuthenticated)
+        XCTAssertThrowsError(try auth.tryPassword("again")) { XCTAssertEqual($0 as? UserAuthError, .notReady) }
+    }
+
+    /// While an attempt waits for its answer, a second one is refused — the
+    /// retry is only allowed once the server has said no.
+    func testRetryWaitsForTheServersAnswer() throws {
+        let (auth, _) = try clearSession()
+        try auth.tryPassword("one")
+        XCTAssertThrowsError(try auth.tryPassword("two")) { XCTAssertEqual($0 as? UserAuthError, .methodInProgress) }
+        _ = try auth.handle(failure(["password"]))
+        XCTAssertNoThrow(try auth.tryPassword("two"))
+    }
+
+    /// keyboard-interactive (Aruba / FortiGate style "Password:" prompt):
+    /// refused, started again on the same transport, answered, accepted.
+    func testKeyboardInteractiveRejectedThenRetried() throws {
+        let (auth, t) = try clearSession()
+        func infoRequest() -> [UInt8] {
+            var w = SSHWriter()
+            w.writeByte(60)
+            w.writeString(""); w.writeString(""); w.writeString("")
+            w.writeUInt32(1)
+            w.writeString("Password:"); w.writeBool(false)
+            return w.bytes
+        }
+        for (answer, accepted) in [("wrong", false), ("right", true)] {
+            try auth.startKeyboardInteractive()
+            guard case .infoRequest(let request)? = try auth.handle(infoRequest()).first else { return XCTFail("no info request") }
+            XCTAssertEqual(request.prompts.count, 1)
+            try auth.respond([answer])
+            if accepted {
+                XCTAssertEqual(try auth.handle([52]), [.success])
+            } else {
+                XCTAssertEqual(try auth.handle(failure(["keyboard-interactive"])),
+                               [.failure(method: .keyboardInteractive, methods: ["keyboard-interactive"], partialSuccess: false)])
+            }
+        }
+        let sent = requests(t)
+        XCTAssertEqual(sent.map(\.first), [50, 61, 50, 61], "start, answer, start again, answer — one transport")
+        XCTAssertTrue(auth.isAuthenticated)
+    }
+
+    /// N refusals, then the server hangs up (sshd at MaxAuthTries): the
+    /// transport reports the disconnect and refuses anything after it — the
+    /// terminal failure SSHWorker turns into "authentication failed".
+    func testServerHangsUpAfterRepeatedRefusals() throws {
+        let (auth, t) = try clearSession()
+        for attempt in 1...2 {
+            try auth.tryPassword("wrong-\(attempt)")
+            _ = try auth.handle(failure(["password"]))
+        }
+        try auth.tryPassword("wrong-3")
+        var w = SSHWriter()
+        w.writeByte(SSHMessage.disconnect)
+        w.writeUInt32(2)
+        w.writeString("Too many authentication failures")
+        w.writeString("")
+        let packet = try PacketProtection().seal(payload: w.bytes, sequence: 0)
+        XCTAssertThrowsError(try t.receive(packet)) {
+            XCTAssertEqual($0 as? SSHTransportError, .disconnectedByServer(reason: 2, description: "Too many authentication failures"))
+        }
+        XCTAssertFalse(auth.isAuthenticated)
+        XCTAssertThrowsError(try t.send([50])) { XCTAssertEqual($0 as? SSHTransportError, .closed) }
+    }
 }

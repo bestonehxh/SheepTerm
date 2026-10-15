@@ -26,6 +26,9 @@ nonisolated struct ConnectionPrompt: Sendable {
     let tabHost: String
     /// The worker's prompt text, for the main-thread fallback panel.
     let fallbackText: String
+    /// The server refused the last answer on this same connection and lets
+    /// the user try again: the same page, field empty, a red line under it.
+    var rejected = false
 
     var isSecure: Bool {
         switch step {
@@ -47,32 +50,6 @@ enum ConnectionPromptReply {
     case cancel
 }
 
-/// The stage track's nodes, Termius-style: connect → host key → user →
-/// password → terminal.
-enum ConnectionStage: Int, CaseIterable {
-    case connect, hostKey, user, password, terminal
-
-    var label: String {
-        switch self {
-        case .connect: return "Connect"
-        case .hostKey: return "Host key"
-        case .user: return "User"
-        case .password: return "Password"
-        case .terminal: return "Terminal"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .connect: return "cable.connector"
-        case .hostKey: return "key.fill"
-        case .user: return "person.fill"
-        case .password: return "lock.fill"
-        case .terminal: return "terminal"
-        }
-    }
-}
-
 extension ConnectionPrompt {
     /// Which node of the stage track the question belongs to.
     var stage: ConnectionStage {
@@ -81,6 +58,21 @@ extension ConnectionPrompt {
         case .username: return .user
         case .password, .challenge: return .password
         }
+    }
+
+    /// The text question as `ConnectionCardPlan` sees it (nil: host key).
+    var planQuestion: ConnectionCardPlan.Question? {
+        switch step {
+        case .username: return .username
+        case .password: return .password
+        case .challenge(_, let secure): return .challenge(secure: secure)
+        case .hostKey: return nil
+        }
+    }
+
+    /// The text question's page (stage, red line, buttons).
+    var plan: ConnectionCardPlan.Page? {
+        planQuestion.map { ConnectionCardPlan.question($0, rejected: rejected) }
     }
 }
 
@@ -114,8 +106,9 @@ enum ConnectionCardPage {
     /// One of the worker's questions.
     case question(ConnectionPrompt)
     /// The connection failed: the reason in red, Close (and, for a pinned
-    /// key that no longer matches, Open Known Hosts…).
-    case failure(title: String, message: String, hostKeyProblem: Bool, offersKnownHosts: Bool)
+    /// key that no longer matches, Open Known Hosts…; for anything Try
+    /// Again can help, Try Again — the default). Buttons per `plan`.
+    case failure(title: String, message: String, hostKeyProblem: Bool, plan: ConnectionCardPlan.Page)
     /// A web tab's certificate question (answers .trust / .trustOnce / .cancel).
     case certificate(WebCertificateQuestion)
 }
@@ -126,6 +119,8 @@ enum ConnectionCardAction {
     /// Close on a progress or failure page (Escape too).
     case close
     case openKnownHosts
+    /// Failure page: connect to the same host again, from the start.
+    case tryAgain
 }
 
 /// What the card shows, observed by `ConnectionCardContent`.
@@ -316,7 +311,7 @@ final class ConnectionCardView: NSView {
         case 36, 76:
             switch model.page {
             case .progress: NSSound.beep()
-            case .failure: model.send(.close)
+            case .failure(_, _, _, let plan): model.send(plan.returnKey == .tryAgain ? .tryAgain : .close)
             case .question, .certificate: model.send(.answer(.cancel))
             }
         default:
@@ -432,8 +427,7 @@ struct ConnectionCardContent: View {
                         .lineLimit(1).minimumScaleFactor(0.9)
                         .padding(.top, 2)
                 case .password(let account):
-                    let user = account.split(separator: "@", maxSplits: 1).first.map(String.init) ?? account
-                    title("\(user)@\(name)")
+                    title(ConnectionCardPlan.passwordTitle(account: account, name: name))
                     secondary(endpoint)
                 case .challenge(let text, _):
                     title(name)
@@ -494,12 +488,19 @@ struct ConnectionCardContent: View {
             }
         case .certificate(let question):
             CertificatePage(model: model, question: question)
-        case .failure(_, _, _, let offersKnownHosts):
-            // Apple's order: the dismiss left of the action.
+        case .failure(_, _, _, let plan):
+            // Apple's order: the dismiss left of the action; the default
+            // (Try Again, Return) rightmost.
             CardPage(content: { EmptyView() }, buttons: {
-                CardButton("Close", role: .neutral, help: "Close this message") { model.send(.close) }
-                if offersKnownHosts {
-                    CardButton("Open Known Hosts…", role: .accent, help: "Review the saved key") { model.send(.openKnownHosts) }
+                ForEach(plan.buttons.indices, id: \.self) { index in
+                    switch plan.buttons[index] {
+                    case .openKnownHosts:
+                        CardButton("Open Known Hosts…", role: .accent, help: "Review the saved key") { model.send(.openKnownHosts) }
+                    case .tryAgain:
+                        CardButton("Try Again", role: .green, help: "Return") { model.send(.tryAgain) }
+                    default:
+                        CardButton("Close", role: .neutral, help: "Close this message") { model.send(.close) }
+                    }
                 }
             })
         }
@@ -590,6 +591,7 @@ private struct EntryPage: View {
             // username or password does not need the wide card's full line).
             PopupTextEntry(placeholder: placeholder, secure: prompt.isSecure, text: $text,
                            focusTrigger: model.focusRequest, focusOnAppear: model.focusOnAppear,
+                           error: prompt.plan?.note,
                            onSubmit: submit) { focused in
                 if focused { model.onFocus?() }
             }
@@ -597,9 +599,14 @@ private struct EntryPage: View {
             .id(model.pageID)
         }, buttons: {
             CardButton("Cancel", role: .neutral, help: "Cancel the connection (Esc)") { model.escape() }
-            CardButton(prompt.isSecure ? "Connect" : "Continue", role: .green, help: "Return", action: submit)
+            CardButton(submitTitle, role: .green, help: "Return", action: submit)
         })
         .onChange(of: model.pageID) { _, _ in text = "" }
+    }
+
+    private var submitTitle: String {
+        if case .submit(let title)? = prompt.plan?.returnKey { return title }
+        return prompt.isSecure ? "Connect" : "Continue"
     }
 
     private var placeholder: String {

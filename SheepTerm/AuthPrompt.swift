@@ -266,6 +266,10 @@ struct PopupTextEntry: View {
     /// that had the keyboard — `focusTrigger` cannot say it: the new view is
     /// born with the current value, so it never sees a change).
     var focusOnAppear = false
+    /// A short red line in the reserved status line ("Wrong password" when
+    /// the server refused the last answer). The non-ASCII warning wins
+    /// while it applies — it is about what is in the field now.
+    var error: String? = nil
     let onSubmit: () -> Void
     var onFocusChange: ((Bool) -> Void)? = nil
 
@@ -360,11 +364,18 @@ struct PopupTextEntry: View {
             // once and a wrapped warning gets clipped. The line is ALWAYS
             // laid out (invisible when there is nothing to say) so the field
             // never jumps up when the warning appears (the user, 2026-10-09).
-            Text("Contains non-ASCII characters — sent exactly as typed")
-                .font(.system(size: 10))
-                .foregroundStyle(Color(nsColor: SheepAlert.cautionYellow))
-                .opacity(hasNonASCII ? 1 : 0)
-                .accessibilityHidden(!hasNonASCII)
+            Group {
+                if let error, !hasNonASCII {
+                    Text(error)
+                        .foregroundStyle(Theme.destructive)
+                } else {
+                    Text("Contains non-ASCII characters — sent exactly as typed")
+                        .foregroundStyle(Color(nsColor: SheepAlert.cautionYellow))
+                        .opacity(hasNonASCII ? 1 : 0)
+                        .accessibilityHidden(!hasNonASCII)
+                }
+            }
+            .font(.system(size: 10))
         }
         .onChange(of: focusTrigger) {
             let target = activeField

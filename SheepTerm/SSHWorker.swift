@@ -61,8 +61,8 @@ nonisolated final class SSHWorker: Sendable {
         var onInputDiscarded: (@Sendable () -> Void)?
         var onStatus: (@Sendable (String) -> Void)?
         var onClosed: (@Sendable (String) -> Void)?
-        var passwordPrompt: (@Sendable (String) -> String?)?
-        var challengePrompt: (@Sendable (_ prompt: String, _ secure: Bool) -> String?)?
+        var passwordPrompt: PasswordPrompt?
+        var challengePrompt: ChallengePrompt?
         var usernamePrompt: (@Sendable (String) -> String?)?
         var hostKeyPrompt: HostKeyPrompt?
         var onPasswordWorked: (@Sendable (String, String) -> Void)?
@@ -72,6 +72,14 @@ nonisolated final class SSHWorker: Sendable {
         /// `host:port` of the host whose key was refused (either hop), for
         /// the controller's Known Hosts offer.
         var refusedHost: String?
+        /// Which login the server refused, when the session ended on that
+        /// (not on a drop, a timeout or the user's Cancel). Try Again asks
+        /// that login's password again instead of reusing the refused one.
+        var refusedLogin: RefusedLogin?
+        /// Fired once per login when the password the session was STARTED
+        /// with (a saved credential, the session cache) is refused — the app
+        /// stops offering a cached one. Never carries the password.
+        var onConfiguredPasswordRefused: (@Sendable (RefusedLogin) -> Void)?
         /// Fired as soon as a username typed at the prompt is known, before
         /// authentication. Without it the controller's `host` kept an empty
         /// username for a key-authenticated session, so every reconnect —
@@ -133,15 +141,29 @@ nonisolated final class SSHWorker: Sendable {
         set { state.withLock { $0.onClosed = newValue } }
     }
     /// Asks the UI for a password; returns nil when the user cancels.
-    var passwordPrompt: (@Sendable (String) -> String?)? {
+    /// `rejected`: the server refused the last attempt on this same
+    /// connection and allows another — the card says "Wrong password".
+    typealias PasswordPrompt = @Sendable (_ prompt: String, _ rejected: Bool) -> String?
+    var passwordPrompt: PasswordPrompt? {
         get { state.withLock { $0.passwordPrompt } }
         set { state.withLock { $0.passwordPrompt = newValue } }
     }
     /// Asks the UI for a keyboard-interactive challenge. `secure` mirrors
-    /// the server's echo flag (password/OTP prompts normally request no echo).
-    var challengePrompt: (@Sendable (_ prompt: String, _ secure: Bool) -> String?)? {
+    /// the server's echo flag (password/OTP prompts normally request no echo);
+    /// `rejected` as for `passwordPrompt`.
+    typealias ChallengePrompt = @Sendable (_ prompt: String, _ secure: Bool, _ rejected: Bool) -> String?
+    var challengePrompt: ChallengePrompt? {
         get { state.withLock { $0.challengePrompt } }
         set { state.withLock { $0.challengePrompt = newValue } }
+    }
+    /// See `State.refusedLogin`. Read by the controller once the session closed.
+    var refusedLogin: RefusedLogin? {
+        get { state.withLock { $0.refusedLogin } }
+        set { state.withLock { $0.refusedLogin = newValue } }
+    }
+    var onConfiguredPasswordRefused: (@Sendable (RefusedLogin) -> Void)? {
+        get { state.withLock { $0.onConfiguredPasswordRefused } }
+        set { state.withLock { $0.onConfiguredPasswordRefused = newValue } }
     }
     /// Asks the UI for a username when the host has none configured.
     var usernamePrompt: (@Sendable (String) -> String?)? {
@@ -405,6 +427,7 @@ nonisolated final class SSHWorker: Sendable {
         }
         var config = initialConfig
         refusedHost = nil
+        refusedLogin = nil
         // config.port is an unvalidated Int.
         guard (1...65535).contains(config.port) else {
             closeSession("invalid port \(config.port) — must be between 1 and 65535")
@@ -485,7 +508,7 @@ nonisolated final class SSHWorker: Sendable {
 
         authCancelled = false
         authTransportError = nil
-        guard authenticate(link, config, legacy: usedLegacy, wake: pipeRead) else {
+        guard authenticate(link, config, side: .target, legacy: usedLegacy, wake: pipeRead) else {
             // Only a live session reports failure — a tab closed mid-auth
             // must not print a fake "authentication failed". A prompt the
             // user dismissed is reported as a cancellation: the controller
@@ -503,6 +526,7 @@ nonisolated final class SSHWorker: Sendable {
                 } else if let transport = authTransportError {
                     closeSession(transport)
                 } else {
+                    if !authCancelled { refusedLogin = .target }
                     closeSession(authCancelled ? "connection cancelled — no password given" : "authentication failed")
                 }
             }
@@ -694,13 +718,14 @@ nonisolated final class SSHWorker: Sendable {
         let targetDoor = onPasswordWorked
         onPasswordWorked = { [weak self] user, password in self?.onJumpPasswordWorked?(user, password) }
         defer { onPasswordWorked = targetDoor }
-        guard authenticate(link, hopConfig, legacy: usedLegacy, wake: wake) else {
+        guard authenticate(link, hopConfig, side: .jumpHost, legacy: usedLegacy, wake: wake) else {
             if isRunning {
                 if let refusal = hostKeyRefusedDuringAuth {
                     closeSession(refusal, hostKeyRefusal: true)
                 } else if let transport = authTransportError {
                     closeSession(prefix + transport)
                 } else {
+                    if !authCancelled { refusedLogin = .jumpHost }
                     closeSession(prefix + (authCancelled ? "connection cancelled — no password given" : "authentication failed"))
                 }
             }
@@ -1133,6 +1158,10 @@ nonisolated final class SSHWorker: Sendable {
     static var sshDirectory: String {
 #if SHEEPTERM_TESTING
         if let dir = _testSSHDirectory { return dir }
+#endif
+#if DEBUG
+        // Screenshot runs only (compiled out of Release): a scratch ~/.ssh.
+        if let dir = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SSH_DIR"], !dir.isEmpty { return dir }
 #endif
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
             return String(cString: dir) + "/.ssh"
@@ -1691,9 +1720,13 @@ nonisolated final class SSHWorker: Sendable {
     // MARK: Authentication
 
     /// None, then public keys (ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa,
-    /// id_rsa — what libssh's publickey_auto tried), then up to three rounds
-    /// of password + keyboard-interactive.
-    private func authenticate(_ link: SSHLink, _ config: SSHConfig, legacy: Bool, wake: Int32) -> Bool {
+    /// id_rsa — what libssh's publickey_auto tried), then rounds of password
+    /// + keyboard-interactive on the SAME connection: a refused password is
+    /// asked again ("Wrong password" on the card) for as long as the server
+    /// keeps the connection open — it hangs up at its own MaxAuthTries
+    /// (OpenSSH 6, network gear usually 3–5) — and the user keeps answering.
+    /// `side` names the login for `refusedLogin` / `onConfiguredPasswordRefused`.
+    private func authenticate(_ link: SSHLink, _ config: SSHConfig, side: RefusedLogin, legacy: Bool, wake: Int32) -> Bool {
         let auth = SSHUserAuth(transport: link.transport, username: config.username)
         hostKeyRefusedDuringAuth = nil
         // Replies park on the link and are taken one at a time, so whatever
@@ -1710,6 +1743,12 @@ nonisolated final class SSHWorker: Sendable {
 
         /// Whether the last drop was the server hanging up (not a timeout).
         var lastDropWasHangUp = false
+        /// The exchange in flight carries a password or a typed answer (not a
+        /// keyboard-interactive start, not an empty round).
+        var credentialInFlight = false
+        /// The server closed while the user was still answering (its login
+        /// grace time ran out): a lost connection, never a refusal.
+        var droppedWhileAsking = false
         /// Runs `start`, then pumps until the userauth layer answers (banners
         /// are skipped — libssh never showed them either). nil = stop
         /// authenticating: tab closed, or the transport died (recorded in
@@ -1718,7 +1757,22 @@ nonisolated final class SSHWorker: Sendable {
         /// backend — a password or challenge checked against RADIUS/TACACS
         /// with retries, a Duo push approved on a phone — so it gets 90 s,
         /// not the 15 s a plain protocol reply gets.
-        func exchange(waitsForPerson: Bool = false, _ start: () throws -> Void) -> [SSHUserAuth.Event]? {
+        /// `carriesCredential`: `start` sends a password or typed answers. The
+        /// link is drained FIRST: the card may have been up longer than the
+        /// server's LoginGraceTime, and its close (FIN / DISCONNECT) is then
+        /// already waiting — sending into it and reading the EOF afterwards
+        /// read as "the server hung up on this password".
+        func exchange(waitsForPerson: Bool = false, carriesCredential: Bool = false,
+                      _ start: () throws -> Void) -> [SSHUserAuth.Event]? {
+            if carriesCredential {
+                do {
+                    try link.step(timeoutMS: 0, wake: wake, extra: [])
+                } catch {
+                    return droppedBeforeAnswer(error)
+                }
+            }
+            credentialInFlight = carriesCredential
+            defer { credentialInFlight = false }
             do {
                 try start()
             } catch {
@@ -1745,6 +1799,20 @@ nonisolated final class SSHWorker: Sendable {
                 }
             }
         }
+        /// The link died while the user was answering, before the answer went
+        /// out: "connection lost", whatever was refused earlier — and nothing
+        /// is blamed on a saved password.
+        func droppedBeforeAnswer(_ error: Error) -> [SSHUserAuth.Event]? {
+            if let refusal = Self.hostKeyRefusal(in: error), isRunning {
+                hostKeyRefusedDuringAuth = refusal
+                return nil
+            }
+            droppedWhileAsking = true
+            if isRunning {
+                authTransportError = "connection lost during authentication: the server closed the connection while waiting for the answer (\(Self.describe(error)))"
+            }
+            return nil
+        }
         func transportDied(_ error: Error) -> [SSHUserAuth.Event]? {
             if let refusal = Self.hostKeyRefusal(in: error), isRunning {
                 hostKeyRefusedDuringAuth = refusal
@@ -1753,6 +1821,11 @@ nonisolated final class SSHWorker: Sendable {
             if case SSHLink.Failure.closedByPeer = error { lastDropWasHangUp = true }
             if case .disconnectedByServer? = error as? SSHTransportError { lastDropWasHangUp = true }
             if case .transport(.disconnectedByServer)? = error as? UserAuthError { lastDropWasHangUp = true }
+            // A server that hangs up IN REPLY to a password (or a challenge
+            // answer) refused it — sshd does that for the attempt that
+            // reaches MaxAuthTries, some network gear for the first wrong
+            // one. That is "authentication failed", not a lost link.
+            if credentialInFlight, lastDropWasHangUp { credentialRefused = true }
             if isRunning, !credentialRefused {
                 authTransportError = "connection lost during authentication: \(Self.describe(error))"
             }
@@ -1852,6 +1925,25 @@ nonisolated final class SSHWorker: Sendable {
             return true
         }
         var password = config.password
+        /// `password` is still the one the session was started with (a saved
+        /// credential or the session cache), not one typed at the card.
+        var passwordIsConfigured = config.password?.isEmpty == false
+        /// …and it went to the server.
+        var configuredPasswordSent = false
+        /// The configured password was refused: the app forgets it (once).
+        func configuredPasswordRefused() {
+            guard passwordIsConfigured, configuredPasswordSent else { return }
+            passwordIsConfigured = false
+            onConfiguredPasswordRefused?(side)
+        }
+        /// Rounds refused so far on this connection. The first question of a
+        /// round after a refusal carries `rejected` ("Wrong password").
+        var failedRounds = 0
+        /// A question was already asked in this round (only its first one is
+        /// the retry; an OTP after a re-typed password is a new question).
+        var askedThisRound = false
+        /// The user typed an answer this round (a password, a code).
+        var answeredThisRound = false
         /// Whether an already-accepted password may answer a later password
         /// prompt; off once a round failed that way.
         var reuseAccepted = true
@@ -1860,12 +1952,27 @@ nonisolated final class SSHWorker: Sendable {
         var changeRequested = false
         /// Asked for only when something will actually use it.
         func needPassword() -> String? {
-            if let password, !password.isEmpty { return password }
-            guard let entered = passwordPrompt?("Password for \(config.username)@\(config.host)"), !entered.isEmpty else {
+            if let password, !password.isEmpty {
+                if passwordIsConfigured { configuredPasswordSent = true }
+                return password
+            }
+            let rejected = failedRounds > 0 && !askedThisRound
+            askedThisRound = true
+            guard let entered = passwordPrompt?("Password for \(config.username)@\(config.host)", rejected), !entered.isEmpty else {
                 authCancelled = true
                 return nil
             }
             password = entered
+            passwordIsConfigured = false
+            answeredThisRound = true
+            return entered
+        }
+        /// A keyboard-interactive question that is not the password.
+        func askChallenge(_ display: String, secure: Bool) -> String? {
+            let rejected = failedRounds > 0 && !askedThisRound
+            askedThisRound = true
+            guard let entered = challengePrompt?(display, secure, rejected) else { return nil }
+            answeredThisRound = true
             return entered
         }
 
@@ -1873,17 +1980,26 @@ nonisolated final class SSHWorker: Sendable {
         /// after refusing keys, says the likely cause (MaxAuthTries is spent
         /// by every refused key, before any password is typed).
         func hungUp() -> Bool {
+            // A hang-up right after a refusal is the server's MaxAuthTries:
+            // the password it refused is as wrong as one refused politely.
+            if credentialRefused, !droppedWhileAsking { configuredPasswordRefused() }
             if keysRefused > 0, lastDropWasHangUp, isRunning {
                 notice("the server hung up after refusing \(keysRefused) key(s) — too many keys in the agent for its MaxAuthTries?")
             }
             return false
         }
 
-        var failedRounds = 0
+        /// Refused rounds in a row in which the user typed nothing (a saved
+        /// password, a reused one): three end it, as the old fixed cap did —
+        /// rounds the user answers go on until the server hangs up.
+        var unattendedFailures = 0
         // Bounded however the server answers: one that says "partial
-        // success" forever must not spin this loop.
+        // success" forever must not spin this loop, nor one that never
+        // hangs up on a user who keeps typing wrong passwords.
         for _ in 0..<24 {
             guard isRunning else { return false }
+            askedThisRound = false
+            answeredThisRound = false
 
             if offers("publickey") {
                 switch keyStage() {
@@ -1904,7 +2020,7 @@ nonisolated final class SSHWorker: Sendable {
 
             if tryPassword {
                 guard let currentPassword = needPassword() else { return false }
-                guard let result = exchange(waitsForPerson: true, { try auth.tryPassword(currentPassword) }) else { return hungUp() }
+                guard let result = exchange(waitsForPerson: true, carriesCredential: true, { try auth.tryPassword(currentPassword) }) else { return hungUp() }
                 if case .passwordChangeRequested? = result.first {
                     // The password method cannot change it (SheepTerm does not
                     // speak PASSWD_CHANGEREQ). Keyboard-interactive can — PAM
@@ -1977,7 +2093,7 @@ nonisolated final class SSHWorker: Sendable {
                                 // A round already failed with it: this prompt
                                 // wants something else (a second backend).
                                 let display = prompt.text.isEmpty ? "Password for \(config.username)@\(config.host)" : prompt.text
-                                guard let entered = challengePrompt?(display, true) else {
+                                guard let entered = askChallenge(display, secure: true) else {
                                     authCancelled = true
                                     return false
                                 }
@@ -1991,7 +2107,7 @@ nonisolated final class SSHWorker: Sendable {
                             let display = prompt.text.isEmpty
                                 ? "Authentication challenge for \(config.username)@\(config.host)"
                                 : prompt.text
-                            guard let entered = challengePrompt?(display, !prompt.echo) else {
+                            guard let entered = askChallenge(display, secure: !prompt.echo) else {
                                 authCancelled = true
                                 return false
                             }
@@ -2000,7 +2116,7 @@ nonisolated final class SSHWorker: Sendable {
                             if asksNewPassword, !prompt.echo { newPassword = entered }
                         }
                     }
-                    guard let next = exchange(waitsForPerson: true, { try auth.respond(answers) }) else { return hungUp() }
+                    guard let next = exchange(waitsForPerson: true, carriesCredential: !answers.isEmpty, { try auth.respond(answers) }) else { return hungUp() }
                     interactive = next
                 }
                 let outcome = note(interactive)
@@ -2032,11 +2148,21 @@ nonisolated final class SSHWorker: Sendable {
                 return false
             }
             failedRounds += 1
-            if failedRounds >= 3 { return false }
+            if answeredThisRound {
+                unattendedFailures = 0
+            } else {
+                unattendedFailures += 1
+                if unattendedFailures >= 3 { return false }
+            }
             notice("authentication failed — try again")
             // Re-ask the password only if it may be what was wrong: not when
-            // only a one-time code was refused.
-            if tryPassword || usedPassword { password = nil }
+            // only a one-time code was refused. The refused one is dropped
+            // here — never kept, never offered again, never logged; one the
+            // session was started with is also dropped from the app's cache.
+            if tryPassword || usedPassword {
+                configuredPasswordRefused()
+                password = nil
+            }
         }
         notice("authentication did not converge — giving up")
         return false

@@ -229,6 +229,7 @@ final class SessionTerminalHost {
     /// What Close / Escape does on the page on screen (progress, failure).
     private var pageClose: (() -> Void)?
     private var pageKnownHosts: (() -> Void)?
+    private var pageTryAgain: (() -> Void)?
 
     /// The pane is smaller than this: the card goes to a panel instead (the
     /// card never shrinks its font or its width).
@@ -274,6 +275,7 @@ final class SessionTerminalHost {
         settleQuestion(.cancel)
         pageClose = onClose
         pageKnownHosts = nil
+        pageTryAgain = nil
         card.show(stage: stage, page: .progress(text)) { [weak self] action in self?.cardAction(action) }
         placeConnectionCard()
     }
@@ -288,22 +290,28 @@ final class SessionTerminalHost {
         settleQuestion(.cancel)
         pageClose = nil
         pageKnownHosts = nil
+        pageTryAgain = nil
         questionCompletion = completion
         card.show(stage: prompt.stage, page: .question(prompt)) { [weak self] action in self?.cardAction(action) }
         placeConnectionCard()
     }
 
     /// The connection failed: the reason in red on the card, at the stage it
-    /// got to. `onKnownHosts` adds "Open Known Hosts…".
+    /// got to. `onKnownHosts` adds "Open Known Hosts…", `onTryAgain` adds
+    /// "Try Again" (the default — Return).
     func showConnectionFailure(title: String, message: String, hostKeyProblem: Bool,
-                               onKnownHosts: (() -> Void)?, onClose: @escaping () -> Void) {
+                               onKnownHosts: (() -> Void)?, onTryAgain: (() -> Void)? = nil,
+                               onClose: @escaping () -> Void) {
         guard let card = connectionCard else { return }
         settleQuestion(.cancel)
         pageClose = onClose
         pageKnownHosts = onKnownHosts
-        card.show(stage: card.stage,
+        pageTryAgain = onTryAgain
+        let plan = ConnectionCardPlan.failure(at: card.stage, offersKnownHosts: onKnownHosts != nil,
+                                              offersTryAgain: onTryAgain != nil)
+        card.show(stage: plan.stage,
                   page: .failure(title: title, message: message, hostKeyProblem: hostKeyProblem,
-                                 offersKnownHosts: onKnownHosts != nil)) { [weak self] action in self?.cardAction(action) }
+                                 plan: plan)) { [weak self] action in self?.cardAction(action) }
         placeConnectionCard()
     }
 
@@ -318,6 +326,7 @@ final class SessionTerminalHost {
         settleQuestion(.cancel)
         pageClose = nil
         pageKnownHosts = nil
+        pageTryAgain = nil
         guard let card = connectionCard else { return }
         let hadKeyboard = card.hasKeyboard
         connectionCard = nil
@@ -374,6 +383,12 @@ final class SessionTerminalHost {
             close?()
         case .openKnownHosts:
             pageKnownHosts?()
+        case .tryAgain:
+            // Once: the session is replaced by a new one.
+            let tryAgain = pageTryAgain
+            pageTryAgain = nil
+            pageClose = nil
+            tryAgain?()
         }
     }
 

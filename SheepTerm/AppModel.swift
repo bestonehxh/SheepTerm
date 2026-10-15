@@ -1226,7 +1226,8 @@ final class AppModel: ObservableObject {
     /// are the callers that say `.complete`.
     func open(host: Host, completeness: HostCompleteness = .needsCompletion,
               password overridePassword: String? = nil, serialLog: Bool? = nil,
-              reusingLogger: SessionLogger? = nil, promptName carriedPromptName: String? = nil) {
+              reusingLogger: SessionLogger? = nil, promptName carriedPromptName: String? = nil,
+              askPasswordFor refused: RefusedLogin? = nil) {
         switch host.kind {
         case .local:
             newLocalTab()
@@ -1251,7 +1252,11 @@ final class AppModel: ObservableObject {
             if let credential, !credential.username.isEmpty {
                 host.username = credential.username
             }
-            let password = overridePassword
+            // Try Again after a refused login (5.0 (19)): that login's
+            // password is ASKED — neither the saved credential's nor the
+            // cache's, one of which the server just refused. The credential
+            // itself is left alone (nothing overwrites it silently).
+            let password = refused == .target ? nil : overridePassword
                 ?? credential.flatMap { credentialStore.password(for: $0) }
                 ?? passwordCache["\(host.username)@\(host.address):\(host.port)"]
             // Jump host (4.2 (4)): the bastion's login is resolved the same
@@ -1270,7 +1275,8 @@ final class AppModel: ObservableObject {
                 if let bastionCredential, !bastionCredential.username.isEmpty {
                     bastion.username = bastionCredential.username
                 }
-                let bastionPassword = bastionCredential.flatMap { credentialStore.password(for: $0) }
+                let bastionPassword = refused == .jumpHost ? nil
+                    : bastionCredential.flatMap { credentialStore.password(for: $0) }
                     ?? passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"]
                 jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
                                password: bastionPassword,
@@ -1280,7 +1286,7 @@ final class AppModel: ObservableObject {
                 // `rememberJumpPassword` caches what worked under the name
                 // typed there.
                 jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
-                               password: bastion.username.isEmpty ? nil
+                               password: bastion.username.isEmpty || refused == .jumpHost ? nil
                                    : passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"],
                                cipherPolicy: .auto)
             case .invalid:
@@ -1290,8 +1296,25 @@ final class AppModel: ObservableObject {
             }
             let controller = SSHTerminalController(host: host, password: password, jump: jump,
                                                    jumpUnresolved: jumpUnresolved, reusingLogger: reusingLogger)
+            // A refused start password is not offered again from the session
+            // cache (a saved credential is the user's to edit — never
+            // rewritten here). The key is the one it was looked up under.
+            let targetKey = "\(host.username)@\(host.address):\(host.port)"
+            let jumpKey = jump.map { "\($0.username)@\($0.host):\($0.port)" }
+            controller.onConfiguredPasswordRefused = { [weak self] side in
+                guard let self else { return }
+                switch side {
+                case .target: self.passwordCache.removeValue(forKey: targetKey)
+                case .jumpHost: if let jumpKey { self.passwordCache.removeValue(forKey: jumpKey) }
+                }
+            }
             controller.terminalHost.historyKey = historyKey(for: host)
             let tab = SessionTab(content: .ssh(controller), title: host.name)
+            // The failure card's Try Again: the same tab, a fresh connection.
+            controller.onTryAgain = { [weak self, weak tab] refused in
+                guard let self, let tab else { return }
+                self.reconnect(tab: tab, askPasswordFor: refused)
+            }
             if let carriedPromptName { controller.carryPromptName(carriedPromptName) }
             adoptPromptName(carriedPromptName, original: host.name, for: tab)
             controller.onPromptName = { [weak self, weak tab] name in
@@ -1733,7 +1756,7 @@ final class AppModel: ObservableObject {
 
     /// Tears down an SSH/serial tab and opens a fresh session to the same
     /// host, keeping the tab's position in the strip.
-    func reconnect(tab: SessionTab) {
+    func reconnect(tab: SessionTab, askPasswordFor refused: RefusedLogin? = nil) {
         // A stale caller — a context menu left open across an automatic
         // reconnect — must not open a SECOND session to the host and take
         // the log file out from under the one already running.
@@ -1786,7 +1809,7 @@ final class AppModel: ObservableObject {
         // reconnect (recheck finding 3); the password it authenticated with is
         // in `passwordCache`, keyed on this very host.
         open(host: host, completeness: .complete, serialLog: serialLog, reusingLogger: handedLogger,
-             promptName: carriedPromptName)
+             promptName: carriedPromptName, askPasswordFor: refused)
         // `attach` consumed the placement; if nothing was opened, the old
         // pane must not linger in the book.
         if case .replacing(let old) = pendingPlacement {

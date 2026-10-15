@@ -101,7 +101,16 @@ final class SSHTerminalController: NSObject {
     /// whose send never reached the delegate must count as refused, not as
     /// carrying the previous line's verdict.
     private var lastWriteAccepted = false
-    private let password: String?
+    /// The password the session starts with (a saved credential or the
+    /// session cache); handed to the worker once and not kept after that.
+    private var password: String?
+    /// The failure card's Try Again: AppModel reconnects this tab from the
+    /// start. The argument names the login the server refused (its password
+    /// is asked again, never reused), nil for a failure of another kind.
+    var onTryAgain: ((RefusedLogin?) -> Void)?
+    /// The password this session was started with was refused (once per
+    /// login): AppModel drops it from its session cache. Never the password.
+    var onConfiguredPasswordRefused: ((RefusedLogin) -> Void)?
     /// Shared by the main actor and worker callbacks. SessionLogger
     /// serializes file access; this Mutex protects ownership/reconnection.
     nonisolated private let loggerState: Mutex<SessionLogger?>
@@ -313,15 +322,21 @@ final class SSHTerminalController: NSObject {
             guard let self else { return .stopped }
             return self.askHostKeyInTab(question, isCancelled: isCancelled)
         }
-        worker.passwordPrompt = { [weak self] prompt in
-            self?.askInTab(prompt) { host, _ in
+        // `rejected`: the server refused the last answer and allows another
+        // on this same connection — the same Password page comes back, its
+        // field empty, "Wrong password" under it (5.0 (19)).
+        worker.passwordPrompt = { [weak self] prompt, rejected in
+            self?.askInTab(prompt, rejected: rejected) { host, _ in
                 // "Password for user@host" — the account is what the card names.
                 let account = prompt.hasPrefix("Password for ") ? String(prompt.dropFirst(13)) : host
                 return .password(account: SSHWorker.printable(account))
             }
         }
-        worker.challengePrompt = { [weak self] prompt, secure in
-            self?.askInTab(prompt) { _, _ in .challenge(text: SSHWorker.printable(prompt), secure: secure) }
+        worker.challengePrompt = { [weak self] prompt, secure, rejected in
+            self?.askInTab(prompt, rejected: rejected) { _, _ in .challenge(text: SSHWorker.printable(prompt), secure: secure) }
+        }
+        worker.onConfiguredPasswordRefused = { [weak self] side in
+            DispatchQueue.main.async { self?.onConfiguredPasswordRefused?(side) }
         }
         worker.onPasswordWorked = { [weak self] user, password in
             DispatchQueue.main.async {
@@ -369,11 +384,12 @@ final class SSHTerminalController: NSObject {
     /// thread never does: the card is put up with `main.async` and the
     /// answer comes back through a `PromptBridge`. A stopped worker (tab
     /// closed, quit) frees the wait even if no card ever answered.
-    nonisolated private func askInTab(_ text: String,
+    nonisolated private func askInTab(_ text: String, rejected: Bool = false,
                                       step: (_ host: String, _ viaJump: Bool) -> ConnectionPrompt.Step) -> String? {
         let subject = promptSubject()
         let prompt = ConnectionPrompt(step: step(subject.host, subject.viaJump), host: subject.host,
-                                      viaJump: subject.viaJump, tabHost: subject.tabHost, fallbackText: text)
+                                      viaJump: subject.viaJump, tabHost: subject.tabHost, fallbackText: text,
+                                      rejected: rejected)
         // Never on main (the worker has its own queue). If it ever were, the
         // card could not be answered while main blocks — fall back to the
         // old panel rather than deadlock.
@@ -390,9 +406,30 @@ final class SSHTerminalController: NSObject {
                     bridge.answer(value)
                     self?.showProgress(after: prompt)
                 }
+#if DEBUG
+                // Screenshot runs only (compiled out of Release): see `debugAnswers`.
+                if case .password = prompt.step, let scripted = Self.nextDebugAnswer() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                        if bridge.answer(scripted) { self?.showProgress(after: prompt) }
+                    }
+                }
+#endif
             }
         }
     }
+
+#if DEBUG
+    /// Debug builds only, for screenshots without touching the screen:
+    /// SHEEPTERM_DEBUG_PASSWORD_ANSWERS="a,b" answers the first password
+    /// questions as if typed (the card shows each one first);
+    /// SHEEPTERM_DEBUG_HOSTKEY=once answers a first-seen key with Connect Once.
+    nonisolated private static let debugAnswers = Mutex<[String]>(
+        (ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_PASSWORD_ANSWERS"] ?? "")
+            .split(separator: ",").map(String.init))
+    nonisolated private static func nextDebugAnswer() -> String? {
+        debugAnswers.withLock { $0.isEmpty ? nil : $0.removeFirst() }
+    }
+#endif
 
     /// The first-seen host key, the same way. Escape / Cancel → `.cancel`
     /// (the worker closes with "connection cancelled — host key not
@@ -402,6 +439,9 @@ final class SSHTerminalController: NSObject {
         if Thread.isMainThread {
             return MainActor.assumeIsolated { AuthPrompt.confirmHostKey(question, isCancelled: isCancelled) }
         }
+#if DEBUG
+        if ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_HOSTKEY"] == "once" { return .trustOnce }
+#endif
         let subject = promptSubject()
         // Everything shown went through the worker's sanitizer: the host is
         // the user's, but the key type is the server's.
@@ -531,10 +571,16 @@ final class SSHTerminalController: NSObject {
         let knownHosts: (() -> Void)? = conflict == nil ? nil : {
             AppModel.shared.openKnownHosts(search: target)
         }
+        // Try Again (5.0 (19)): a new connection to the same host from the
+        // start. After a refused login it asks that login's password again —
+        // the refused one is not reused.
+        let refused = worker.refusedLogin
+        let tryAgain: (() -> Void)? = ConnectionCardPlan.offersTryAgain(message: message, hostKeyProblem: hostKeyProblem)
+            && onTryAgain != nil ? { [weak self] in self?.onTryAgain?(refused) } : nil
         cancelPendingProgress()
         terminalHost.beginConnectionCard(cardHeader)
         terminalHost.showConnectionFailure(title: title, message: message, hostKeyProblem: hostKeyProblem,
-                                           onKnownHosts: knownHosts) { [weak self] in
+                                           onKnownHosts: knownHosts, onTryAgain: tryAgain) { [weak self] in
             self?.terminalHost.closeConnectionCard()
         }
     }
@@ -592,13 +638,20 @@ final class SSHTerminalController: NSObject {
             host: host.address,
             port: host.port,
             username: host.username,
-            password: password,
+            password: takePassword(),
             mode: host.cipherMode ?? .auto,
             initialCols: terminalView.cols,
             initialRows: terminalView.rows,
             agentForward: host.agentForward ?? false,
             jump: jump
         ))
+    }
+
+    /// The start password, handed over once: the controller does not keep
+    /// a copy for the tab's lifetime (a refused one least of all).
+    private func takePassword() -> String? {
+        defer { password = nil }
+        return password
     }
 
     // MARK: - paging
