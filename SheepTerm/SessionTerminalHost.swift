@@ -284,6 +284,7 @@ final class SessionTerminalHost {
     /// with the user's answer, or `.cancel` on Escape / Close, when a newer
     /// page replaces it, or when the card is taken down (tab closed).
     func presentPrompt(_ prompt: ConnectionPrompt, header: ConnectionCardHeader,
+                       onCancelAfterAnswer: (() -> Void)? = nil,
                        completion: @escaping (ConnectionPromptReply) -> Void) {
         beginConnectionCard(header)
         guard let card = connectionCard else { completion(.cancel); return }
@@ -292,7 +293,7 @@ final class SessionTerminalHost {
         pageKnownHosts = nil
         pageTryAgain = nil
         questionCompletion = completion
-        card.show(stage: prompt.stage, page: .question(prompt)) { [weak self] action in self?.cardAction(action) }
+        card.show(stage: prompt.stage, page: .question(prompt), busyCancel: onCancelAfterAnswer) { [weak self] action in self?.cardAction(action) }
         placeConnectionCard()
     }
 

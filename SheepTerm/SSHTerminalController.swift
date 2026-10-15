@@ -270,7 +270,12 @@ final class SSHTerminalController: NSObject {
                 self.cancelPrompt()
                 // Close on the card already said "cancelled" and set the
                 // status; whatever the stopped worker reports after it is noise.
-                guard !self.connectCancelledByUser else { return }
+                // A cancelled session never wants a card — not even one a racing question put back up.
+                guard !self.connectCancelledByUser else {
+                    self.cancelPendingProgress()
+                    self.terminalHost.closeConnectionCard()
+                    return
+                }
                 self.printNotice(message, error: true)
                 // A prompt the user dismissed is a decision, not a drop. Plain
                 // "disconnected" is what auto-reconnect keys on, and it would
@@ -399,9 +404,14 @@ final class SSHTerminalController: NSObject {
         let worker = self.worker
         return PromptBridge<String>.ask(isCancelled: { !worker.isRunning }) { bridge in
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.stopped else { bridge.answer(nil); return }
+                // A question that arrives after the user cancelled (the reply raced the Cancel click) must not put a card
+                // back up for a stopped worker — nothing would ever take it down.
+                guard let self, ConnectionCardPlan.acceptsQuestion(stopped: self.stopped, cancelledByUser: self.connectCancelledByUser) else {
+                    bridge.answer(nil); return
+                }
                 self.cancelPendingProgress()
-                self.terminalHost.presentPrompt(prompt, header: self.cardHeader) { [weak self] reply in
+                self.terminalHost.presentPrompt(prompt, header: self.cardHeader,
+                                                onCancelAfterAnswer: { [weak self] in self?.cancelConnecting() }) { [weak self] reply in
                     guard case .text(let value) = reply else { bridge.answer(nil); return }
                     bridge.answer(value)
                     self?.showProgress(after: prompt)
@@ -452,7 +462,9 @@ final class SSHTerminalController: NSObject {
                                       tabHost: subject.tabHost, fallbackText: question.target)
         return PromptBridge<SSHWorker.HostKeyAnswer>.askHostKey(isCancelled: isCancelled) { bridge in
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.stopped else { bridge.answer(nil); return }
+                guard let self, ConnectionCardPlan.acceptsQuestion(stopped: self.stopped, cancelledByUser: self.connectCancelledByUser) else {
+                    bridge.answer(nil); return
+                }
                 self.cancelPendingProgress()
                 self.terminalHost.presentPrompt(prompt, header: self.cardHeader) { [weak self] reply in
                     switch reply {

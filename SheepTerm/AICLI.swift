@@ -55,16 +55,27 @@ public nonisolated enum AICLI {
 
     // MARK: Environment
 
+    /// The variables that would hand a CLI an API key instead of the user's
+    /// subscription login.
+    public static let apiKeyVariables = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"]
+
     /// The child's environment: API keys removed (the user's subscription
     /// login is the only credential), auto-update off, PATH as given.
+    /// The keys are matched case-insensitively: Windows environment names
+    /// are (`Openai_Api_Key` IS `OPENAI_API_KEY` to the child there), so
+    /// every spelling goes — on the Mac too.
     public static func childEnvironment(_ base: [String: String], provider: AIProvider, path: String?, tmpdir: String?) -> [String: String] {
-        var env = base
-        for key in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"] {
-            env.removeValue(forKey: key)
+        let refused = Set(apiKeyVariables)
+        var env = base.filter { !refused.contains($0.key.uppercased()) }
+        // Set a variable replacing any other spelling of its name: Windows names are case-insensitive, and a `Path`
+        // left beside a new `PATH` gave the child two (which one wins is up to the C runtime).
+        func set(_ name: String, _ value: String) {
+            for key in env.keys where key.uppercased() == name.uppercased() && key != name { env.removeValue(forKey: key) }
+            env[name] = value
         }
-        if provider == .claude { env["DISABLE_AUTOUPDATER"] = "1" }
-        if let path { env["PATH"] = path }
-        if let tmpdir { env["TMPDIR"] = tmpdir }
+        if provider == .claude { set("DISABLE_AUTOUPDATER", "1") }
+        if let path { set("PATH", path) }
+        if let tmpdir { set("TMPDIR", tmpdir) }
         return env
     }
 

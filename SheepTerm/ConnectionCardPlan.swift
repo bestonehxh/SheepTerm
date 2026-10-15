@@ -4,21 +4,23 @@ import Foundation
 // so the harness (`Tests/run.sh tests`) can pin it without SwiftUI: which
 // stage, which red line under the field, which buttons, what Return does.
 // `ConnectionPromptView` draws from it; `SSHTerminalController` decides
-// with it whether a failure offers Try Again.
+// with it whether a failure offers Try Again. Foundation only and in
+// `sharedSources` (root Package.swift): SheepTerm for Windows compiles this
+// same file for its card — ARCHITECTURE.md "Shared with Windows".
 
 /// Which login a server refused: the tab's own host, or the jump host in
 /// front of it. Set by `SSHWorker` when a session ends on a refused
 /// credential; Try Again asks THAT login's password again.
-nonisolated enum RefusedLogin: Sendable, Equatable {
+public nonisolated enum RefusedLogin: Sendable, Equatable {
     case target, jumpHost
 }
 
 /// The stage track's nodes, Termius-style: connect → host key → user →
 /// password → terminal.
-enum ConnectionStage: Int, CaseIterable {
+public nonisolated enum ConnectionStage: Int, CaseIterable, Sendable {
     case connect, hostKey, user, password, terminal
 
-    var label: String {
+    public var label: String {
         switch self {
         case .connect: return "Connect"
         case .hostKey: return "Host key"
@@ -28,7 +30,7 @@ enum ConnectionStage: Int, CaseIterable {
         }
     }
 
-    var symbol: String {
+    public var symbol: String {
         switch self {
         case .connect: return "cable.connector"
         case .hostKey: return "key.fill"
@@ -39,9 +41,14 @@ enum ConnectionStage: Int, CaseIterable {
     }
 }
 
-enum ConnectionCardPlan {
+public nonisolated enum ConnectionCardPlan {
+    /// Whether a question from the worker may put a card up. Not after the tab stopped, and not after the user
+    /// cancelled the connection: a reply that raced the Cancel click would raise a card for a stopped worker that
+    /// nothing ever takes down (review 5.0 (20)). The same rule on Windows.
+    public static func acceptsQuestion(stopped: Bool, cancelledByUser: Bool) -> Bool { !stopped && !cancelledByUser }
+
     /// A button of the card's row, left to right as drawn.
-    enum Button: Equatable {
+    public enum Button: Equatable, Sendable {
         case cancel
         /// "Connect" (a secret) / "Continue" (a username, a visible answer).
         case submit(String)
@@ -51,26 +58,33 @@ enum ConnectionCardPlan {
     }
 
     /// A text question's kind, as the card sees it.
-    enum Question: Equatable {
+    public enum Question: Equatable, Sendable {
         case username
         case password
         /// keyboard-interactive in the server's words (an OTP, a PIN).
         case challenge(secure: Bool)
     }
 
-    struct Page: Equatable {
-        let stage: ConnectionStage
+    public struct Page: Equatable, Sendable {
+        public let stage: ConnectionStage
         /// The red line under the field ("Wrong password"), nil for none.
-        let note: String?
-        let buttons: [Button]
+        public let note: String?
+        public let buttons: [Button]
         /// What Return answers on the page.
-        let returnKey: Button
+        public let returnKey: Button
+
+        public init(stage: ConnectionStage, note: String?, buttons: [Button], returnKey: Button) {
+            self.stage = stage
+            self.note = note
+            self.buttons = buttons
+            self.returnKey = returnKey
+        }
     }
 
     /// A text question. `rejected`: the server turned down the last answer
     /// on this same connection and lets the user try again — the page is
     /// the same one, its field empty, with the red line.
-    static func question(_ question: Question, rejected: Bool) -> Page {
+    public static func question(_ question: Question, rejected: Bool) -> Page {
         let secure: Bool
         let stage: ConnectionStage
         switch question {
@@ -83,9 +97,61 @@ enum ConnectionCardPlan {
                     buttons: [.cancel, submit], returnKey: submit)
     }
 
+    /// One question page from the moment it is up until the next page
+    /// replaces it. After an answer is submitted the page is `busy`: the
+    /// primary button shows a spinner, the field and the button are off
+    /// (a second Return / click answers nothing), and only Cancel works —
+    /// it cancels the CONNECTION, since the worker already has the answer.
+    /// Nothing here clears `busy` but a new page: the card makes a fresh
+    /// `Entry` for every page it shows (rejection, next stage, failure) and
+    /// takes the card down on a stop, so the spinner cannot stick.
+    public struct Entry: Equatable, Sendable {
+        public enum Submit: Equatable, Sendable {
+            /// Send this to the worker; the page is busy now.
+            case send(String)
+            /// Nothing usable to send (an empty username / password).
+            case refuseEmpty
+            /// Already submitted, or not a text question.
+            case ignored
+        }
+        public enum Cancel: Equatable, Sendable {
+            /// Answer the question with "cancel" (the worker closes).
+            case cancelQuestion
+            /// The answer is already with the worker: cancel the connection.
+            case cancelConnection
+        }
+
+        public let question: Question?
+        public private(set) var busy = false
+
+        public init(question: Question?) { self.question = question }
+
+        /// `text` as typed. A username is trimmed; a password is not.
+        public mutating func submit(_ text: String) -> Submit {
+            guard let question, !busy else { return .ignored }
+            let value: String
+            switch question {
+            case .username: value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .password, .challenge: value = text
+            }
+            switch question {
+            case .username, .password:
+                guard !value.isEmpty else { return .refuseEmpty }
+            case .challenge:
+                break
+            }
+            busy = true
+            return .send(value)
+        }
+
+        public func cancel() -> Cancel {
+            busy ? .cancelConnection : .cancelQuestion
+        }
+    }
+
     /// The red line for a re-asked question. A username is never "wrong"
     /// on its own (servers do not say), so it has none.
-    static func rejectionNote(_ question: Question) -> String? {
+    public static func rejectionNote(_ question: Question) -> String? {
         switch question {
         case .username: return nil
         case .password: return "Wrong password"
@@ -95,7 +161,7 @@ enum ConnectionCardPlan {
 
     /// The failure page at the stage the connection got to. Try Again is
     /// the default (Return) whenever it is offered; otherwise Return closes.
-    static func failure(at stage: ConnectionStage, offersKnownHosts: Bool, offersTryAgain: Bool) -> Page {
+    public static func failure(at stage: ConnectionStage, offersKnownHosts: Bool, offersTryAgain: Bool) -> Page {
         var buttons: [Button] = [.close]
         if offersKnownHosts { buttons.append(.openKnownHosts) }
         if offersTryAgain { buttons.append(.tryAgain) }
@@ -106,7 +172,7 @@ enum ConnectionCardPlan {
     /// starts with that login (a host opened from a typed `user@host` is
     /// NAMED "user@host", the tab chip shows it as is), so the card never
     /// says "admin@admin@10.0.0.1". The one place this rule lives.
-    static func passwordTitle(account: String, name: String) -> String {
+    public static func passwordTitle(account: String, name: String) -> String {
         let user = account.split(separator: "@", maxSplits: 1).first.map(String.init) ?? account
         guard !user.isEmpty else { return name }
         if name.lowercased().hasPrefix(user.lowercased() + "@") { return name }
@@ -116,7 +182,7 @@ enum ConnectionCardPlan {
     /// A failure only the host's settings can fix — the same connection
     /// again fails the same way: an out-of-range port (the host's or its
     /// jump host's, `SSHWorker`'s "invalid port …").
-    static func isConfigurationProblem(_ message: String) -> Bool {
+    public static func isConfigurationProblem(_ message: String) -> Bool {
         message.hasPrefix("invalid port ") || (message.hasPrefix("jump host ") && message.contains(": invalid port "))
     }
 
@@ -125,7 +191,7 @@ enum ConnectionCardPlan {
     /// changed or revoked — connecting again only raises the same warning —
     /// nor for something only the user's settings can fix (a missing jump
     /// host), nor for the user's own Cancel.
-    static func offersTryAgain(message: String, hostKeyProblem: Bool, configurationProblem: Bool = false) -> Bool {
+    public static func offersTryAgain(message: String, hostKeyProblem: Bool, configurationProblem: Bool = false) -> Bool {
         if hostKeyProblem || configurationProblem || isConfigurationProblem(message) { return false }
         if message.hasPrefix("connection cancelled") { return false }
         return true

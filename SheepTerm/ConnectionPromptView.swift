@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import Synchronization
 
 /// What a connection prompt asks (4.2 (9)). Built on the worker queue from
 /// the worker's own question, shown on the main actor by
@@ -144,6 +145,12 @@ final class ConnectionCardModel: ObservableObject {
     var fixedHeight: CGFloat?
 
     var onAction: ((ConnectionCardAction) -> Void)?
+    /// The question page's state: busy from the moment an answer is
+    /// submitted until the next page replaces it (`show` makes a new one).
+    @Published var entry = ConnectionCardPlan.Entry(question: nil)
+    /// Cancel while `entry.busy`: the answer is with the worker already, so
+    /// this cancels the connection (set by `show` for question pages).
+    var onBusyCancel: (() -> Void)?
     var onFocus: (() -> Void)?
     var onTap: (() -> Void)?
 
@@ -163,12 +170,18 @@ final class ConnectionCardModel: ObservableObject {
 
     func escape() {
         switch page {
-        case .question, .certificate: send(.answer(.cancel))
+        case .question:
+            switch entry.cancel() {
+            case .cancelQuestion: send(.answer(.cancel))
+            case .cancelConnection: onBusyCancel?()
+            }
+        case .certificate: send(.answer(.cancel))
         default: send(.close)
         }
     }
 
     var hasField: Bool {
+        if entry.busy { return false }
         if case .question(let prompt) = page, case .hostKey = prompt.step { return false }
         if case .question = page { return true }
         return false
@@ -250,8 +263,15 @@ final class ConnectionCardView: NSView {
 
     /// Shows `page` at `stage`; `action` replaces the previous page's
     /// handler. The keyboard stays with the card across pages.
-    func show(stage: ConnectionStage, page: ConnectionCardPage, action: @escaping (ConnectionCardAction) -> Void) {
+    func show(stage: ConnectionStage, page: ConnectionCardPage, busyCancel: (() -> Void)? = nil,
+              action: @escaping (ConnectionCardAction) -> Void) {
         let hadKeyboard = hasKeyboard
+        if case .question(let prompt) = page {
+            model.entry = ConnectionCardPlan.Entry(question: prompt.planQuestion)
+        } else {
+            model.entry = ConnectionCardPlan.Entry(question: nil)
+        }
+        model.onBusyCancel = busyCancel
         model.focusOnAppear = hadKeyboard
         model.stage = stage
         model.page = page
@@ -312,6 +332,7 @@ final class ConnectionCardView: NSView {
             switch model.page {
             case .progress: NSSound.beep()
             case .failure(_, _, _, let plan): model.send(plan.returnKey == .tryAgain ? .tryAgain : .close)
+            case .question where model.entry.busy: NSSound.beep()
             case .question, .certificate: model.send(.answer(.cancel))
             }
         default:
@@ -534,14 +555,25 @@ private struct CardButton: View {
     let title: String
     let role: Role
     let help: String
+    /// Waiting for the server's answer: a small spinner in place of the
+    /// label, same size and colour, button off.
+    let busy: Bool
     let action: () -> Void
 
-    init(_ title: String, role: Role, help: String, action: @escaping () -> Void) {
-        self.title = title; self.role = role; self.help = help; self.action = action
+    init(_ title: String, role: Role, help: String, busy: Bool = false, action: @escaping () -> Void) {
+        self.title = title; self.role = role; self.help = help; self.busy = busy; self.action = action
     }
 
     var body: some View {
-        Button(action: action) { Text(title).frame(minWidth: 96).padding(.horizontal, 10) }
+        Button(action: action) {
+            // The label keeps its place (invisible) so the capsule is the
+            // same size; the spinner sits over it.
+            Text(title).frame(minWidth: 96).padding(.horizontal, 10)
+                .opacity(busy ? 0 : 1)
+                .overlay {
+                    if busy { ProgressView().controlSize(.small).environment(\.colorScheme, .dark) }
+                }
+        }
             .buttonStyle(style)
             .focusable(false)
             .help(help)
@@ -566,23 +598,22 @@ private struct EntryPage: View {
     let prompt: ConnectionPrompt
     @State private var text = ""
 
-    private var answer: String {
-        if case .username = prompt.step { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        return text
-    }
-
     private func submit() {
-        switch prompt.step {
-        case .username, .password:
-            // Empty is not an answer the worker can use (it would close the
-            // session as cancelled) — Escape cancels; Return on empty says no.
-            guard !answer.isEmpty else { NSSound.beep(); return }
-        default:
+        // `ConnectionCardPlan.Entry` decides: empty is not an answer the
+        // worker can use (Escape cancels; Return on empty says no), and a
+        // second submit while waiting for the server answers nothing.
+        switch model.entry.submit(text) {
+        case .send(let value):
+            text = ""
+            model.send(.answer(.text(value)))
+            // The field is off now: the keyboard moves to the card, so
+            // Escape still reaches it.
+            DispatchQueue.main.async { model.onTap?() }
+        case .refuseEmpty:
+            NSSound.beep()
+        case .ignored:
             break
         }
-        let value = answer
-        text = ""
-        model.send(.answer(.text(value)))
     }
 
     var body: some View {
@@ -596,13 +627,26 @@ private struct EntryPage: View {
                 if focused { model.onFocus?() }
             }
             .frame(width: SheepAlert.contentWidth)
+            .disabled(model.entry.busy)
             .id(model.pageID)
         }, buttons: {
             CardButton("Cancel", role: .neutral, help: "Cancel the connection (Esc)") { model.escape() }
-            CardButton(submitTitle, role: .green, help: "Return", action: submit)
+            CardButton(submitTitle, role: .green, help: "Return", busy: model.entry.busy, action: submit)
         })
         .onChange(of: model.pageID) { _, _ in text = "" }
+#if DEBUG
+        // Screenshot runs only (compiled out of Release): SHEEPTERM_DEBUG_CARD_TYPE=<text>
+        // types it into the FIRST password page and presses Connect through the real path.
+        .onAppear {
+            guard case .password = prompt.step, let value = Self.debugType.withLock({ v -> String? in defer { v = nil }; return v })
+            else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { text = value; submit() }
+        }
+#endif
     }
+#if DEBUG
+    private static let debugType = Mutex<String?>(ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_CARD_TYPE"])
+#endif
 
     private var submitTitle: String {
         if case .submit(let title)? = prompt.plan?.returnKey { return title }

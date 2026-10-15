@@ -161,29 +161,19 @@ nonisolated final class AIProcessRun: @unchecked Sendable {
         var cleanup: [String] = []
     }
 
-    enum Ending: Equatable, Sendable {
-        case completed
-        case cancelled
-        case aborted(String)
-        case failed(String)
-    }
+    /// How a run ended — the shared `AIRunEnding` (AIRules.swift).
+    typealias Ending = AIRunEnding
 
     private let spec: Spec
     private let provider: AIProvider
     private let onEvent: @Sendable (AIStreamEvent) -> Void
     private let onExit: @Sendable (Ending) -> Void
     private let state = Mutex(State())
-    /// Grace between SIGINT and SIGTERM for Stop.
-    static let interruptGrace: TimeInterval = 3
-    /// After SIGTERM: how long a process group (or a grandchild that kept
-    /// stdout open) may hold the run before it is killed and the readers
-    /// are woken, so `onExit` always fires.
-    static let killGrace: TimeInterval = 1
-    /// After the turn's end (`.done`): how long the run may still take to
-    /// end by itself before it is ended for it — a helper the CLI left
-    /// behind holding stdout would otherwise keep it open forever.
-    static let doneGrace: TimeInterval = 3
-    static let stderrCap = 64 * 1024
+    /// The shared timing rules (`AIRunTiming`, AIRules.swift).
+    static let interruptGrace = AIRunTiming.interruptGrace
+    static let killGrace = AIRunTiming.killGrace
+    static let doneGrace = AIRunTiming.doneGrace
+    static let stderrCap = AIRunTiming.stderrCap
 
     private struct State {
         var cancelled = false
@@ -407,14 +397,8 @@ nonisolated final class AIProcessRun: @unchecked Sendable {
 
     private func ending(status: Int32, signaled: Bool, stderr: String) -> Ending {
         let s = state.withLock { $0 }
-        if let aborted = s.aborted { return .aborted(aborted) }
-        if s.cancelled { return .cancelled }
-        if let failure = s.failure { return .failed(AIRunMessages.friendly(failure, provider: provider)) }
-        if status == 0 && !signaled { return .completed }
-        // A complete answer was delivered; the CLI was still flushing when the linger timer ended it.
-        if s.sawDone { return .completed }
-        let detail = AICLI.shortError(stderr)
-        return .failed(AIRunMessages.friendly(detail.isEmpty ? "exited with status \(status)" : detail, provider: provider))
+        return AIRunEnding.decide(aborted: s.aborted, cancelled: s.cancelled, failure: s.failure, sawDone: s.sawDone,
+                                  exitStatus: status, signaled: signaled, stderr: stderr, provider: provider)
     }
 
     /// Stop: SIGINT to the process group (the CLI cleans up), SIGTERM after
@@ -430,64 +414,6 @@ nonisolated final class AIProcessRun: @unchecked Sendable {
             guard state.withLock({ !$0.finished }) else { return }
             terminate()
         }
-    }
-}
-
-nonisolated struct AIMessage: Identifiable, Equatable, Sendable {
-    enum Role: Sendable { case user, assistant }
-    let id = UUID()
-    let role: Role
-    var text: String
-    var provider: AIProvider
-    var attachments: [AIAttachment] = []
-    /// Short error line under an assistant turn.
-    var failure: String?
-    var stopped = false
-}
-
-/// One session's conversation (in memory only). Here, not in the panel
-/// model, so the harness holds its turn / chat identity rules to cases.
-nonisolated struct AIConversation: Equatable, Sendable {
-    var provider: AIProvider
-    var messages: [AIMessage] = []
-    var pending: [AIAttachment] = []
-    var draft = ""
-    var running = false
-    var claudeSession = UUID()
-    var claudeStarted = false
-    var codexThread: String?
-    /// The send whose run may still start or fail (a newer send or a New
-    /// Chat replaces it): anything from an older turn is dropped.
-    var turn = UUID()
-    /// This chat (a New Chat is a new one): an attachment masked for an
-    /// earlier chat does not land in it.
-    var epoch = UUID()
-    /// Where "attach recent lines" stopped last (reset by New Chat; kept
-    /// across a provider switch, like the chips).
-    var attachMark: AIAttachMark?
-    /// A short line under the chips ("No new output since the last attach").
-    var notice: String?
-
-    init(provider: AIProvider) { self.provider = provider }
-
-    func isCurrent(turn: UUID) -> Bool { running && self.turn == turn }
-
-    /// Provider switch: a new conversation that keeps the draft and the
-    /// chips (and so the chat identity they were attached to).
-    func switchingProvider(to provider: AIProvider) -> AIConversation {
-        var fresh = AIConversation(provider: provider)
-        fresh.draft = draft
-        fresh.pending = pending
-        fresh.epoch = epoch
-        fresh.attachMark = attachMark
-        return fresh
-    }
-
-    /// A chip that finished masking: only into the chat it was made for.
-    mutating func land(_ attachment: AIAttachment, epoch: UUID) -> Bool {
-        guard self.epoch == epoch else { return false }
-        pending.append(attachment)
-        return true
     }
 }
 
@@ -514,127 +440,6 @@ nonisolated enum AIRunPrep {
         do { return .ready(binary, try spec(planner, binary)) } catch {
             return .failed(.failed("\(provider.label): couldn't prepare the run"), nil)
         }
-    }
-}
-
-/// Which run is the live one for each session. A run's callbacks carry the
-/// run itself; anything from a run that is no longer the session's (New
-/// Chat, a provider switch, a newer send) is ignored — a stale `ended` must
-/// not stop or finish the run that replaced it.
-nonisolated struct AIRunBook<Run: AnyObject> {
-    private var runs: [UUID: Run] = [:]
-
-    init() {}
-
-    mutating func set(_ run: Run, for session: UUID) { runs[session] = run }
-
-    @discardableResult
-    mutating func remove(_ session: UUID) -> Run? { runs.removeValue(forKey: session) }
-
-    func run(for session: UUID) -> Run? { runs[session] }
-
-    func isCurrent(_ run: Run, for session: UUID) -> Bool { runs[session] === run }
-
-    /// A run ended: forgotten only if it is still the session's. Returns
-    /// whether the ending is the live run's (and so should be applied).
-    mutating func ended(_ run: Run, for session: UUID) -> Bool {
-        guard runs[session] === run else { return false }
-        runs.removeValue(forKey: session)
-        return true
-    }
-
-    var sessions: [UUID] { Array(runs.keys) }
-}
-
-/// Streamed text waiting to reach the conversation. Deltas arrive dozens of
-/// times a second; publishing each one re-rendered the panel per delta, so
-/// they are gathered here and flushed at most every `interval` — and at once
-/// before anything else about the run (a whole message, an error, the end).
-nonisolated struct AIDeltaBuffer {
-    static let interval: TimeInterval = 0.06
-    private var pending: [UUID: String] = [:]
-    /// A flush is on its way (one timer for all sessions).
-    private(set) var scheduled = false
-
-    init() {}
-
-    /// Returns true when the caller must schedule the flush.
-    mutating func add(_ text: String, for session: UUID) -> Bool {
-        pending[session, default: ""] += text
-        guard !scheduled else { return false }
-        scheduled = true
-        return true
-    }
-
-    /// The text for one session (an immediate flush); nil if none.
-    mutating func take(_ session: UUID) -> String? {
-        pending.removeValue(forKey: session)
-    }
-
-    /// Everything (the timer fired).
-    mutating func takeAll() -> [UUID: String] {
-        scheduled = false
-        defer { pending = [:] }
-        return pending
-    }
-
-    /// New Chat / provider switch / closed session: the text is not wanted.
-    mutating func drop(_ session: UUID) { pending.removeValue(forKey: session) }
-
-    var isEmpty: Bool { pending.isEmpty }
-}
-
-/// The conversation dictionary's attach rules, pure so the harness tests the
-/// real thing: a chat that does not exist yet is MATERIALISED before its epoch
-/// is captured (`conversation(for:)` hands out a throwaway with a random
-/// epoch, so the first attach on a fresh session would never land), and a chip
-/// lands only in a stored chat of the same epoch.
-nonisolated enum AIAttachBook {
-    static func begin(_ conversations: inout [UUID: AIConversation], session: UUID, defaultProvider: AIProvider) -> UUID {
-        if conversations[session] == nil { conversations[session] = AIConversation(provider: defaultProvider) }
-        return conversations[session]!.epoch
-    }
-
-    @discardableResult
-    static func land(_ attachment: AIAttachment, session: UUID, epoch: UUID, in conversations: inout [UUID: AIConversation]) -> Bool {
-        guard var c = conversations[session], c.land(attachment, epoch: epoch) else { return false }
-        conversations[session] = c
-        return true
-    }
-}
-
-/// Short, actionable lines for what the CLIs print when something is wrong.
-nonisolated enum AIRunMessages {
-    static func notInstalled(_ provider: AIProvider) -> String {
-        "\(provider.label) isn't installed — Settings ▸ AI ▸ Install"
-    }
-
-    static func notSignedIn(_ provider: AIProvider) -> String {
-        "\(provider.label) isn't signed in — Settings ▸ AI ▸ Sign In"
-    }
-
-    static func apiKey(_ provider: AIProvider) -> String {
-        "\(provider.label) is signed in with an API key — Settings ▸ AI ▸ Sign In with your account"
-    }
-
-    /// A run that ended with the "not signed in" line: the account state shown
-    /// in Settings must follow (signed out, login re-checked on the next send).
-    static func isNotSignedIn(_ ending: AIProcessRun.Ending, provider: AIProvider) -> Bool {
-        if case .failed(let message) = ending { return message == notSignedIn(provider) }
-        return false
-    }
-
-    static func friendly(_ raw: String, provider: AIProvider) -> String {
-        let lower = raw.lowercased()
-        if lower.contains("not logged in") || lower.contains("please run /login") || lower.contains("login required")
-            || lower.contains("not signed in") || lower.contains("unauthorized") || lower.contains("401")
-            || lower.contains("invalid api key") || lower.contains("authentication") {
-            return notSignedIn(provider)
-        }
-        if lower.contains("usage limit") || lower.contains("rate limit") || lower.contains("429") {
-            return "\(provider.label): usage limit reached — try again later"
-        }
-        return "\(provider.label): \(raw)"
     }
 }
 
