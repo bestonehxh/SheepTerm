@@ -1,50 +1,65 @@
 <p align="center">
-  <img src=".github/icon.png?v=3" width="128" alt="SheepTerm app icon">
+  <img src=".github/icon.png?v=3" width="112" alt="SheepTerm app icon">
 </p>
 
-# 🐑 SheepTerm
+<h1 align="center">SheepTerm</h1>
 
-**A native macOS terminal client built for network engineers — SSH, Serial, and local shell in one window.**
+<p align="center"><b>The terminal built for network engineers.</b><br>
+SSH, serial and local shell with highlighting that knows your vendor — plus device web UIs and an AI that reads the output with you.</p>
 
-SheepTerm is written in SwiftUI + AppKit (Swift 6) with its own terminal emulator and its own
-SSH implementation, and is designed around the daily workflow of configuring switches, routers, firewalls, and access
-points: legacy-cipher SSH to old gear, serial consoles over USB adapters, device output
-highlighted per vendor, hundreds of hosts organised by site and floor, and safe multi-line
-config pasting.
+<p align="center">
+  <a href="https://github.com/bestonehxh/SheepTerm/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_5.0_%2820%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
+  <a href="https://github.com/bestonehxh/SheepTerm-Windows/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download SheepTerm for Windows"></a>
+</p>
 
-## At a glance
+<p align="center"><a href="https://sheepterm.com/">Website</a> · <a href="https://github.com/bestonehxh/SheepTerm/releases">Release notes</a> · <a href="https://github.com/bestonehxh/SheepTerm-Windows">SheepTerm for Windows</a></p>
 
-- **Vendor-aware highlighting** for switches, routers and firewalls.
-- **SSH, serial and local shell** with saved hosts and groups.
-- **Split panes** to keep several sessions visible.
-- **Optional Google sign-in** for passphrase-encrypted sync through your own Drive.
-- **Share host groups** through `.sheepterm` exports that strip credentials.
+<p align="center"><img src="docs/images/hero.webp" width="900" alt="SheepTerm with three panes: Cisco, Aruba CX and FortiGate output highlighted per vendor, beside a sidebar of saved hosts"></p>
 
-[Website & screenshots](https://sheepterm.com/) · [macOS download](https://github.com/bestonehxh/SheepTerm/releases/latest) · [Windows download](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest)
+## ✨ New in 5.0
+
+- **Browser tabs** — a device's web UI next to its console; self-signed certificates trusted like SSH host keys; Fill Login only when you click.
+- **AI panel** — ask Claude or ChatGPT about the output with your own subscription. Secrets masked, never runs commands.
+- **Real MAC / ARP on macOS 27** — in local tabs and View ▸ Network Info.
+- **Password retry** — a wrong password asks again on the same connection.
+- **Bundled terminal fonts** and easier-to-read themes.
+
+## Features
 
 <table>
-<tr><td><img src="https://bestonehxh.github.io/assets/mac/st-highlight.webp" alt="Vendor-aware Aruba CX output highlighting" width="560"></td><td><img src="https://bestonehxh.github.io/assets/mac/st-split.webp" alt="Split terminal panes" width="560"></td></tr>
-<tr><td>Vendor-aware highlighting</td><td>Split panes on macOS</td></tr>
+<tr>
+<td width="50%"><img src="docs/images/highlight.webp" alt="Cisco and Aruba CX output highlighted per vendor"><br><b>Vendor-aware highlighting</b> — Cisco, Aruba, Fortinet, Huawei, Juniper, Palo Alto and more.</td>
+<td width="50%"><img src="docs/images/web.webp" alt="A console beside its device web UI, with the certificate trust card"><br><b>Device web UIs in a tab</b> — beside the console, certificates trusted like host keys.</td>
+</tr>
+<tr>
+<td><img src="docs/images/ai.webp" alt="AI panel explaining an err-disabled port with secrets removed"><br><b>AI panel</b> — Claude or ChatGPT, your own login; secrets removed first.</td>
+<td><img src="docs/images/sync.webp" alt="Encrypted sync between Mac and Windows through your own Google Drive"><br><b>Google Drive sync</b> — end-to-end encrypted, in your own Drive.</td>
+</tr>
+<tr>
+<td><img src="docs/images/netinfo.webp" alt="Network Info window with interfaces and ARP table"><br><b>Network Info</b> — real MAC addresses and ARP table on macOS 27.</td>
+<td><img src="docs/images/themes.webp" alt="The same output in four terminal themes"><br><b>Themes &amp; fonts</b> — six themes, bundled monospace fonts.</td>
+</tr>
 </table>
 
-Share Link is currently in testing and is not yet available in the public download. Linux support is coming soon.
+**Also:** split panes · jump host · serial with Send Break · session logs + Search Logs · Snippets & Broadcast · safe multi-line paste · Share Link · Add Hosts from CSV · per-host command history · legacy ciphers for old gear · signed in-app updates.
 
-## ⬇️ Download
+## Install
 
-[![Download SheepTerm for macOS](https://img.shields.io/badge/Download-SheepTerm_5.0_%2820%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTerm/releases/latest)
+1. Download `SheepTerm-5.0-20.zip`, unzip, drag **SheepTerm.app** into `Applications`.
+2. Not notarized: right-click → **Open** the first time, or run `xattr -dr com.apple.quarantine /Applications/SheepTerm.app`.
+3. Updates are built in and verified with an Ed25519 signature.
 
-**[Get the latest release →](https://github.com/bestonehxh/SheepTerm/releases/latest)** — download `SheepTerm-5.0-20.zip`, unzip, and drag **SheepTerm.app** into `Applications`.
+**Requires** macOS 26.4 (Tahoe) or later, Apple Silicon. Windows 10/11 x64: [SheepTerm for Windows](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest).
 
-> The build is unsigned (not notarized), so macOS will warn on first launch —
-> right-click the app and choose **Open**, or run
-> `xattr -dr com.apple.quarantine /Applications/SheepTerm.app`
->
-> Requires macOS 26.4 (Tahoe) or later, Apple Silicon.
+## Privacy & security
 
-After the first install SheepTerm keeps itself up to date: it checks for a new release at launch
-and once a day, and **SheepTerm → Check for Updates…** checks now. Each update is verified against
-an Ed25519 signature before it is unpacked, and nothing is installed until you click
-**Install & Relaunch**.
+- 🔑 Passwords live only in the macOS Keychain — never in files, backups or exports.
+- 🛡️ New host keys and certificates are shown and confirmed before anything is sent.
+- 🔒 Sync is encrypted with your passphrase before upload; nothing syncs until you sign in.
+- 🤖 The AI sees only what you attach, with secrets removed, and can't run commands.
+- 🍎 Own SSH and terminal emulator; crypto from macOS itself (CryptoKit, CommonCrypto, Security). No tracking.
+
+See [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md).
 
 ## The Sheep family 🐑
 
@@ -67,110 +82,13 @@ The servers and hypervisor control a network lab needs, native on the Mac:
 | <img src="https://raw.githubusercontent.com/bestonehxh/LabDC/main/.github/icon.png?v=2" width="48" height="48" alt="LabDC"> | **[LabDC](https://github.com/bestonehxh/LabDC)** | Active Directory–compatible domain controller with RADIUS for 802.1X and a lab CA | [⬇️ Download](https://github.com/bestonehxh/LabDC/releases/latest) | Coming Soon | Coming Soon |
 | <img src="https://raw.githubusercontent.com/bestonehxh/LabDock/main/.github/icon.png?v=1" width="48" height="48" alt="LabDock"> | **[LabDock](https://github.com/bestonehxh/LabDock)** | VM control and console for standalone ESXi hosts — power, snapshots, guest files and scripts, no vCenter | [⬇️ Download](https://github.com/bestonehxh/LabDock/releases/latest) | Coming Soon | Coming Soon |
 
-## Features
-
-### Connections
-- **SSH** via **SheepSSH**, SheepTerm's own SSH implementation — modern algorithms
-  (including post-quantum `mlkem768x25519-sha256`) and, when a device needs them, the legacy
-  ones old Cisco / Aruba / HPE gear still speaks (`diffie-hellman-group1-sha1`, `3des-cbc`,
-  `ssh-dss`, `hmac-md5`), with automatic fallback; strict key exchange (Terrapin-safe); password,
-  keyboard-interactive (TACACS / OTP), public-key and ssh-agent logins; SSH agent forwarding
-- **Jump host (ProxyJump)** — reach a device through a bastion: pick a saved host or type
-  `user@bastion[:port]` in Edit Host or Quick Connect (one hop)
-- **Login inside the tab** — host key, username and password are asked on a card in the tab
-  itself, not in a window-blocking dialog, so several tabs can connect at once
-- **Serial console** over USB serial adapters (configurable baud rate), with **Send Break** (⌃⌥B)
-- **Local shell** tabs alongside your remote sessions
-- **Quick Connect (⌘K)** — type `admin@10.0.0.1`, `admin@sw01:2222`, or an IPv6 literal and go,
-  or search your saved hosts by name, address, or section
-- **Saved credentials** — pick a username + password once and reuse it on any number of hosts;
-  set one credential for a whole group in one step
-- **Tabs** — drag a tab to reorder it, or move the current one with ⌃⌘← / ⌃⌘→; a new local
-  tab starts in your home folder
-- **Split panes** — Split Right (⌘D) / Split Down (⇧⌘D), move focus with ⌥⌘ + arrows, zoom a
-  pane (⇧⌘↩); drag a pane's header onto another pane, a tab, or the tab strip to rearrange, and
-  drop a host from the sidebar beside an open pane
-- **Tabs named from the prompt** — a session opened by bare IP or serial port takes the device's
-  hostname from its prompt (`Core-SW (10.1.1.1)`), and its open log file is renamed to match
-- Ask-before-quit when live SSH/serial sessions would be lost (local shells don't nag)
-
-### Host management
-- Sidebar with **host groups**, search, and recent connections
-- **Sections inside a group** — sub-headings such as a building floor, a rack, or a role.
-  A group owns its sections in the order you choose; hosts can sit loose in the group or under a
-  section; a section can stay empty until you need it
-- **Drag and drop** — hosts, whole groups, and section headings. Select several hosts with ⌘ or ⇧
-  and move them in one drag; drag a section to reorder it, or drop it on another group to move it
-  with all its hosts (a section with the same name there is merged)
-- **Add Hosts** — a table (Name · Host / IP · Credential · Section) that takes a ⌘V straight from
-  Excel, Numbers, or a CSV file, or **Import CSV…** (UTF-8 or UTF-16). Pasting behaves like a
-  spreadsheet: empty cells stay empty, a block spreads down from the cell you pasted into, and a
-  header row must use the table's own column names or the paste is refused with a warning
-- **Import / Export groups** as `.sheepterm` files to share with teammates —
-  credentials are always stripped from exported files by design
-- **Backup / Restore** the whole configuration as a single `.sheeptermbackup` file —
-  passwords are never written to the file; they live only in the macOS Keychain
-- Careful merge-on-import: no silent overwrites, per-host conflict resolution
-
-### Terminal
-- **Own terminal emulator** rendered with Metal — 10,000 lines of scrollback by default
-- **Syntax highlighting for network device output**, one built-in pack per device family:
-  Cisco IOS / IOS-XE / NX-OS, Aruba CX, ArubaOS, Huawei VRP, H3C / HPE Comware, Juniper Junos,
-  Palo Alto PAN-OS, Fortinet FortiOS, Check Point Gaia, and Linux. The family is set per host,
-  switched live from the View menu or the status bar, or detected automatically from the device
-  output. Highlighting is painted on screen only — the text itself is untouched, so copy and
-  session logs stay clean, and colours the device sends itself are never overridden (⇧⌘H toggles it)
-- **Safe Multi-line Paste** — pasting 2+ lines into an SSH/serial session shows a
-  read-only preview first, with the option to send line-by-line at a chosen pacing
-  delay (great for config blocks on slow control planes)
-- **Auto-page** (View menu, off by default) answers `--More--` prompts for you; a host can also
-  send the vendor's "disable paging" command right after an SSH login
-- **Snippets** — saved commands and config blocks in the Snippets menu, with `{{variables}}`
-  (and `{{name=default}}`) filled in a form before sending; **Broadcast to Tabs** (⇧⌘B) sends one
-  to several connected sessions at once
-- **Command history per host** (⌘Y) — commands read from the screen as you run them, so Tab
-  completion and `?` help don't garble them; lines that look like passwords, keys or community
-  strings are never kept
-- **Find in scrollback** (⌘F, ⌘G / ⇧⌘G, ⌘E to use the selection), clear scrollback (⌘L)
-- **Session logging** to `~/Documents/SheepTerm Logs/`, and **Search Logs** (⇧⌘F) across every
-  saved log, plain text or regex
-- 6 terminal themes: SheepTerm, Dracula, Nord, One Dark, Solarized Dark, Gruvbox Dark;
-  terminal font and size adjustable (⌘= / ⌘−)
-- Dark appearance throughout, with the sidebar and tab bar in **Liquid Glass** or a solid colour
-- Full UTF-8 handling (Thai, CJK, emoji, box-drawing) — shortcuts keep working on
-  non-Latin keyboard layouts
-
-### Security
-- Passwords are stored **only in the macOS Keychain** — never in config files,
-  backups, or exports
-- **First connection asks first** — a new host shows its key type and SHA256 fingerprint, and
-  nothing is saved or sent until you choose Trust & Connect
-- Host keys are pinned in `~/.ssh/known_hosts` (shared with OpenSSH); a changed key, a key of a
-  different type or a revoked one is refused, and SheepTerm offers to open Known Hosts for that device
-- **Known Hosts (File → Known Hosts…)** — search, inspect and remove saved host keys, including
-  hashed entries; a backup is written before every change
-- **Clipboard stays yours** — a remote program cannot set the Mac clipboard unless you allow it
-  (Settings → Clipboard), and when allowed, pasting text it put there always asks first
-- Imported `.sheepterm` files cannot turn on agent forwarding or change a host's cipher settings;
-  session logs never keep terminal control codes
-- SSH (SheepSSH) and the terminal emulator (SheepVT) are written in-house; cryptography comes
-  from macOS itself — CryptoKit, CommonCrypto and Security — and is updated with the system
-
-## Requirements
-
-- macOS 26.4 (Tahoe) or later, Apple Silicon
-- To build: Xcode 26+
-
 ## Building
 
 ```bash
 xcodebuild -project SheepTerm.xcodeproj -scheme SheepTerm -configuration Release build
 ```
 
-The app is built at
-`~/Library/Developer/Xcode/DerivedData/SheepTerm-*/Build/Products/Release/SheepTerm.app`.
-It links only Apple's frameworks and the three local packages in `Packages/` (SheepVT, SheepSSH,
-SheepJump).
+Links only Apple frameworks and the local packages in `Packages/`. Needs Xcode 26+.
 
 ## License
 
