@@ -136,7 +136,11 @@ func uiTrace(_ what: @autoclosure () -> String) {
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
-    @Published var tabs: [SessionTab] = []
+    @Published var tabs: [SessionTab] = [] {
+        // A tab opening that cable's port another way (sidebar, Quick
+        // Connect) takes the shadow away at once (review 5.0 (29)).
+        didSet { if serialShadow != nil { serialEvent(arrived: nil, gone: nil) } }
+    }
     /// The session that has the keyboard. Its workspace is the selected tab.
     @Published var selectedID: UUID? {
         didSet { if let id = selectedID { book.focus(id) } }
@@ -451,6 +455,7 @@ final class AppModel: ObservableObject {
         Highlighter.installDefaults()
         newLocalTab()
         installKeyMonitor()
+        startSerialWatch()
     }
 
     /// Pulls every setting and every store back in after BackupManager has
@@ -2209,6 +2214,77 @@ final class AppModel: ObservableObject {
     }
 
     @Published var showQuickSearch = false
+
+    // MARK: - USB serial shadow tab (5.0 (29))
+
+    /// A cable just plugged in: the dashed tab at the end of the strip.
+    @Published private(set) var serialShadow: SerialArrival.Shadow?
+    private let serialWatcher = SerialWatcher()
+    private var serialQuietUntil = Date.distantPast
+
+    private func startSerialWatch() {
+        serialWatcher.onArrived = { [weak self] path in
+            // A port re-enumerating on wake is not a cable just plugged in.
+            guard let self, Date() >= self.serialQuietUntil else { return }
+            self.serialEvent(arrived: path, gone: nil)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.serialQuietUntil = Date().addingTimeInterval(SerialArrival.wakeQuiet) }
+        }
+        serialWatcher.onGone = { [weak self] path in self?.serialEvent(arrived: nil, gone: path) }
+        serialWatcher.start()
+        #if DEBUG
+        // Screenshot runs only: SHEEPTERM_DEBUG_SERIAL_ARRIVE=/dev/cu.x plays a cable plugged in after 2 s.
+        if let path = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SERIAL_ARRIVE"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.serialEvent(arrived: path, gone: nil) }
+        }
+        #endif
+    }
+
+    private var openSerialPaths: Set<String> {
+        Set(tabs.compactMap { tab -> String? in
+            if case .serial(let controller) = tab.content { return controller.host.address }
+            return nil
+        })
+    }
+
+    /// Re-checks the shadow (also when its time is up: `arrived`/`gone` nil).
+    private func serialEvent(arrived: String?, gone: String?) {
+        let next = SerialArrival.next(current: serialShadow, arrived: arrived, gone: gone,
+                                      openPaths: openSerialPaths, now: Date())
+        guard next != serialShadow else { return }
+        withAnimation(.easeOut(duration: 0.2)) { serialShadow = next }
+        if let next {
+            DispatchQueue.main.asyncAfter(deadline: .now() + SerialArrival.lifetime + 0.05) { [weak self] in
+                guard let self, self.serialShadow == next else { return }
+                self.serialEvent(arrived: nil, gone: nil)
+            }
+        }
+    }
+
+    /// The shadow clicked: that console, opened like any serial host.
+    func openSerialShadow() {
+        guard let shadow = serialShadow else { return }
+        serialShadow = nil
+        // Already open in a tab: go there (a second open would find the port busy).
+        let port = SerialArrival.calloutPath(shadow.path)
+        if let tab = tabs.first(where: {
+            if case .serial(let controller) = $0.content { return SerialArrival.calloutPath(controller.host.address) == port }
+            return false
+        }) {
+            // That pane itself, not its workspace's last focus: in a split the
+            // keyboard must land on the console (selecting it also un-zooms).
+            selectedID = tab.id
+            DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
+        } else {
+            open(host: SerialArrival.host(for: shadow.path, saved: store.groups.flatMap(\.hosts), recents: store.recents))
+        }
+        collapseSidebar()
+    }
+
+    func dismissSerialShadow() {
+        withAnimation(.easeOut(duration: 0.2)) { serialShadow = nil }
+    }
 
     /// Sidebar auto-collapses once a session is opened from it,
     /// giving the terminal the full window (expand again with ⌘0).

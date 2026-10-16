@@ -36,6 +36,7 @@ struct TabStripView: View {
     @State private var chipOverPanes = false
 
     private static let chipSpacing: CGFloat = 4
+    private static let serialShadowID = "serial-shadow"
 
     private static let space = "tabstrip"
     private static let dropSpace = "tabstrip-drop"
@@ -99,6 +100,14 @@ struct TabStripView: View {
                     .id(workspace.id)
                     }
                 }
+                // A USB serial cable just plugged in (5.0 (29)).
+                if let shadow = model.serialShadow {
+                    SerialShadowChip(name: shadow.name,
+                                     onOpen: { model.openSerialShadow() },
+                                     onDismiss: { model.dismissSerialShadow() })
+                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                        .id(Self.serialShadowID)
+                }
             }
             // Pointer over the chips = the window is not movable, or the
             // window server turns a chip drag into a window drag (see
@@ -124,6 +133,11 @@ struct TabStripView: View {
         .coordinateSpace(name: Self.dropSpace)
         .onPreferenceChange(TabChipDropFrames.self) { chipDropFrames = $0 }
         .onDrop(of: [.utf8PlainText], delegate: StripDropDelegate(frames: chipDropFrames, spot: $dropSpot, concluded: $dropConcluded))
+        // Brought into view when it appears past a full strip (review 5.0 (29)).
+        .onChange(of: model.serialShadow?.path) { _, path in
+            guard path != nil, dragID == nil else { return }
+            withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(Self.serialShadowID) }
+        }
         .onChange(of: model.selectedID) { _, _ in
             guard dragID == nil, let id = model.selectedWorkspace?.id else { return }
             withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
@@ -485,5 +499,50 @@ struct TabItemView: View {
             }
             Button("Close Tab") { onClose() }
         }
+    }
+}
+
+/// The dashed "shadow" tab for a USB serial cable that was just plugged in
+/// (5.0 (29), the user's option 1): click = open that console; it goes on
+/// its own after 15 s, when the cable is pulled, or with its ×.
+private struct SerialShadowChip: View {
+    let name: String
+    let onOpen: () -> Void
+    let onDismiss: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "cable.connector")
+                .font(.system(size: 10.5, weight: .semibold))
+            Text(name)
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+                .frame(maxWidth: 190)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(hovering ? 1 : 0)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? Theme.tabActive.opacity(0.5) : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(Theme.accent.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .foregroundStyle(hovering ? Theme.tabText : Theme.accent)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { onOpen() }
+        .help("Open \(name)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Open serial console \(name)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onOpen() }
+        .accessibilityAction(named: "Dismiss") { onDismiss() }
     }
 }
