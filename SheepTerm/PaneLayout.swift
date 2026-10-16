@@ -100,6 +100,25 @@ nonisolated struct PaneLayout: Equatable, Sendable {
         return out.map { (id: $0.0, axis: $0.1, fractions: $0.2) }
     }
 
+    /// How much of a change in the tab's WIDTH reaches `id`'s pane: the
+    /// product of the left/right fractions on its path (a top/bottom split
+    /// passes the whole change on). Dividers do not change in number, so a
+    /// tab `delta` wider makes this pane `delta * share` wider. nil = not here.
+    func widthShare(of id: UUID) -> CGFloat? {
+        func walk(_ node: PaneNode, _ share: CGFloat) -> CGFloat? {
+            switch node {
+            case .leaf(let leaf):
+                return leaf == id ? share : nil
+            case .split(_, let axis, let children, let fractions):
+                for (child, fraction) in zip(children, fractions) {
+                    if let found = walk(child, axis == .horizontal ? share * fraction : share) { return found }
+                }
+                return nil
+            }
+        }
+        return walk(root, 1)
+    }
+
     /// Frames of every leaf inside `bounds`, with `divider` points left
     /// between siblings. Fractions apply to what is left after the dividers.
     func rects(in bounds: CGRect, divider: CGFloat = 0) -> [UUID: CGRect] {

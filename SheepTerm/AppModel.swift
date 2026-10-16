@@ -2199,6 +2199,7 @@ final class AppModel: ObservableObject {
     static let sidebarAnimation = Animation.easeInOut(duration: 0.2)
 
     func toggleSidebar() {
+        noteSidebarSlide(opening: !sidebarShown)
         withAnimation(Self.sidebarAnimation) { sidebarShown.toggle() }
         // Closing the sidebar must hand keyboard focus back to the
         // terminal — a sidebar-less window with focus stranded on the
@@ -2210,9 +2211,18 @@ final class AppModel: ObservableObject {
 
     @Published var showQuickSearch = false
 
+    /// Web tabs pin their page for the slide (`SidebarSlide`): told BEFORE
+    /// the state changes, while their width is still the starting one.
+    /// The sidebar takes its width plus the 1 pt resize line.
+    private func noteSidebarSlide(opening: Bool) {
+        NotificationCenter.default.post(name: .sheepSidebarWillSlide, object: nil,
+                                        userInfo: ["opening": opening, "delta": Double(sidebarWidth) + 1])
+    }
+
     /// Sidebar auto-collapses once a session is opened from it,
     /// giving the terminal the full window (expand again with ⌘0).
     func collapseSidebar() {
+        if sidebarShown { noteSidebarSlide(opening: false) }
         withAnimation(Self.sidebarAnimation) { sidebarShown = false }
         DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
     }

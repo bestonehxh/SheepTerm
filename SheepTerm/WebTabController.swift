@@ -1116,6 +1116,38 @@ final class WebTabView: NSView {
         layer?.masksToBounds = true
         addSubview(webView)
         addSubview(bar)
+        // Selector-based: removed with the view, posted on main (AppModel).
+        NotificationCenter.default.addObserver(self, selector: #selector(sidebarWillSlide(_:)), name: .sheepSidebarWillSlide, object: nil)
+    }
+
+    @objc private func sidebarWillSlide(_ note: Notification) {
+        beginSlide(opening: note.userInfo?["opening"] as? Bool ?? false, delta: note.userInfo?["delta"] as? Double ?? 0)
+    }
+
+    /// The sidebar is sliding: the page keeps one width, right edge fixed.
+    private var slide: SidebarSlide?
+
+    private func beginSlide(opening: Bool, delta: Double) {
+        // Only a tab on screen; a hidden one just takes its new size later.
+        guard window != nil, !isHiddenOrHasHiddenAncestor, bounds.width > 0 else { return }
+        // A pane beside another gets only its share of the sidebar's width.
+        var share: CGFloat = 1
+        var view: NSView? = superview
+        var leaf: PaneLeafView?
+        while let current = view {
+            if leaf == nil, let found = current as? PaneLeafView { leaf = found }
+            if let workspace = current as? PaneTreeView, let leaf { share = workspace.widthShare(ofSession: leaf.session); break }
+            view = current.superview
+        }
+        let started = SidebarSlide.start(tabWidth: Double(bounds.width), delta: delta, opening: opening,
+                                         share: Double(share), previous: slide)
+        slide = started
+        needsLayout = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + SidebarSlide.duration + 0.02) { [weak self] in
+            guard let self, self.slide == started else { return }
+            self.slide = nil
+            self.needsLayout = true
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1125,8 +1157,14 @@ final class WebTabView: NSView {
     override func layout() {
         super.layout()
         bar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: WebBarView.height)
-        webView.frame = CGRect(x: 0, y: WebBarView.height, width: bounds.width,
-                               height: max(0, bounds.height - WebBarView.height))
+        let height = max(0, bounds.height - WebBarView.height)
+        if let slide, slide.isActive() {
+            webView.frame = CGRect(x: slide.x(tabWidth: Double(bounds.width)), y: WebBarView.height,
+                                   width: slide.width, height: height)
+        } else {
+            slide = nil
+            webView.frame = CGRect(x: 0, y: WebBarView.height, width: bounds.width, height: height)
+        }
         for case let overlay as ConnectionOverlayView in subviews { overlay.frame = bounds }
         onLayout?()
     }

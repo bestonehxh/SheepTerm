@@ -198,6 +198,13 @@ final class PaneTreeView: NSView {
         layoutPanes()
     }
 
+    /// The part of a change in this tab's width that reaches `session`'s pane
+    /// (a web page pinned for the sidebar slide, `SidebarSlide`).
+    func widthShare(ofSession session: UUID) -> CGFloat {
+        guard let state, state.zoomed == nil else { return 1 }
+        return state.layout.widthShare(of: session) ?? 1
+    }
+
     private func layoutPanes() {
         guard let state, bounds.width > 1, bounds.height > 1 else { return }
         let several = state.paneCount > 1
