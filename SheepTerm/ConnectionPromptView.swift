@@ -876,6 +876,9 @@ final class ConnectionCardPanel: NSPanel {
 /// move the card between the two.
 final class ConnectionOverlayView: NSView {
     var onGeometryChange: (() -> Void)?
+    /// A click on the veil, for a card that is not a `ConnectionCardView`
+    /// (the dangerous-command question).
+    var onVeilClick: (() -> Void)?
     var veiled = true {
         didSet {
             guard veiled != oldValue else { return }
@@ -904,6 +907,7 @@ final class ConnectionOverlayView: NSView {
     /// A click on the veil goes to the card, never to the terminal under it.
     override func mouseDown(with event: NSEvent) {
         card?.takeKeyboard()
+        onVeilClick?()
     }
 
     override func resetCursorRects() {

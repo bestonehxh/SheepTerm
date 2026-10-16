@@ -32,6 +32,8 @@ nonisolated enum PanePlacement: Equatable, Sendable {
     case split(beside: UUID, PaneDirection)
     /// In the place of `old` (a reconnect), which is removed.
     case replacing(UUID)
+    /// Its own tab, right after the tab that holds `session` (Duplicate).
+    case tabAfter(UUID)
 }
 
 /// A tab chip dragged out of the strip (4.2 (7)): which tab, and where the
@@ -105,6 +107,13 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
                 if workspaces[i].focused == old { workspaces[i].focused = session }
                 if workspaces[i].zoomed == old { workspaces[i].zoomed = session }
                 return workspaces[i]
+            }
+        case .tabAfter(let neighbour):
+            // A neighbour that has gone meanwhile: the end of the strip.
+            if let i = index(ofWorkspaceContaining: neighbour) {
+                let fresh = WorkspaceState(session: session)
+                workspaces.insert(fresh, at: i + 1)
+                return fresh
             }
         case .newTab:
             break

@@ -419,12 +419,17 @@ struct SheepTermCommands: Commands {
 
         CommandGroup(after: .pasteboard) {
             Divider()
+            Button("Copy All Output") { model.copyAllOutput() }
+                .disabled(!model.canCopyAllOutput)
             Toggle("Safe Multi-line Paste", isOn: $model.safePasteEnabled)
+            Toggle("Confirm Dangerous Commands", isOn: $model.confirmDangerousCommands)
             // A break condition on a serial console (a boot loader's "press
             // Break now"). Greyed out everywhere else: SSH and a local shell
             // have no line to put one on.
             Button("Send Break") { model.sendBreak() }
                 .keyboardShortcut("b", modifiers: [.control, .option])
+                .disabled(!model.canSendBreak)
+            Button("Send File via XMODEM…") { model.sendFileViaXModem() }
                 .disabled(!model.canSendBreak)
             Divider()
             // Search in the scrollback. SheepVT owns the engine and the

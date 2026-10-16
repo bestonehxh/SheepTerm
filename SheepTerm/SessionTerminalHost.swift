@@ -121,25 +121,48 @@ final class SessionTerminalHost {
     private var pastePromptPresented = false
     private var pasteHUD: NSVisualEffectView?
     private var pasteProgressLabel: NSTextField?
+    private var pasteStopButton: NSButton?
+    /// What the HUD's Stop does right now.
+    private var hudStop: (() -> Void)?
+    private var hudIsPaste = false
     private var sendingPacedLine = false
     /// Set while `sendImmediatePaste` calls back into the view, so the view's
     /// `shouldPaste` veto does not re-enter the SafePaste flow.
     private var pastingImmediately = false
     /// Set around `sendCommand`: the text is the app's, not the clipboard's.
     private var sendingCommand = false
+    /// Set around a `sendCommand(confirmed: true)`: its paste is not asked
+    /// about again.
+    private var guardConfirmedSend = false
 
     /// Send text the app composed (Snippets, Broadcast) the way a paste
     /// reaches the device, minus the planted-clipboard question. Returns
     /// whether it went out now (false = Safe Paste took it for its own
     /// question, or the session refused it).
+    ///
+    /// `confirmed`: the user already said yes to a dangerous line (Broadcast
+    /// asks once for every tab), so this tab does not ask again.
     @discardableResult
-    func sendCommand(_ text: String) -> Bool {
-        sendingCommand = true
-        defer { sendingCommand = false }
+    func sendCommand(_ text: String, confirmed: Bool = false) -> Bool {
         // Body pasted, Return as its own CR (`CommandSendPlan`): inside a
         // bracketed paste the CR would not run the command. A veto (Safe
         // Paste paces the lines itself, each with its own CR) sends no extra.
+        // Nothing overtakes a held Return or an open question, and nothing
+        // goes on a line a file transfer owns (review 5.0 (22)).
+        guard !inputBlocked else { NSSound.beep(); return false }
         let plan = CommandSendPlan.split(text)
+        // One dangerous line that would run: ask in the tab first. Several
+        // lines go through `shouldPaste`, whose review marks them.
+        if !confirmed, safePasteAvailable, AppModel.shared.confirmDangerousCommands, plan.thenReturn,
+           !plan.body.contains(where: \.isNewline), CommandGuard.isDangerous(plan.body, vendor: vendor) {
+            askAboutCommand(plan.body) { [weak self] send in
+                if send { self?.sendCommand(text, confirmed: true) }
+            }
+            return false
+        }
+        sendingCommand = true
+        guardConfirmedSend = confirmed
+        defer { sendingCommand = false; guardConfirmedSend = false }
         guard !plan.body.isEmpty else {
             if plan.thenReturn { terminalView.send(CommandSendPlan.returnKey, keystroke: false) }
             return plan.thenReturn
@@ -156,6 +179,7 @@ final class SessionTerminalHost {
     /// model can never run anything; the user presses Return.
     @discardableResult
     func pasteFromAI(_ code: String) -> Bool {
+        guard !inputBlocked else { NSSound.beep(); return false }
         switch AIPasteRoute.route(code) {
         case .empty:
             return false
@@ -167,7 +191,9 @@ final class SessionTerminalHost {
         case .review(let plan):
             guard !pastePromptPresented else { NSSound.beep(); return false }
             if pastePacer.isActive { cancelSafePaste(reason: .replaced) }
-            presentSafePasteConfirmation(plan: plan, originalText: plan.lines.joined(separator: "\n"), allowImmediate: false)
+            let dangerous = AppModel.shared.confirmDangerousCommands ? CommandGuard.dangerousLines(plan.lines, vendor: vendor) : []
+            presentSafePasteConfirmation(plan: plan, originalText: plan.lines.joined(separator: "\n"), allowImmediate: false,
+                                         dangerous: dangerous)
             return false
         case .refused(let error):
             showPasteLimitAlert(error == .tooManyLines ? "The block contains more than 10,000 lines." : "The block is larger than 5 MB.")
@@ -508,9 +534,19 @@ final class SessionTerminalHost {
             presentPlantedPasteConfirmation(text)
             return false
         }
-        guard safePasteAvailable, !pastingImmediately, AppModel.shared.safePasteEnabled else {
-            return true
+        guard safePasteAvailable, !pastingImmediately else { return true }
+        // Before any early "paste as before": a paste must not overtake a
+        // held Return, land under an open question, or hit a transfer.
+        guard !inputBlocked else {
+            NSSound.beep()
+            return false
         }
+        // Confirm Dangerous Commands looks at every paste, Safe Paste on or
+        // off — but with Safe Paste off it only ever ADDS a question for a
+        // dangerous line; everything else pastes exactly as before.
+        let guardOn = AppModel.shared.confirmDangerousCommands && !guardConfirmedSend
+        let reviewAll = AppModel.shared.safePasteEnabled
+        guard reviewAll || guardOn else { return true }
         guard !pastePromptPresented else {
             NSSound.beep()
             return false
@@ -520,6 +556,15 @@ final class SessionTerminalHost {
         do {
             plan = try SafePastePlan.parse(text)
         } catch SafePastePlan.ParseError.singleLine {
+            // One line runs only when it carries its own line break; without
+            // one the user's Return is checked like any typed line.
+            let line = text.trimmingCharacters(in: .newlines)
+            guard guardOn, line != text, CommandGuard.isDangerous(line, vendor: vendor) else { return true }
+            askAboutCommand(line) { [weak self] send in
+                if send { self?.sendImmediatePaste(text) }
+            }
+            return false
+        } catch _ where !reviewAll {
             return true
         } catch SafePastePlan.ParseError.tooManyBytes {
             showPasteLimitAlert("The clipboard is larger than 5 MB.")
@@ -532,14 +577,19 @@ final class SessionTerminalHost {
             return false
         }
 
+        let dangerous = guardOn ? CommandGuard.dangerousLines(plan.lines, vendor: vendor) : []
+        guard reviewAll || !dangerous.isEmpty else { return true }
         if pastePacer.isActive {
             cancelSafePaste(reason: .replaced)
         }
-        presentSafePasteConfirmation(plan: plan, originalText: text)
+        presentSafePasteConfirmation(plan: plan, originalText: text, dangerous: dangerous)
         return false
     }
 
     func cancelSafePaste(reason: SafePastePacer.EndReason = .sessionEnded) {
+        // The session is gone or refuses input: a held Return (and its
+        // question) has nothing left to go to.
+        if reason == .sessionEnded || reason == .inputDiscarded { cancelCommandGuard() }
         pastePacer.stop(reason: reason)
         hidePasteHUD()
         // A confirmation sheet abandoned by a tab close / reconnect must not
@@ -590,7 +640,7 @@ final class SessionTerminalHost {
     func noteOutgoing(_ bytes: [UInt8]) {
         let typed = keystrokePending
         keystrokePending = false
-        guard historyKey != nil else { return }
+        if typed { typedLine.typed(bytes) } else { typedLine.sent(bytes) }
         let counter = terminalView.terminal.changeCounter
         let isReturn = bytes == [0x0D] || bytes == [0x0D, 0x0A]
         if !isReturn {
@@ -610,6 +660,12 @@ final class SessionTerminalHost {
     }
 
     private func commandOnCursorLine() -> String? {
+        cursorLine().flatMap(CommandHistoryCapture.command(fromRow:))
+    }
+
+    /// The logical line the cursor is on (soft wraps joined); nil on the
+    /// alternate screen.
+    private func cursorLine() -> String? {
         let terminal = terminalView.terminal
         guard !terminal.isAlternate else { return nil }
         let buffer = terminal.buffer
@@ -619,11 +675,273 @@ final class SessionTerminalHost {
             let row = buffer.row(y)
             rows.append((row.string(trimRight: false), row.wrapped))
         }
-        guard let line = CommandHistoryCapture.logicalLine(rows: rows, cursorRow: buffer.y) else { return nil }
-        return CommandHistoryCapture.command(fromRow: line)
+        return CommandHistoryCapture.logicalLine(rows: rows, cursorRow: buffer.y)
     }
 
-    private func presentSafePasteConfirmation(plan: SafePastePlan, originalText: String, allowImmediate: Bool = true) {
+    // MARK: - Confirm Dangerous Commands (5.0 (22))
+
+    /// The session's device family (`Host.highlightVendor`), set by the
+    /// controller: Linux/Gaia-only rules (`shutdown`, `halt`) need it.
+    var guardVendor: (() -> Vendor)?
+    /// What the keys since the last Return spell (`TypedLine`).
+    private var typedLine = TypedLine()
+    /// The held Return and every key typed behind it, in order. Non-empty
+    /// exactly while a Return is held (waiting for the echo, or asking).
+    private var heldKeys: [[UInt8]] = []
+    /// Set while held keys go back through the view: they pass the gate.
+    private var releasingHeld = false
+    /// Bumped by every hold and every drop: a stale echo timer is ignored.
+    private var guardGeneration = 0
+    private var guardCard: CommandGuardCardView?
+    private var guardOverlay: ConnectionOverlayView?
+    private weak var guardSheet: NSWindow?
+
+    /// How long a Return waits for the echo before the screen is read as
+    /// it stands (a satellite link is slower than this; the rules accept
+    /// abbreviations, so a half-echoed `rel` already counts).
+    private static let echoWait: TimeInterval = 0.4
+    /// The echo is "in" once the screen has been quiet this long.
+    private static let echoQuiet: TimeInterval = 0.05
+
+    /// SSH and serial only (a device CLI), and never under a connection
+    /// card or a full-screen program.
+    private var commandGuardActive: Bool {
+        safePasteAvailable && AppModel.shared.confirmDangerousCommands
+            && !hasConnectionCard && !terminalView.terminal.isAlternate
+    }
+
+    private var vendor: Vendor { guardVendor?() ?? .auto }
+
+    /// A Return is held and nothing may overtake it.
+    var isHoldingReturn: Bool { !heldKeys.isEmpty }
+
+    /// The serial controller's "a file transfer owns the line" (XMODEM).
+    var lineBusy: (() -> Bool)?
+
+    /// Pastes, snippets and the AI's paste are refused: a Return is held, a
+    /// dangerous-command question is open, or a transfer owns the line.
+    var inputBlocked: Bool {
+        isHoldingReturn || guardCard != nil || guardSheet != nil || (lineBusy?() ?? false)
+    }
+
+    /// A key the controller refused itself (a transfer owns the line): the
+    /// flag `userTyped` set must not make the NEXT send look typed.
+    func discardPendingKeystroke() {
+        keystrokePending = false
+    }
+
+    private static func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    /// Called by the controller's `send` BEFORE the worker gets the bytes:
+    /// false = held here, write nothing. Only a Return the user TYPED is
+    /// ever held; a paste, a snippet, Safe Paste's lines and the terminal's
+    /// own replies always pass (the paste paths ask on their own).
+    func admitOutgoing(_ bytes: [UInt8]) -> Bool {
+        if releasingHeld { return true }
+        let typed = keystrokePending
+        if isHoldingReturn {
+            // Keys typed while a Return waits wait behind it — never ahead.
+            guard typed else { return true }
+            keystrokePending = false
+            heldKeys.append(bytes)
+            return false
+        }
+        // A question is up but the terminal still has the keyboard (the card
+        // takes it a turn later): keys wait for the answer, they do not go
+        // to the device under it — and a Return here must not start a hold
+        // nothing would ever resume.
+        if typed, guardCard != nil || guardSheet != nil {
+            keystrokePending = false
+            NSSound.beep()
+            return false
+        }
+        // ⌃J (LF) runs the line too on IOS, VRP and a shell.
+        guard typed, bytes == [0x0D] || bytes == [0x0D, 0x0A] || bytes == [0x0A], commandGuardActive else { return true }
+        let row = cursorLine()
+        // A login/password prompt: what was typed is an answer, not a command.
+        if let row, CommandHistoryFilter.looksLikeCredentialPrompt(row) { return true }
+        let screen = row.flatMap { CommandHistoryCapture.split(row: $0) }
+        let current = historyGate.isCurrent(counter: terminalView.terminal.changeCounter)
+        switch CommandGuard.onReturn(typed: typedLine.text, screen: screen, screenIsCurrent: current, vendor: vendor) {
+        case .send:
+            return true
+        case .ask(let command):
+            keystrokePending = false
+            hold(bytes)
+            askAboutHeldReturn(command)
+            return false
+        case .waitForEcho:
+            keystrokePending = false
+            hold(bytes)
+            waitForEcho(generation: guardGeneration, started: Self.uptime(), lastCounter: terminalView.terminal.changeCounter,
+                        lastChange: nil)
+            return false
+        }
+    }
+
+    private func hold(_ bytes: [UInt8]) {
+        guardGeneration &+= 1
+        heldKeys = [bytes]
+    }
+
+    /// Polls the screen until it has changed and then gone quiet (the echo
+    /// is in), or the wait runs out; then the screen decides.
+    private func waitForEcho(generation: Int, started: TimeInterval, lastCounter: UInt64, lastChange: TimeInterval?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+            guard let self, self.guardGeneration == generation, self.isHoldingReturn, self.guardCard == nil,
+                  self.guardSheet == nil else { return }
+            let counter = self.terminalView.terminal.changeCounter
+            // Monotonic: a wall-clock step back must not stretch the wait.
+            let now = Self.uptime()
+            let changed = counter != lastCounter ? now : lastChange
+            let quiet = changed.map { now - $0 >= Self.echoQuiet } ?? false
+            guard quiet || now - started >= Self.echoWait else {
+                self.waitForEcho(generation: generation, started: started, lastCounter: counter, lastChange: changed)
+                return
+            }
+            let row = self.cursorLine()
+            let screen = row.flatMap { CommandHistoryCapture.split(row: $0) }
+            switch CommandGuard.afterEcho(screen: screen, vendor: self.vendor) {
+            case .ask(let command) where self.commandGuardActive:
+                self.askAboutHeldReturn(command)
+            default:
+                self.releaseHeld()
+            }
+        }
+    }
+
+    /// Sends the held Return and the keys behind it, in order, as the keys
+    /// they were (history records the line as usual).
+    private func releaseHeld() {
+        let keys = heldKeys
+        heldKeys = []
+        guardGeneration &+= 1
+        releasingHeld = true
+        for key in keys { terminalView.send(key, keystroke: true) }
+        releasingHeld = false
+    }
+
+    /// Drops the held Return and the keys behind it; the command stays
+    /// typed on the device's line, which the keys no longer spell.
+    private func dropHeld() {
+        guard isHoldingReturn else { return }
+        heldKeys = []
+        guardGeneration &+= 1
+        typedLine.other()
+    }
+
+    /// Takes the question down and drops what it held (tab closed, session
+    /// ended). `turnedOff`: the user switched the guard off — a Return still
+    /// only waiting for its echo (nobody was asked anything) goes out as
+    /// typed; one under a question is dropped like a Cancel.
+    func cancelCommandGuard(turnedOff: Bool = false) {
+        if turnedOff, isHoldingReturn, guardCard == nil, guardSheet == nil {
+            releaseHeld()
+            return
+        }
+        closeGuardQuestion()
+        dropHeld()
+    }
+
+    private func askAboutHeldReturn(_ command: String) {
+        askAboutCommand(command) { [weak self] send in
+            guard let self else { return }
+            if send { self.releaseHeld() } else { self.dropHeld() }
+        }
+    }
+
+    /// The card over the pane — or, in a pane too small to hold it, a sheet
+    /// on the window. `completion(true)` = Send.
+    private func askAboutCommand(_ command: String, completion: @escaping (Bool) -> Void) {
+        // A connection card is up (still logging in): a snippet or a paste
+        // has nothing to run on yet, and a second card over the first
+        // could not be answered — refuse it, nothing is sent.
+        guard !hasConnectionCard else {
+            NSSound.beep()
+            completion(false)
+            return
+        }
+        closeGuardQuestion()
+        let title = sessionLabel ?? "this session"
+        let card = CommandGuardCardView(title: title, command: command)
+        let size = card.fittingCardSize
+        let bounds = terminalView.bounds.size
+        guard terminalView.window != nil, bounds.width >= size.width + Self.cardMargin,
+              bounds.height >= size.height + Self.cardMargin else {
+            askInSheet(title: title, command: command, completion: completion)
+            return
+        }
+        let hadKeyboard = terminalView.window?.firstResponder === terminalView
+        let overlay = ConnectionOverlayView(frame: terminalView.bounds)
+        overlay.onVeilClick = { [weak card] in card?.takeKeyboard() }
+        terminalView.addSubview(overlay)
+        overlay.addSubview(card)
+        NSLayoutConstraint.activate([
+            card.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            card.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+        ])
+        card.onAnswer = { [weak self] send in
+            self?.closeGuardQuestion()
+            completion(send)
+        }
+        guardCard = card
+        guardOverlay = overlay
+        if hadKeyboard { card.takeKeyboard() }
+    }
+
+    private func askInSheet(title: String, command: String, completion: @escaping (Bool) -> Void) {
+        let alert = SheepAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = command
+        alert.addButton(withTitle: "Cancel")   // default: Return cancels
+        alert.addButton(withTitle: "Send").hasDestructiveAction = true
+        let generation = guardGeneration
+        if let window = terminalView.window, window.attachedSheet == nil {
+            guardSheet = alert.window
+            alert.beginSheetModal(for: window) { [weak self] response in
+                // `closeGuardQuestion` clears `guardSheet` before it ends the
+                // sheet: an answer to a question taken down is to nothing.
+                guard let self, self.guardSheet != nil, self.guardGeneration == generation else { return }
+                self.guardSheet = nil
+                completion(response == .alertSecondButtonReturn)
+            }
+        } else {
+            let response = alert.sheepStyled().runModal()
+            guard guardGeneration == generation else { return }
+            completion(response == .alertSecondButtonReturn)
+        }
+    }
+
+    private func closeGuardQuestion() {
+        if let card = guardCard {
+            let hadKeyboard = card.hasKeyboard
+            card.onAnswer = nil
+            guardCard = nil
+            card.removeFromSuperview()
+            guardOverlay?.removeFromSuperview()
+            guardOverlay = nil
+            if hadKeyboard { terminalView.window?.makeFirstResponder(terminalView) }
+        }
+        if let sheet = guardSheet {
+            guardSheet = nil
+            sheet.sheetParent?.endSheet(sheet, returnCode: .abort)
+        }
+    }
+
+    /// The keyboard came back to the terminal while the card is up: the
+    /// card takes it (next turn, as the connection card does).
+    func terminalTookKeyboardForGuard() {
+        guard guardCard != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let card = self.guardCard,
+                  self.terminalView.window?.firstResponder === self.terminalView else { return }
+            card.takeKeyboard()
+        }
+    }
+
+    private func presentSafePasteConfirmation(plan: SafePastePlan, originalText: String, allowImmediate: Bool = true,
+                                              dangerous: [Int] = []) {
         let alert = SheepAlert()
         alert.alertStyle = .informational
         // A working dialog, landscape and one fixed size (the accessory's
@@ -632,6 +950,7 @@ final class SessionTerminalHost {
         alert.messageText = "Safe Multi-line Paste"
         let target = sessionLabel.map { " to \($0)" } ?? ""
         alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending\(target)."
+            + CommandGuard.reviewNote(dangerous.count)
         alert.addButton(withTitle: "Send Line by Line")
         if allowImmediate { alert.markCaution(alert.addButton(withTitle: "Paste Immediately")) }
         alert.addButton(withTitle: "Cancel")
@@ -649,6 +968,15 @@ final class SessionTerminalHost {
 
         let previewTextView = NSTextView(frame: .zero)
         previewTextView.string = plan.lines.joined(separator: "\n")
+        if !dangerous.isEmpty, let storage = previewTextView.textStorage {
+            // The lines Confirm Dangerous Commands found, in the card's red.
+            let ranges = CommandGuard.lineRanges(plan.lines)
+            storage.beginEditing()
+            for index in dangerous where ranges.indices.contains(index) {
+                storage.addAttribute(.foregroundColor, value: SheepAlert.destructiveRed, range: ranges[index])
+            }
+            storage.endEditing()
+        }
         previewTextView.isEditable = false
         previewTextView.isSelectable = true
         previewTextView.isRichText = false
@@ -869,6 +1197,19 @@ final class SessionTerminalHost {
     }
 
     private func showPasteHUD(sent: Int, total: Int, delayMilliseconds: Int) {
+        showStatusHUD("Safe Paste \(sent)/\(total) · \(Self.delayTitle(delayMilliseconds))",
+                      stopHelp: "Stop before sending the next line") { [weak self] in
+            self?.cancelSafePaste(reason: .stopped)
+        }
+        hudIsPaste = true
+    }
+
+    /// The small top-right HUD with a Stop button — Safe Paste's progress,
+    /// and Send File via XMODEM's (5.0 (22)). One at a time: the transfer
+    /// refuses input, so a paste cannot run beside it.
+    func showStatusHUD(_ text: String, stopHelp: String, onStop: @escaping () -> Void) {
+        hudStop = onStop
+        hudIsPaste = false
         if pasteHUD == nil {
             let hud = NSVisualEffectView()
             hud.material = .hudWindow
@@ -887,7 +1228,7 @@ final class SessionTerminalHost {
             let stop = NSButton(title: "Stop", target: self, action: #selector(stopSafePasteFromHUD))
             stop.bezelStyle = .rounded
             stop.controlSize = .small
-            stop.toolTip = "Stop before sending the next line"
+            pasteStopButton = stop
 
             let stack = NSStackView(views: [label, stop])
             stack.orientation = .horizontal
@@ -907,16 +1248,26 @@ final class SessionTerminalHost {
             ])
             pasteHUD = hud
         }
-        pasteProgressLabel?.stringValue = "Safe Paste \(sent)/\(total) · \(Self.delayTitle(delayMilliseconds))"
+        pasteProgressLabel?.stringValue = text
+        pasteStopButton?.toolTip = stopHelp
         pasteHUD?.isHidden = false
     }
 
-    private func hidePasteHUD() {
+    func hideStatusHUD() {
+        hudStop = nil
+        hudIsPaste = false
         pasteHUD?.isHidden = true
     }
 
+    /// Only Safe Paste's own HUD: a transfer's must survive a cancelled
+    /// paste (typing during a transfer is refused, and that cancels one).
+    private func hidePasteHUD() {
+        guard hudIsPaste else { return }
+        hideStatusHUD()
+    }
+
     @objc private func stopSafePasteFromHUD() {
-        cancelSafePaste(reason: .stopped)
+        hudStop?()
     }
 
     private static func delayTitle(_ milliseconds: Int) -> String {

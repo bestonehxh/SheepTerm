@@ -178,6 +178,16 @@ private struct AIConversationView: View {
                 .padding(.vertical, 12)
             }
             .scrollIndicators(.automatic)
+            // Opened (the panel toggled back on, another tab's conversation)
+            // at the LATEST message, not the first: the anchor for the first
+            // layout, and a scroll a turn later for the lazy stack, whose
+            // rows below the fold have no height yet on the first pass.
+            // Initial offset only: a short conversation still sits under the
+            // header, and a resize while reading older messages stays put.
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .onAppear {
+                DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             .onChange(of: conversation.messages.last?.text) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
             }

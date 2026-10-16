@@ -254,6 +254,23 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(autoPage, forKey: "autoPage") }
     }
 
+    /// Edit → Confirm Dangerous Commands (5.0 (22), `CommandGuard`): a
+    /// reload / erase / factory reset in an SSH or serial tab waits for the
+    /// user's Send. ON by default — it never sends anything, it only holds.
+    @Published var confirmDangerousCommands = true {
+        didSet {
+            UserDefaults.standard.set(confirmDangerousCommands, forKey: "confirmDangerousCommands")
+            guard !confirmDangerousCommands else { return }
+            for tab in tabs {
+                switch tab.content {
+                case .ssh(let controller): controller.terminalHost.cancelCommandGuard(turnedOff: true)
+                case .serial(let controller): controller.terminalHost.cancelCommandGuard(turnedOff: true)
+                case .local, .web: break
+                }
+            }
+        }
+    }
+
     @Published var safePasteEnabled = true {
         didSet {
             UserDefaults.standard.set(safePasteEnabled, forKey: "safePasteEnabled")
@@ -363,6 +380,7 @@ final class AppModel: ObservableObject {
         sessionLogging = UserDefaults.standard.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = UserDefaults.standard.object(forKey: "autoReconnect") as? Bool ?? true
         safePasteEnabled = UserDefaults.standard.object(forKey: "safePasteEnabled") as? Bool ?? true
+        confirmDangerousCommands = UserDefaults.standard.object(forKey: "confirmDangerousCommands") as? Bool ?? true
         autoPage = UserDefaults.standard.object(forKey: "autoPage") as? Bool ?? false
         // DARK, always, and nothing to choose (4.0 (5)). The chrome colours,
         // the terminal themes and every 10 pt secondary caption in the app
@@ -441,6 +459,7 @@ final class AppModel: ObservableObject {
         sessionLogging = defaults.object(forKey: "logSessions") as? Bool ?? true
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
         safePasteEnabled = defaults.object(forKey: "safePasteEnabled") as? Bool ?? true
+        confirmDangerousCommands = defaults.object(forKey: "confirmDangerousCommands") as? Bool ?? true
         terminalTheme = defaults.string(forKey: "terminalTheme") ?? "sheepterm"
         terminalFontFamily = Theme.terminalFontFamily
         terminalFontSize = Double(Theme.terminalFontSize)
@@ -1154,14 +1173,14 @@ final class AppModel: ObservableObject {
     /// how many tabs took it — a tab that closed between the tick and the
     /// Send is simply skipped.
     @discardableResult
-    func broadcast(_ sends: [(id: UUID, payload: String)]) -> Int {
+    func broadcast(_ sends: [(id: UUID, payload: String)], confirmed: Bool = false) -> Int {
         var count = 0
         for send in sends {
             guard let tab = tabs.first(where: { $0.id == send.id }) else { continue }
             if case .local = tab.content { continue }
             // Counted only when the bytes went out: a veto (Safe Paste, a
             // session that refused) is not a send.
-            if terminalHost(of: tab)?.sendCommand(send.payload) == true { count += 1 }
+            if terminalHost(of: tab)?.sendCommand(send.payload, confirmed: confirmed) == true { count += 1 }
         }
         return count
     }
@@ -1171,6 +1190,40 @@ final class AppModel: ObservableObject {
     func sendBreak() {
         guard case .serial(let controller)? = selectedTab?.content else { return }
         controller.sendBreak()
+    }
+
+    /// Edit → Send File via XMODEM… (5.0 (22)): a serial console only.
+    /// The protocol is picked in the open panel and remembered.
+    func sendFileViaXModem() {
+        guard case .serial(let controller)? = selectedTab?.content else { return }
+        guard !controller.isTransferring else { NSSound.beep(); return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Send"
+        let modes: [XModemSender.Mode] = [.xmodem, .xmodem1K, .ymodem]
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for mode in modes { popup.addItem(withTitle: SerialTerminalController.modeLabel(mode)) }
+        popup.selectItem(at: min(max(UserDefaults.standard.integer(forKey: "xmodemMode"), 0), modes.count - 1))
+        popup.toolTip = "XMODEM for ROMMON / BootROM; XMODEM-1K or YMODEM when the device offers it"
+        popup.sizeToFit()
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: popup.frame.width + 40, height: popup.frame.height + 16))
+        popup.setFrameOrigin(NSPoint(x: 20, y: 8))
+        accessory.addSubview(popup)
+        panel.accessoryView = accessory
+        panel.isAccessoryViewDisclosed = true
+        let finish = { [weak controller] (response: NSApplication.ModalResponse) in
+            guard response == .OK, let url = panel.url, let controller else { return }
+            let index = popup.indexOfSelectedItem
+            UserDefaults.standard.set(index, forKey: "xmodemMode")
+            controller.sendFile(url, mode: modes[max(0, min(index, modes.count - 1))])
+        }
+        if let window = controller.terminalView.window {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
+        }
     }
 
     /// Whether the menu item above has anything to act on.
@@ -1930,6 +1983,40 @@ final class AppModel: ObservableObject {
             open(host: host, completeness: .complete)
         }
         pendingPlacement = .newTab
+    }
+
+    /// Tab menu → Duplicate (5.0 (22)): a second session to an SSH tab's
+    /// host, in its own tab right after it. Same rules as ⌘D: the session's
+    /// own host (`.complete` — the password it logged in with is in
+    /// `passwordCache`, a typed one is asked again), a fingerprinted family
+    /// opened as `.auto`. Serial cannot (the port is exclusive).
+    func duplicate(tab: SessionTab) {
+        guard tabs.contains(where: { $0.id == tab.id }), case .ssh(let controller) = tab.content else {
+            NSSound.beep()
+            return
+        }
+        var host = controller.host
+        if !tab.vendorManuallyChosen && tab.highlightVendor != .auto { host.vendor = .auto }
+        pendingPlacement = .tabAfter(tab.id)
+        open(host: host, completeness: .complete)
+        pendingPlacement = .newTab
+    }
+
+    /// Tab menu / Edit → Copy All Output (5.0 (22)): everything the tab's
+    /// terminal still holds — scrollback and screen, the normal screen even
+    /// while vim or less is up — as plain text (`OutputExport`).
+    func copyAllOutput(tab: SessionTab? = nil) {
+        guard let tab = tab ?? selectedTab, let host = terminalHost(of: tab) else { NSSound.beep(); return }
+        let text = OutputExport.text(rows: OutputExport.rows(of: host.terminalView.terminal.primary))
+        guard !text.isEmpty else { NSSound.beep(); return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Whether Copy All Output has a terminal to read.
+    var canCopyAllOutput: Bool {
+        selectedTab.flatMap { terminalHost(of: $0) } != nil
     }
 
     /// Sidebar → Open in Split: `host` to the right of the focused pane (or

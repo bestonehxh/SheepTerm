@@ -29,6 +29,24 @@ nonisolated final class SerialWorker: Sendable {
         var onInputDiscarded: (@Sendable () -> Void)?
         var onStatus: (@Sendable (String) -> Void)?
         var onClosed: (@Sendable (String) -> Void)?
+        /// Send File via XMODEM (5.0 (22)): asked for, not yet taken by the
+        /// loop. From the moment it is asked until it ends the port is the
+        /// transfer's — `write` refuses everything else.
+        var pendingTransfer: Transfer?
+        var transferActive = false
+        var cancelTransfer = false
+    }
+
+    /// One XMODEM/YMODEM send, as handed to the loop. The callbacks run on
+    /// the worker queue; the caller hops to main.
+    struct Transfer: Sendable {
+        let data: [UInt8]
+        let fileName: String
+        let mode: XModemSender.Mode
+        /// (bytes acknowledged, total) — at most a few times a second.
+        let onProgress: @Sendable (Int, Int) -> Void
+        /// The sender's last phase: `.done` or `.failed(…)`. Exactly once.
+        let onFinish: @Sendable (XModemSender.Phase) -> Void
     }
     private let state = Mutex(State())
     /// Cap on buffered input — a wedged session must not grow it forever.
@@ -134,6 +152,12 @@ nonisolated final class SerialWorker: Sendable {
                 discarded = state.onInputDiscarded
                 return
             }
+            // A file is going out: a key on the line would corrupt a block,
+            // and a paste has to hear that it was not sent.
+            guard !state.transferActive else {
+                discarded = state.onInputDiscarded
+                return
+            }
             // All-or-nothing, and on a console cable this is the case that
             // matters most: the old code appended `bytes.prefix(room)`, so a
             // paced paste into a 9600-baud port — which drains ~960 B/s while
@@ -173,7 +197,9 @@ nonisolated final class SerialWorker: Sendable {
     @discardableResult
     func sendBreak() -> Bool {
         state.withLock { state in
-            guard state.running else { return false }
+            // A break in the middle of a block corrupts it: not while a
+            // file transfer owns the line.
+            guard state.running, !state.transferActive else { return false }
             state.pendingBreak = true
             if state.wakeFD >= 0 {
                 var byte: UInt8 = 0
@@ -185,6 +211,45 @@ nonisolated final class SerialWorker: Sendable {
 
     private var isRunning: Bool {
         state.withLock { $0.running }
+    }
+
+    /// Starts sending a file over the line (the device must already be
+    /// waiting: ROMMON `xmodem -c …`, a BootROM's "download via XMODEM").
+    /// false = no live session, or a transfer is already running.
+    @discardableResult
+    func startTransfer(_ transfer: Transfer) -> Bool {
+        state.withLock { state in
+            guard state.running, !state.transferActive else { return false }
+            state.transferActive = true
+            state.cancelTransfer = false
+            state.pendingTransfer = transfer
+            // What was typed before it is the device's no more — and a
+            // Break asked for a moment earlier must not land mid-handshake.
+            state.pendingWrites.removeAll(keepingCapacity: true)
+            state.pendingBreak = false
+            if state.wakeFD >= 0 {
+                var byte: UInt8 = 0
+                _ = Darwin.write(state.wakeFD, &byte, 1)
+            }
+            return true
+        }
+    }
+
+    /// Stops the transfer with the protocol's abort (CAN × 8); the device
+    /// drops back to its prompt. A no-op when none is running.
+    func cancelTransfer() {
+        state.withLock { state in
+            guard state.transferActive else { return }
+            state.cancelTransfer = true
+            if state.wakeFD >= 0 {
+                var byte: UInt8 = 0
+                _ = Darwin.write(state.wakeFD, &byte, 1)
+            }
+        }
+    }
+
+    var isTransferring: Bool {
+        state.withLock { $0.transferActive }
     }
 
     /// Clears and returns the pending break flag.
@@ -208,12 +273,30 @@ nonisolated final class SerialWorker: Sendable {
         // Reset the public lifecycle on every exit path and drop input that
         // belongs to the dead device. Resource defers registered below run
         // first, then runActive is released for a possible later start().
+        // A transfer cut off by the session ending still reports its end
+        // (registered first, so it runs LAST — after the port is closed).
+        var transfer: XModemSender?
+        var transferJob: Transfer?
         defer {
-            state.withLock { state in
+            let unclaimed = state.withLock { state -> Transfer? in
                 state.running = false
                 state.pendingWrites.removeAll(keepingCapacity: true)
                 state.pendingBreak = false
                 state.runActive = false
+                state.transferActive = false
+                state.cancelTransfer = false
+                defer { state.pendingTransfer = nil }
+                return state.pendingTransfer
+            }
+            // Still running when the session ended. A sender that had in
+            // fact finished (its last ACK read just before the loop ended)
+            // reports how it finished; anything else did not finish.
+            if let job = transferJob ?? unclaimed {
+                switch transfer?.phase {
+                case .done?: job.onFinish(.done)
+                case .failed(let failure)?: job.onFinish(.failed(failure))
+                default: job.onFinish(.failed(.sessionEnded))
+                }
             }
         }
         // `start` already refused an unusable baud, but the trap is one line
@@ -325,7 +408,15 @@ nonisolated final class SerialWorker: Sendable {
                 Darwin.read(fd, raw.baseAddress, raw.count)
             }
             if count > 0 {
-                onData?(Array(buffer[0..<count]))
+                if transfer != nil {
+                    // The device's half of the protocol, not text.
+                    let reply = transfer!.receive(Array(buffer[0..<count]), now: Self.clock())
+                    let after = transfer!.leftover
+                    guard writeTransfer(reply) else { return false }
+                    if !after.isEmpty { onData?(after) }
+                } else {
+                    onData?(Array(buffer[0..<count]))
+                }
             } else if count == 0 {
                 // EOF — device gone (cable unplugged).
                 onClosed?("serial device disconnected")
@@ -337,7 +428,78 @@ nonisolated final class SerialWorker: Sendable {
             return true
         }
 
+        /// Writes a frame of the transfer whole (a 1K block at 9600 baud is
+        /// ~1 s of line). Returns false when the session is over (`onClosed`
+        /// already fired).
+        func writeTransfer(_ bytes: [UInt8]) -> Bool {
+            var offset = 0
+            var lastProgress = Self.clock()
+            while offset < bytes.count {
+                guard isRunning else { return false }
+                if Self.clock() - lastProgress > 60 {
+                    onClosed?("write stalled for 60 s — is flow control stuck?")
+                    return false
+                }
+                let written = bytes[offset...].withUnsafeBytes { raw in
+                    Darwin.write(fd, raw.baseAddress, raw.count)
+                }
+                if written > 0 {
+                    offset += written
+                    lastProgress = Self.clock()
+                } else if written < 0, errno == EINTR {
+                    continue
+                } else if written < 0, errno != EAGAIN {
+                    onClosed?("write failed: \(String(cString: strerror(errno)))")
+                    return false
+                } else {
+                    var wfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    _ = poll(&wfd, 1, 100)
+                    if Int32(wfd.revents) & Int32(POLLHUP | POLLERR | POLLNVAL) != 0 {
+                        onClosed?("serial device disconnected")
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+
+        var lastReported = (bytes: -1, at: 0.0)
+        /// Takes a new transfer, a cancel, a timeout, progress and the end —
+        /// once per pass. false = the session is over.
+        func serviceTransfer() -> Bool {
+            let (job, cancel) = state.withLock { state -> (Transfer?, Bool) in
+                defer { state.pendingTransfer = nil; state.cancelTransfer = false }
+                return (state.pendingTransfer, state.cancelTransfer)
+            }
+            if let job {
+                transferJob = job
+                transfer = XModemSender(data: job.data, fileName: job.fileName, mode: job.mode, now: Self.clock())
+                lastReported = (-1, 0)
+            }
+            guard var sender = transfer, let job = transferJob else { return true }
+            let out = cancel ? sender.cancel() : sender.tick(now: Self.clock())
+            transfer = sender
+            guard writeTransfer(out) else { return false }
+            let now = Self.clock()
+            let acknowledged = sender.bytesAcknowledged
+            if acknowledged != lastReported.bytes, now - lastReported.at >= 0.2 || acknowledged == sender.totalBytes {
+                lastReported = (acknowledged, now)
+                job.onProgress(acknowledged, sender.totalBytes)
+            }
+            switch sender.phase {
+            case .done, .failed:
+                transfer = nil
+                transferJob = nil
+                state.withLock { $0.transferActive = false }
+                job.onFinish(sender.phase)
+            default:
+                break
+            }
+            return true
+        }
+
         while isRunning {
+            guard serviceTransfer() else { return }
             // Before the queued text, every pass — see `sendBreak`.
             sendBreakIfPending()
             let writes = takeWrites()
@@ -420,7 +582,13 @@ nonisolated final class SerialWorker: Sendable {
                 pollfd(fd: fd, events: Int16(POLLIN), revents: 0),
                 pollfd(fd: pipeRead, events: Int16(POLLIN), revents: 0),
             ]
-            let ready = poll(&pfds, 2, 1000)
+            // A transfer has deadlines (a 0.1 s start settle, 10 s answers):
+            // wake for the next one instead of the idle second.
+            var timeout: Int32 = 1000
+            if let deadline = transfer?.nextDeadline {
+                timeout = Int32(max(5, min(1000, (deadline - Self.clock()) * 1000 + 1)))
+            }
+            let ready = poll(&pfds, 2, timeout)
             if ready < 0 {
                 if errno == EINTR { continue }
                 onClosed?("poll failed: \(String(cString: strerror(errno)))")
@@ -451,6 +619,12 @@ nonisolated final class SerialWorker: Sendable {
             }
         }
         onClosed?("serial session closed")
+    }
+
+    /// Monotonic seconds for the transfer's deadlines (a wall-clock jump
+    /// must not fire or starve a 10 s timeout).
+    private static func clock() -> Double {
+        ProcessInfo.processInfo.systemUptime
     }
 
 #if SHEEPTERM_TESTING

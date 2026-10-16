@@ -124,15 +124,36 @@ struct BroadcastSheet: View {
             let model = model
             variablesRequest = SnippetVariablesRequest(title: "Broadcast", template: line) { filled in
                 let sends = BroadcastPlan.sends(text: filled, to: targets, among: tabs)
-                guard !sends.isEmpty else { return }
-                let count = model.broadcast(sends)
+                guard !sends.isEmpty, let confirmed = Self.confirmDangerous(filled, to: sends.map(\.id), model: model) else { return }
+                let count = model.broadcast(sends, confirmed: confirmed)
                 report("Sent to \(count) tab\(count == 1 ? "" : "s")")
             }
             return
         }
         let sends = plan
-        let count = model.broadcast(sends)
+        guard let confirmed = Self.confirmDangerous(line, to: sends.map(\.id), model: model) else { return }
+        let count = model.broadcast(sends, confirmed: confirmed)
         report("Sent to \(count) tab\(count == 1 ? "" : "s")")
+    }
+
+    /// Confirm Dangerous Commands, once for every ticked tab instead of a
+    /// card in each: nil = the user cancelled; true = asked and confirmed
+    /// (the tabs do not ask again); false = nothing to ask.
+    /// Dangerous for ANY target's family counts (`shutdown` is only on the
+    /// list for a Linux tab) — otherwise those tabs would each raise a card
+    /// behind this sheet instead.
+    private static func confirmDangerous(_ line: String, to ids: [UUID], model: AppModel) -> Bool? {
+        let tabs = ids.count
+        let vendors = Set(ids.map { id in model.tabs.first { $0.id == id }?.highlightVendor ?? .auto })
+        guard model.confirmDangerousCommands,
+              CommandGuard.isDangerous(line, anyOf: vendors.isEmpty ? [.auto] : vendors) else { return false }
+        let alert = SheepAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Send to \(tabs) tab\(tabs == 1 ? "" : "s")?"
+        alert.informativeText = line
+        alert.addButton(withTitle: "Cancel")   // default: Return cancels
+        alert.addButton(withTitle: "Send").hasDestructiveAction = true
+        return alert.sheepStyled().runModal() == .alertSecondButtonReturn ? true : nil
     }
 
     private func report(_ text: String) { lastReport = text }

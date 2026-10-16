@@ -157,6 +157,8 @@ final class SerialTerminalController: NSObject {
         super.init()
         Theme.apply(to: terminalView)
         terminalView.delegate = self
+        terminalHost.guardVendor = { [weak self] in self?.host.highlightVendor ?? .auto }
+        terminalHost.lineBusy = { [weak self] in self?.worker.isTransferring ?? false }
         // Safe Paste asks after every paced line whether the worker took it.
         terminalHost.takeLastSendAccepted = { [weak self] in
             guard let self else { return false }
@@ -285,8 +287,116 @@ final class SerialTerminalController: NSObject {
     /// when the driver accepted it; here only the refusal is worth a line.
     func sendBreak() {
         if !worker.sendBreak() {
-            printNotice("no serial session — break not sent", error: true)
+            printNotice(worker.isTransferring ? "a file transfer is running — break not sent"
+                                              : "no serial session — break not sent", error: true)
         }
+    }
+
+    // MARK: - Send File via XMODEM (5.0 (22))
+
+    /// Bigger than any bootloader or switch image; at 115200 baud this is
+    /// already ~6 hours of line, and the whole file is held in memory.
+    static let maxTransferBytes = 256 * 1024 * 1024
+
+    var isTransferring: Bool { worker.isTransferring }
+
+    /// Sends `url` to the device, which must already be waiting for it
+    /// (ROMMON `xmodem -c flash:x.bin`, a BootROM's download menu). The
+    /// terminal shows a line at the start and the end; the HUD shows the
+    /// progress and Stop (the protocol's abort, CAN).
+    func sendFile(_ url: URL, mode: XModemSender.Mode) {
+        let name = url.lastPathComponent
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard size <= Self.maxTransferBytes else {
+            printNotice("\(name) is larger than \(Self.maxTransferBytes / 1_048_576) MB — not sent", error: true)
+            return
+        }
+        let data: [UInt8]
+        do {
+            data = [UInt8](try Data(contentsOf: url, options: .mappedIfSafe))
+        } catch {
+            printNotice("cannot read \(name): \(error.localizedDescription)", error: true)
+            return
+        }
+        let label = Self.modeLabel(mode)
+        let started = Date()
+        let job = SerialWorker.Transfer(
+            data: data, fileName: name, mode: mode,
+            onProgress: { [weak self] done, total in
+                DispatchQueue.main.async { self?.showTransferProgress(label: label, done: done, total: total, started: started) }
+            },
+            onFinish: { [weak self] phase in
+                DispatchQueue.main.async {
+                    self?.transferEnded(phase, label: label, name: name, total: data.count, started: started)
+                }
+            })
+        // A paced Safe Paste still running would lose the lines the worker
+        // took but has not written (the transfer clears them) — stop it, so
+        // its "stopped part-way" report says what really happened.
+        if !worker.isTransferring {
+            terminalHost.cancelSafePaste(reason: .stopped)
+            // …and a dangerous-command question still up: its Send could
+            // only be refused once the line is the file's.
+            terminalHost.cancelCommandGuard()
+        }
+        guard worker.startTransfer(job) else {
+            printNotice(worker.isTransferring ? "a transfer is already running" : "no serial session — nothing sent", error: true)
+            return
+        }
+        printNotice("\(label): \(name) (\(Self.sizeText(data.count))) — waiting for the device to ask for it…")
+        showTransferProgress(label: label, done: 0, total: data.count, started: started)
+    }
+
+    private func showTransferProgress(label: String, done: Int, total: Int, started: Date) {
+        guard worker.isTransferring else { return }
+        let text: String
+        if done == 0 {
+            text = "\(label) · waiting for the device"
+        } else {
+            let percent = total > 0 ? done * 100 / total : 100
+            let rate = Double(done) / max(Date().timeIntervalSince(started), 0.001)
+            text = "\(label) \(percent)% · \(Self.sizeText(Int(rate)))/s"
+        }
+        terminalHost.showStatusHUD(text, stopHelp: "Stop the transfer (the device gets the abort)") { [weak self] in
+            self?.worker.cancelTransfer()
+        }
+    }
+
+    private func transferEnded(_ phase: XModemSender.Phase, label: String, name: String, total: Int, started: Date) {
+        terminalHost.hideStatusHUD()
+        let seconds = Int(Date().timeIntervalSince(started).rounded())
+        let elapsed = seconds >= 60 ? "\(seconds / 60) min \(seconds % 60) s" : "\(seconds) s"
+        switch phase {
+        case .done:
+            printNotice("\(label): \(name) sent — \(Self.sizeText(total)) in \(elapsed)")
+        case .failed(let failure):
+            printNotice("\(label): \(name) not sent — \(Self.failureText(failure))", error: true)
+        default:
+            break
+        }
+    }
+
+    static func modeLabel(_ mode: XModemSender.Mode) -> String {
+        switch mode {
+        case .xmodem: return "XMODEM"
+        case .xmodem1K: return "XMODEM-1K"
+        case .ymodem: return "YMODEM"
+        }
+    }
+
+    static func failureText(_ failure: XModemSender.Failure) -> String {
+        switch failure {
+        case .noReceiver: return "the device never asked for it (start the receive on the device first)"
+        case .receiverCancelled: return "the device cancelled the transfer"
+        case .tooManyRetries(let block): return "block \(block) was refused \(XModemSender.maxAttempts) times"
+        case .eotNotAcknowledged: return "the device did not confirm the end of the file"
+        case .cancelledByUser: return "stopped"
+        case .sessionEnded: return "the session ended"
+        }
+    }
+
+    private static func sizeText(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
     /// Points the logger's own trouble reports at this session's terminal.
@@ -413,10 +523,21 @@ extension SerialTerminalController: TerminalViewDelegate {
 
     /// Split panes: the pane the keyboard went to is the selected session.
     func focusChanged(_ view: TerminalView, focused: Bool) {
-        if focused { AppModel.shared.noteFocus(view: view) }
+        guard focused else { return }
+        AppModel.shared.noteFocus(view: view)
+        terminalHost.terminalTookKeyboardForGuard()
     }
 
     func send(_ view: TerminalView, bytes: [UInt8]) {
+        // The line is the file's while a transfer runs.
+        if worker.isTransferring {
+            terminalHost.discardPendingKeystroke()
+            NSSound.beep()
+            return
+        }
+        // A typed Return on a dangerous command is held for the user's
+        // answer (Confirm Dangerous Commands) — and the keys behind it.
+        guard terminalHost.admitOutgoing(bytes) else { return }
         // A refused write means the worker took nothing: keep the answer so
         // a paced paste can end on it instead of counting the line as sent.
         lastWriteAccepted = worker.write(bytes)

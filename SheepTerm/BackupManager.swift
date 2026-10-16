@@ -69,7 +69,7 @@ enum BackupManager {
         // keys that are still on this list, so it is simply not applied.
         "autoReconnect", "chromeStyle", "collapsedGroups", "collapsedHostSections",
         "highlightDefault", "logSessions", "recentsShown", "showRecents",
-        "safePasteDelayMilliseconds", "safePasteEnabled",
+        "safePasteDelayMilliseconds", "safePasteEnabled", "confirmDangerousCommands",
         // Settings → Clipboard (OSC 52 write; off unless set). The literal
         // is `SessionTerminalHost.clipboardWriteKey`.
         "allowOSC52ClipboardWrite",

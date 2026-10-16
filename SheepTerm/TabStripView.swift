@@ -73,7 +73,9 @@ struct TabStripView: View {
                             model.collapseSidebar()
                         },
                         onClose: { model.close(workspace: workspace.id) },
-                        onReconnect: { model.reconnect(tab: tab) }
+                        onReconnect: { model.reconnect(tab: tab) },
+                        onDuplicate: { model.duplicate(tab: tab) },
+                        onCopyAllOutput: { model.copyAllOutput(tab: tab) }
                     )
                     .background(GeometryReader { proxy in
                         Color.clear
@@ -380,6 +382,8 @@ struct TabItemView: View {
     let onSelect: () -> Void
     let onClose: () -> Void
     let onReconnect: () -> Void
+    var onDuplicate: () -> Void = {}
+    var onCopyAllOutput: () -> Void = {}
     @State private var hovering = false
 
     /// Prefix, not equality: a session that burned its auto-reconnect budget
@@ -464,14 +468,20 @@ struct TabItemView: View {
             switch tab.content {
             case .ssh, .serial:
                 Button("Reconnect") { onReconnect() }
+                if case .ssh = tab.content {
+                    Button("Duplicate") { onDuplicate() }
+                }
                 Toggle("Highlight", isOn: $tab.highlightEnabled)
+                Divider()
+                Button("Copy All Output") { onCopyAllOutput() }
                 Divider()
             case .web:
                 Button("Reload") { onReconnect() }
                 Button("Save as Host…") { AppModel.shared.saveWebTabAsHost(tab) }
                 Divider()
             case .local:
-                EmptyView()
+                Button("Copy All Output") { onCopyAllOutput() }
+                Divider()
             }
             Button("Close Tab") { onClose() }
         }

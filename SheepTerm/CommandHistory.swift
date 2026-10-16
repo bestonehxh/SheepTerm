@@ -93,7 +93,17 @@ nonisolated enum CommandHistoryCapture {
         // The whole row too: the prompt carries the mode the command is
         // typed in (`R1(config-server-tacacs)# key 0 X` → tacacs + key).
         if CommandHistoryFilter.isSensitive(line) { return nil }
+        guard let split = split(row: line) else { return nil }
+        return accepted(split.command)
+    }
 
+    /// A screen line cut into prompt and command, with NO filter — the
+    /// dangerous-command guard (`CommandGuard`) reads it too, and must see
+    /// `crypto key zeroize` that history refuses to keep. nil when the line
+    /// is not recognisably "prompt + command".
+    static func split(row: String) -> (prompt: String, command: String)? {
+        let line = row.trimmingCharacters(in: .whitespaces)
+        guard !line.isEmpty else { return nil }
         let chars = Array(line)
         let terminators: Set<Character> = ["#", ">", "$", "]"]
         guard let t = chars.firstIndex(where: { terminators.contains($0) }) else { return nil }
@@ -105,8 +115,25 @@ nonisolated enum CommandHistoryCapture {
         // `[user@host ~]$ ` and `[HUAWEI]#`: the bracket and the terminator
         // after it are both the prompt.
         if chars[t] == "]", end < chars.count, ["#", "$", ">"].contains(chars[end]) { end += 1 }
+        // RouterOS: `[admin@MikroTik] > ` and, inside a menu,
+        // `[admin@MikroTik] /system> ` — the menu path and the `>` after the
+        // bracket are the prompt too.
+        // Safe mode shows `<SAFE>` where the `>` was.
+        if chars[t] == "]", end == t + 1 {
+            var look = end
+            while look < chars.count, chars[look] == " " { look += 1 }
+            if look < chars.count, chars[look] == "/" {
+                while look < chars.count, chars[look] != " ", chars[look] != ">", chars[look] != "<" { look += 1 }
+            }
+            if look < chars.count, chars[look] == ">" {
+                end = look + 1
+            } else if look < chars.count, chars[look] == "<",
+                      let close = chars[look...].firstIndex(where: { $0 == ">" || $0 == " " }), chars[close] == ">" {
+                end = close + 1
+            }
+        }
         let command = String(chars[end...]).trimmingCharacters(in: .whitespaces)
-        return accepted(command)
+        return (String(chars[..<end]), command)
     }
 
     /// The final gate for a candidate line (also the one `CommandHistory`
@@ -146,7 +173,13 @@ nonisolated struct HistoryEchoGate {
     /// follows output (the echo) or follows nothing typed at all.
     mutating func returned(counter: UInt64) -> Bool {
         defer { pending = false }
-        return !pending || counter != stamp
+        return isCurrent(counter: counter)
+    }
+
+    /// The same answer without consuming the Return (the dangerous-command
+    /// guard asks while it holds one back).
+    func isCurrent(counter: UInt64) -> Bool {
+        !pending || counter != stamp
     }
 }
 

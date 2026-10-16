@@ -186,6 +186,7 @@ final class SSHTerminalController: NSObject {
         super.init()
         Theme.apply(to: terminalView)
         terminalView.delegate = self
+        terminalHost.guardVendor = { [weak self] in self?.host.highlightVendor ?? .auto }
         // Safe Paste asks after every paced line whether the worker took it.
         terminalHost.takeLastSendAccepted = { [weak self] in
             guard let self else { return false }
@@ -857,9 +858,13 @@ extension SSHTerminalController: TerminalViewDelegate {
         AppModel.shared.noteFocus(view: view)
         // A connection question is up: the keyboard belongs to its card.
         terminalHost.terminalTookKeyboard()
+        terminalHost.terminalTookKeyboardForGuard()
     }
 
     func send(_ view: TerminalView, bytes: [UInt8]) {
+        // A typed Return on a dangerous command is held for the user's
+        // answer (Confirm Dangerous Commands) — and the keys behind it.
+        guard terminalHost.admitOutgoing(bytes) else { return }
         // A refused write means the worker took nothing: keep the answer so
         // a paced paste can end on it instead of counting the line as sent.
         lastWriteAccepted = worker.write(bytes)

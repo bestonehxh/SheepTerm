@@ -38,8 +38,19 @@ enum AIPanelDemo {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 ai.attachTail(for: session)
                 ai.setDraft("Why is Gi1/0/24 down and how do I bring it back?", for: session)
-                if mode == "conversation" { ai.send(for: session) }
+                if mode == "conversation" || mode == "scroll" { ai.send(for: session) }
             }
+            // `scroll`: a long conversation, then the panel off and on again —
+            // it must come back at the latest message (5.0 (22)).
+            guard mode == "scroll" else { return }
+            for turn in 1...5 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 + Double(turn) * 2.5) {
+                    ai.setDraft("Follow-up question \(turn): and what about Gi1/0/\(turn)?", for: session)
+                    ai.send(for: session)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 18) { AIPanelChrome.shared.shown = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 19.5) { AIPanelChrome.shared.shown = true }
         }
     }
 
