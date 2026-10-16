@@ -93,6 +93,13 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         }
     }
 
+    /// Selection echo (the other occurrences of a selected word, tinted).
+    /// SheepTerm turns it off (5.0 (27): two tints for one selection read as
+    /// a bug). Default on, as the package has always shipped it.
+    public var selectionEchoEnabled = true {
+        didSet { if selectionEchoEnabled != oldValue { setNeedsFrame() } }
+    }
+
     public var highlightEnabled = true {
         didSet {
             guard highlightEnabled != oldValue else { return }
@@ -1022,7 +1029,7 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
             overlay.searchMatches = search.findAll()
             overlay.currentMatch = currentMatch
         }
-        echo.term = echoTerm
+        echo.term = selectionEchoEnabled ? echoTerm : ""
         if echo.isValid { overlay.echoMatches = echo.findAll(limit: TerminalView.echoLimit) }
         overlay.highlight = (highlightEnabled && !terminal.isAlternate) ? highlight : nil
         overlay.cursorVisible = terminal.cursorVisible && terminal.buffer.ydisp == terminal.buffer.ybase

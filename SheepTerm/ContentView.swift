@@ -244,7 +244,7 @@ struct DetailPane: View {
                 // (4.2 (7)). Hidden workspaces hold no views at all.
                 if let workspace = model.selectedWorkspace {
                     let inset = Self.inset(for: workspace, model: model)
-                    WorkspaceView(workspace: workspace, selectedSession: model.selectedID)
+                    WorkspaceView(workspace: workspace, selectedSession: model.selectedID, leadingInset: inset.leading)
                         .padding(.leading, inset.leading)
                         .padding(.trailing, inset.trailing)
                         .padding(.top, inset.top)
@@ -349,32 +349,29 @@ struct TopBarView: View {
                 .animation(.easeOut(duration: 0.18), value: isFullScreen)
 
             // Grouped: snug hit boxes with a small gap between them.
-            HStack(spacing: 10) {
+            HStack(spacing: 4) {
                 Button {
                     model.toggleSidebar()
                 } label: {
-                    Image(systemName: "sidebar.leading")
-                        .font(.system(size: 13))
-                        .frame(width: 20, height: 22)
-                        .contentShape(Rectangle())
+                    PanelToggleGlyph(trailing: false, open: model.sidebarShown)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.dimText)
+                .buttonStyle(ChromeIconButtonStyle())
+                .accessibilityLabel("Toggle Sidebar")
 
                 Button {
                     model.showQuickSearch = true
                 } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 13))
-                        .frame(width: 20, height: 22)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.dimText)
-            }
-            .popover(isPresented: $model.showQuickSearch, arrowEdge: .bottom) {
-                QuickSearchView()
-                    .environmentObject(model)
+                .buttonStyle(ChromeIconButtonStyle())
+                .accessibilityLabel("Search")
+                // On the magnifier itself, so the arrow points at it (on the
+                // group it pointed between the two buttons).
+                .popover(isPresented: $model.showQuickSearch, arrowEdge: .bottom) {
+                    QuickSearchView()
+                        .environmentObject(model)
+                }
             }
 
             TabStripView(compensateWindowBorder: !isFullScreen)
@@ -397,13 +394,14 @@ struct TopBarView: View {
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Theme.dimText)
-                    .frame(width: 38, height: 28)
+                    // The whole box opens the menu (a borderless Menu's control is its label).
+                    .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .modifier(ChromeIconBox())
 
             AIPanelToggleButton()
         }

@@ -232,8 +232,6 @@ struct SyncAccountButton: View {
                 // The panel's proportions (ring and gap ≈ 1/20 of the
                 // picture) at bar size: the picture stays the thing you see.
                 SyncAvatarView(size: 18, ring: 1, gap: 1)
-                    .frame(width: 24, height: 22)
-                    .contentShape(Rectangle())
             } else {
                 HStack(alignment: .center, spacing: 5) {
                     Group {
@@ -250,12 +248,10 @@ struct SyncAccountButton: View {
                         .lineLimit(1)
                 }
                 .fixedSize()
-                .frame(minHeight: 22)
-                .contentShape(Rectangle())
             }
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        // The bar's icon box (`ChromeIconBox`); Sign In is as wide as its words.
+        .buttonStyle(ChromeIconButtonStyle(width: signedIn ? 26 : nil))
         .help(helpText)
         .accessibilityLabel(signedIn ? "Sync account" : "Sign in to Sync")
         .accessibilityValue(signedIn ? helpText : "")

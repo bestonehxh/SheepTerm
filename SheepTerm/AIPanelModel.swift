@@ -33,8 +33,9 @@ final class AIPanelChrome: ObservableObject {
         width = saved == 0 ? 360 : min(max(saved, AIPanelModel.widthRange.lowerBound), AIPanelModel.widthRange.upperBound)
     }
 
+    /// Slides like the left sidebar (the user: the two must feel the same).
     func toggle() {
-        shown.toggle()
+        withAnimation(AppModel.sidebarAnimation) { shown.toggle() }
         if !shown { AppModel.shared.focusActiveTerminal() }
     }
 }

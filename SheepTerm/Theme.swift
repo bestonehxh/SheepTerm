@@ -260,6 +260,9 @@ enum Theme {
         // 110/111/112 and RIS put back. Assigning those three by hand here
         // used to be necessary and is now the same write, one line later.
         terminalView.colors = colors
+        // One tint per selection: no echo of the selected word elsewhere
+        // (the user, 5.0 (27): the second colour read as a bug).
+        terminalView.selectionEchoEnabled = false
 
         // Right-click menu: the terminal view implements copy:/paste:/selectAll:
         // as responder actions; target nil routes them to the clicked view.

@@ -18,20 +18,15 @@ extension View {
 /// Tab-bar button right after "+": same size and colour as the bar's other icons.
 struct AIPanelToggleButton: View {
     @ObservedObject private var ai = AIPanelChrome.shared
-    @State private var hovering = false
 
     var body: some View {
         Button {
             ai.toggle()
         } label: {
-            Image(systemName: "sidebar.trailing")
-                .font(.system(size: 13))
-                .foregroundStyle(ai.shown ? Theme.accent : (hovering ? Theme.tabText : Theme.dimText))
-                .frame(width: 20, height: 22)
-                .contentShape(Rectangle())
+            PanelToggleGlyph(trailing: true, open: ai.shown)
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        // Accent while the panel is open (the user likes it there).
+        .buttonStyle(ChromeIconButtonStyle(tint: ai.shown ? Theme.accent : nil))
         .accessibilityLabel("Show AI Panel")
     }
 }
@@ -46,6 +41,8 @@ struct AIPanelColumn: View {
                 AIPanelView()
                     .frame(width: ai.width)
             }
+            // In and out from the right edge, as the sidebar does from the left.
+            .transition(.move(edge: .trailing))
         }
     }
 }
@@ -144,11 +141,8 @@ struct AIPanelView: View {
             } label: {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 12))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.dimText)
+            .buttonStyle(ChromeIconButtonStyle())
             .accessibilityLabel("New Chat")
         }
         .padding(.horizontal, 10)
@@ -354,11 +348,9 @@ private struct AICodeBlock: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 10.5))
-                .frame(width: 20, height: 18)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(Theme.dimText)
+        // The bar's icon box, a size down for the row under an answer.
+        .buttonStyle(ChromeIconButtonStyle(width: 22, height: 20))
         .accessibilityLabel(help)
     }
 }
@@ -485,16 +477,13 @@ private struct AIComposer: View {
         .padding(.top, 4)
     }
 
-    private func iconButton(_ symbol: String, help: String, size: CGFloat = 12.5, tint: Color = Theme.dimText,
+    private func iconButton(_ symbol: String, help: String, size: CGFloat = 12.5, tint: Color? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size))
-                .foregroundStyle(tint)
-                .frame(width: 24, height: 22)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ChromeIconButtonStyle(tint: tint))
         .accessibilityLabel(help)
     }
 }

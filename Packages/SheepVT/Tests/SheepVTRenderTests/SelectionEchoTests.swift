@@ -51,6 +51,21 @@ import SheepVT
         #expect(view.echoTerm == "")
     }
 
+    /// Switched off (SheepTerm does, 5.0 (27)): a selected word echoes nowhere.
+    @Test func echoCanBeSwitchedOff() {
+        let view = makeView()
+        view.feed("Gi1/0/1 up\r\nGi1/0/2 down\r\nGi1/0/1 again")
+        let line0 = view.terminal.buffer.lineNumber(ofScreenRow: 0)
+        view.selection.begin(at: Position(line: line0, col: 0))
+        view.selection.extend(to: Position(line: line0, col: 6))
+        #expect(!view.makeOverlay().echoMatches.isEmpty)
+        view.selectionEchoEnabled = false
+        #expect(view.makeOverlay().echoMatches.isEmpty)
+        #expect(view.makeOverlay().selection != nil)              // the selection itself still shows
+        view.selectionEchoEnabled = true
+        #expect(!view.makeOverlay().echoMatches.isEmpty)
+    }
+
     /// The overlay carries the OTHER occurrences too (the selected one is
     /// among them — the selection tint lies over it), and only while the
     /// selection is a word.

@@ -1,49 +1,23 @@
 import Foundation
 
-/// A web page while the left sidebar slides (5.0 (26)). WebKit repaints a
-/// resize a frame or two late, so a page that narrowed or widened with
-/// every frame of the slide drew its OLD width at the NEW place: the right
-/// edge kicked in and back on close and ran off the tab on open (measured
-/// frame by frame, 2026-10-16: 2929 → 2924 → 2875 → 2922 px). The right
-/// panel never showed it because its page keeps its left edge and is
-/// covered at the right.
+/// A web page beside the left sidebar (5.0 (27)): the page's frame starts
+/// where it would with the sidebar CLOSED and runs under the sidebar; WebKit
+/// is told that strip is covered (`obscuredContentInsets.left`), so the page
+/// lays itself out in the visible part only.
 ///
-/// So during the slide the page keeps ONE width, anchored to the tab's
-/// RIGHT edge (which does not move), and the sidebar slides over / off its
-/// left part (the tab clips it): opening keeps the old, wider page and it
-/// narrows once when the slide ends; closing takes the new, wider width at
-/// once. The right edge never moves; the page is resized once, not per frame.
-nonisolated struct SidebarSlide: Equatable {
-    /// Slightly longer than `AppModel.sidebarAnimation` (0.2 s).
-    static let duration: TimeInterval = 0.26
-
-    let width: Double
-    /// The tab's width once the slide has settled.
-    let target: Double
-    let until: Date
-
-    /// The page's width for the whole slide, from the tab's width when the
-    /// slide starts and how much the sidebar takes (`delta`) — times `share`,
-    /// the part of it that reaches this pane (`PaneLayout.widthShare`: a
-    /// left/right split shares it; review 5.0 (26)). A slide still running
-    /// (`previous`, a toggle within 0.26 s) is started from ITS target, not
-    /// from a width caught mid-animation — the page keeps the width it has.
-    static func start(tabWidth: Double, delta: Double, opening: Bool, share: Double = 1,
-                      previous: SidebarSlide? = nil, now: Date = Date()) -> SidebarSlide {
-        let change = delta * share
-        let base = previous.flatMap { $0.isActive(now: now) ? $0.target : nil } ?? tabWidth
-        let target = max(0, opening ? base - change : base + change)
-        return SidebarSlide(width: max(0, opening ? base : target), target: target, until: now.addingTimeInterval(duration))
+/// Why: WebKit paints a resize a frame or two late and pins that late
+/// picture to the frame's LEFT edge. The right AI panel never showed it —
+/// the page's left edge stays put and the late part is on the right, under
+/// the panel. The left sidebar moved the page's left edge every frame, so
+/// the late picture was drawn at the wrong place on the uncovered right
+/// (measured: the right edge kicked 54 px; pinning the width instead made
+/// centred content jump once). With the frame's left edge fixed in the
+/// window, the left sidebar now behaves exactly like the right panel: only
+/// the covered strip changes, and the page's right edge never moves.
+nonisolated enum SidebarCover {
+    /// How much of the page the sidebar covers: how far the pane sits right
+    /// of where it sits with the sidebar closed. Whole points, never negative.
+    static func cover(paneLeft: Double, closedLeft: Double) -> Double {
+        max(0, (paneLeft - closedLeft).rounded())
     }
-
-    func isActive(now: Date = Date()) -> Bool { now < until }
-
-    /// The page's x inside a tab of `tabWidth`: right edges together.
-    func x(tabWidth: Double) -> Double { tabWidth - width }
-}
-
-extension Notification.Name {
-    /// Posted BEFORE the sidebar's shown state changes (object: nil,
-    /// userInfo "opening": Bool, "delta": Double).
-    static let sheepSidebarWillSlide = Notification.Name("SheepTerm.sidebarWillSlide")
 }

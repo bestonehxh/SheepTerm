@@ -215,41 +215,104 @@ final class SidebarOutlineView: NSOutlineView {
     }
 }
 
-/// Selected row = accent pill; the row being opened flashes darker. The
-/// pill is drawn here rather than left to AppKit because the sidebar hands
-/// focus straight back to the terminal on every click, which would render
-/// the system highlight in its washed-out unfocused grey.
+/// Rounded grey boxes (5.0 (27), "Graphite", the user's pick): pointer over
+/// = faint, selected = stronger with brighter text, the row being opened
+/// flashes stronger still. Drawn here rather
+/// than left to AppKit because the sidebar hands focus straight back to the
+/// terminal on every click, which would render the system highlight in its
+/// washed-out unfocused grey. Hover is drawing only — the tracking area never
+/// takes a click (sidebar clicks are timing-sensitive, CLAUDE.md).
 final class SidebarRowView: NSTableRowView {
     var activated = false {
         didSet { if activated != oldValue { needsDisplay = true } }
     }
+    private var hovering = false {
+        didSet { if hovering != oldValue { needsDisplay = true } }
+    }
+    private var hoverArea: NSTrackingArea?
+
+    /// The box's colour — "Graphite" (the user picked it from six): grey
+    /// boxes only, pointer over faint, selected stronger, the row being
+    /// opened flashes stronger still. The selected row's text is brightened
+    /// by its cell (`SidebarRowHighlight`).
+    static func boxColor(selected: Bool, activated: Bool, hovering: Bool) -> NSColor? {
+        if activated { return NSColor.white.withAlphaComponent(0.22) }
+        if selected { return NSColor.white.withAlphaComponent(0.14) }
+        return hovering ? NSColor.white.withAlphaComponent(0.06) : nil
+    }
+
+    override var isSelected: Bool {
+        didSet { if isSelected != oldValue { tellCells() } }
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        (subview as? SidebarRowHighlight)?.setRowSelected(isSelected)
+    }
+
+    private func tellCells() {
+        for case let cell as SidebarRowHighlight in subviews { cell.setRowSelected(isSelected) }
+    }
+
+    private func fillBox(_ color: NSColor?) {
+        guard let color else { return }
+        color.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 6, yRadius: 6).fill()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+        // A row that scrolled out from under a still pointer must not stay lit.
+        if let window {
+            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            hovering = bounds.contains(point)
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        hovering = false
+    }
 
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
-        let inset = bounds.insetBy(dx: 6, dy: 1)
-        let path = NSBezierPath(roundedRect: inset, xRadius: 6, yRadius: 6)
-        NSColor(Theme.accent).withAlphaComponent(activated ? 0.5 : 0.22).setFill()
-        path.fill()
+        fillBox(Self.boxColor(selected: true, activated: activated, hovering: hovering))
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        // An activated row flashes even when the click did not change the
-        // selection (double-clicking the already-selected row).
-        if activated && !isSelected {
-            let inset = bounds.insetBy(dx: 6, dy: 1)
-            NSColor(Theme.accent).withAlphaComponent(0.5).setFill()
-            NSBezierPath(roundedRect: inset, xRadius: 6, yRadius: 6).fill()
+        // Section rows have no AppKit selection style (`.none`), so their box
+        // — hover and selected alike — is drawn here too (the user: sections
+        // as well). Other rows: the hover box and the flash of an activated
+        // row when not selected (double-clicking the already-selected row).
+        if selectionHighlightStyle == .none {
+            fillBox(Self.boxColor(selected: isSelected, activated: activated, hovering: hovering))
+            return
         }
+        guard !isSelected else { return }
+        fillBox(Self.boxColor(selected: false, activated: activated, hovering: hovering))
     }
 }
 
 // MARK: - Cell views
 
+/// A cell whose text brightens while its row is selected (Graphite).
+protocol SidebarRowHighlight: AnyObject {
+    func setRowSelected(_ selected: Bool)
+}
+
 /// Badge + name + address. `hitTest` returns nil so every mouse event
 /// belongs to the outline view — that is what makes a click land on the
 /// first try and a drag start without a hitch.
-final class SidebarHostCell: NSView {
+final class SidebarHostCell: NSView, SidebarRowHighlight {
     private let badgePill = NSView()
     private let badge = NSTextField(labelWithString: "")
     /// A web host's globe, in place of the text badge (same pill).
@@ -278,6 +341,14 @@ final class SidebarHostCell: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    private var rowSelected = false
+
+    func setRowSelected(_ selected: Bool) {
+        rowSelected = selected
+        name.textColor = selected ? .white : .labelColor
+        detail.textColor = selected ? NSColor.white.withAlphaComponent(0.72) : .secondaryLabelColor
+    }
+
     func configure(badge text: String, color: NSColor, name title: String, detail subtitle: String?,
                    symbol: String? = nil) {
         badge.stringValue = text
@@ -293,6 +364,7 @@ final class SidebarHostCell: NSView {
         name.stringValue = title
         detail.stringValue = subtitle ?? ""
         detail.isHidden = (subtitle ?? "").isEmpty
+        setRowSelected(rowSelected)
         needsLayout = true
     }
 
@@ -327,7 +399,7 @@ final class SidebarHostCell: NSView {
 }
 
 /// Group header (bold name + host count) and section header share one cell.
-final class SidebarLabelCell: NSView {
+final class SidebarLabelCell: NSView, SidebarRowHighlight {
     private let title = NSTextField(labelWithString: "")
     private let count = NSTextField(labelWithString: "")
 
@@ -343,13 +415,23 @@ final class SidebarLabelCell: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    private var rowSelected = false
+    private var quiet = false
+
+    func setRowSelected(_ selected: Bool) {
+        rowSelected = selected
+        title.textColor = selected ? .white : (quiet ? .secondaryLabelColor : .labelColor)
+        count.textColor = selected ? NSColor.white.withAlphaComponent(0.6) : .tertiaryLabelColor
+    }
+
     func configure(title text: String, count number: Int?, quiet: Bool = false) {
+        self.quiet = quiet
         title.stringValue = text
         // A heading INSIDE a group sits one level below the group's own row,
         // so it is a little smaller and a little quieter — the only
         // difference, because it is the same kind of row one step down.
         title.font = .systemFont(ofSize: quiet ? 10.5 : 11.5, weight: quiet ? .medium : .semibold)
-        title.textColor = quiet ? .secondaryLabelColor : .labelColor
+        setRowSelected(rowSelected)
         count.stringValue = number.map(String.init) ?? ""
         count.isHidden = number == nil
         // The count is a bare number beside a name, which VoiceOver reads as

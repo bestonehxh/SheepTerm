@@ -352,9 +352,22 @@ final class WebTabController: NSObject {
     /// The key over its field, from the last box the page reported and the
     /// web view's frame NOW (a pane resize moves the page without moving the
     /// field's CSS box); none without saved logins.
+    private var keyGate = WebLoginKey.KeyResizeGate()
+    private var keyReplace: DispatchWorkItem?
+
     private func placeKeys() {
         guard !closed, WebLoginKey.showsKey(savedLogins: AppModel.shared.credentialStore.credentials.count) else {
             view.showKeys(at: [])
+            return
+        }
+        // The page is changing width: no key until it has settled (`KeyResizeGate`).
+        guard keyGate.mayPlace(width: Double(webView.frame.width - webView.obscuredContentInsets.left),
+                               height: Double(webView.frame.height)) else {
+            view.showKeys(at: [])
+            keyReplace?.cancel()
+            let again = DispatchWorkItem { [weak self] in self?.placeKeys() }
+            keyReplace = again
+            DispatchQueue.main.asyncAfter(deadline: .now() + WebLoginKey.KeyResizeGate.settle, execute: again)
             return
         }
         // Pinched in: the visible part of the page is shifted by the pinch
@@ -364,7 +377,11 @@ final class WebTabController: NSObject {
             return
         }
         let zoom = Double(webView.pageZoom)
-        let web = webView.frame
+        // The page's own coordinates start right of the strip the sidebar
+        // covers (`obscuredContentInsets`, `SidebarCover`).
+        let covered = webView.obscuredContentInsets.left
+        let web = CGRect(x: webView.frame.minX + covered, y: webView.frame.minY,
+                         width: webView.frame.width - covered, height: webView.frame.height)
         view.showKeys(at: keyBoxes.compactMap { box in
             WebLoginKey.keyFrame(field: box, zoom: zoom, web: (web.minX, web.minY, web.width, web.height))
                 .map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }
@@ -1074,12 +1091,11 @@ final class WebTabView: NSView {
 
     private func makeKey() -> NSButton {
         let image = NSImage(systemSymbolName: "key.fill", accessibilityDescription: "Saved logins")?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
-        let button = NSButton(image: image ?? NSImage(), target: self, action: #selector(keyClicked(_:)))
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+        let button = LoginKeyButton(image: image ?? NSImage(), target: self, action: #selector(keyClicked(_:)))
         button.isBordered = false
         button.imagePosition = .imageOnly
         button.refusesFirstResponder = true
-        button.contentTintColor = NSColor(Theme.accent)
         button.toolTip = "Saved logins"
         addSubview(button)
         return button
@@ -1116,38 +1132,25 @@ final class WebTabView: NSView {
         layer?.masksToBounds = true
         addSubview(webView)
         addSubview(bar)
-        // Selector-based: removed with the view, posted on main (AppModel).
-        NotificationCenter.default.addObserver(self, selector: #selector(sidebarWillSlide(_:)), name: .sheepSidebarWillSlide, object: nil)
     }
 
-    @objc private func sidebarWillSlide(_ note: Notification) {
-        beginSlide(opening: note.userInfo?["opening"] as? Bool ?? false, delta: note.userInfo?["delta"] as? Double ?? 0)
-    }
-
-    /// The sidebar is sliding: the page keeps one width, right edge fixed.
-    private var slide: SidebarSlide?
-
-    private func beginSlide(opening: Bool, delta: Double) {
-        // Only a tab on screen; a hidden one just takes its new size later.
-        guard window != nil, !isHiddenOrHasHiddenAncestor, bounds.width > 0 else { return }
-        // A pane beside another gets only its share of the sidebar's width.
-        var share: CGFloat = 1
+    /// How much of the page the left sidebar covers right now (`SidebarCover`):
+    /// this pane's left in the window minus its left with the sidebar closed.
+    private func sidebarCover() -> CGFloat {
+        guard window != nil else { return 0 }
         var view: NSView? = superview
         var leaf: PaneLeafView?
         while let current = view {
             if leaf == nil, let found = current as? PaneLeafView { leaf = found }
-            if let workspace = current as? PaneTreeView, let leaf { share = workspace.widthShare(ofSession: leaf.session); break }
+            if let tree = current as? PaneTreeView {
+                guard let leaf, let closed = tree.closedLeft(ofSession: leaf.session) else { return 0 }
+                let offset = convert(CGPoint.zero, to: leaf).x
+                return CGFloat(SidebarCover.cover(paneLeft: Double(convert(CGPoint.zero, to: nil).x),
+                                                  closedLeft: Double(closed + offset)))
+            }
             view = current.superview
         }
-        let started = SidebarSlide.start(tabWidth: Double(bounds.width), delta: delta, opening: opening,
-                                         share: Double(share), previous: slide)
-        slide = started
-        needsLayout = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + SidebarSlide.duration + 0.02) { [weak self] in
-            guard let self, self.slide == started else { return }
-            self.slide = nil
-            self.needsLayout = true
-        }
+        return 0
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1158,12 +1161,12 @@ final class WebTabView: NSView {
         super.layout()
         bar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: WebBarView.height)
         let height = max(0, bounds.height - WebBarView.height)
-        if let slide, slide.isActive() {
-            webView.frame = CGRect(x: slide.x(tabWidth: Double(bounds.width)), y: WebBarView.height,
-                                   width: slide.width, height: height)
-        } else {
-            slide = nil
-            webView.frame = CGRect(x: 0, y: WebBarView.height, width: bounds.width, height: height)
+        // The page starts where it would with the sidebar closed and runs
+        // under the sidebar, which WebKit is told covers it (`SidebarCover`).
+        let cover = sidebarCover()
+        webView.frame = CGRect(x: -cover, y: WebBarView.height, width: bounds.width + cover, height: height)
+        if webView.obscuredContentInsets.left != cover {
+            webView.obscuredContentInsets = NSEdgeInsets(top: 0, left: cover, bottom: 0, right: 0)
         }
         for case let overlay as ConnectionOverlayView in subviews { overlay.frame = bounds }
         onLayout?()
@@ -1180,8 +1183,8 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
 
     private let back = WebBarView.button("chevron.left", "Back (⌘[)", HistoryButton())
     private let forward = WebBarView.button("chevron.right", "Forward (⌘])", HistoryButton())
-    private let reload = WebBarView.button("arrow.clockwise", "Reload (⌘R)", NSButton())
-    private let external = WebBarView.button("arrow.up.right.square", "Open in Default Browser", NSButton())
+    private let reload = WebBarView.button("arrow.clockwise", "Reload (⌘R)", ChromeBoxButton())
+    private let external = WebBarView.button("arrow.up.right.square", "Open in Default Browser", ChromeBoxButton())
     private let urlField = NSTextField()
     /// The URL field (an empty tab's keyboard target).
     var locationField: NSView { urlField }
@@ -1508,9 +1511,100 @@ final class WebLoginMessageProxy: NSObject, WKScriptMessageHandler {
     }
 }
 
+/// The key in a login field: a white key on a solid accent pill so it
+/// stands out on a white field (the user: not noticeable; size kept),
+/// lighter under the pointer, darker while pressed.
+final class LoginKeyButton: NSButton {
+    private var hovering = false { didSet { refresh() } }
+    private var pressing = false { didSet { refresh() } }
+    private var area: NSTrackingArea?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refresh()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        let fresh = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                   owner: self, userInfo: nil)
+        addTrackingArea(fresh)
+        area = fresh
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func mouseDown(with event: NSEvent) {
+        pressing = true
+        super.mouseDown(with: event)
+        pressing = false
+    }
+
+    private func refresh() {
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        layer?.cornerCurve = .continuous
+        // Solid accent with a white key: it has to be seen on a white field.
+        let accent = NSColor(Theme.accent)
+        let fill = pressing ? accent.blended(withFraction: 0.25, of: .black) : (hovering ? accent.blended(withFraction: 0.12, of: .white) : accent)
+        layer?.backgroundColor = (fill ?? accent).cgColor
+        contentTintColor = .white
+    }
+}
+
 /// Back / Forward in the bar: a click goes one page; holding the button (or
 /// a right-click) lists the pages that way, Safari's history menu.
-final class HistoryButton: NSButton {
+/// An AppKit icon button with the chrome's icon box (`ChromeIconBox`): a
+/// soft rounded fill under the pointer, brighter while pressed (the user:
+/// the same box on every button, the web bar's too).
+class ChromeBoxButton: NSButton {
+    // Back turning disabled under the pointer must drop its box at once.
+    override var isEnabled: Bool { didSet { refresh() } }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refresh()
+    }
+    private var hovering = false { didSet { refresh() } }
+    private var pressing = false { didSet { refresh() } }
+    private var area: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        let fresh = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                   owner: self, userInfo: nil)
+        addTrackingArea(fresh)
+        area = fresh
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func mouseDown(with event: NSEvent) {
+        pressing = true
+        super.mouseDown(with: event)
+        pressing = false
+    }
+
+    /// The history buttons track the press themselves and report it here.
+    override func highlight(_ flag: Bool) {
+        super.highlight(flag)
+        pressing = flag
+    }
+
+    private func refresh() {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.cornerCurve = .continuous
+        let alpha: CGFloat = !isEnabled ? 0 : (pressing ? 0.2 : (hovering ? 0.08 : 0))
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(alpha).cgColor
+        contentTintColor = pressing && isEnabled ? .white : (hovering && isEnabled ? NSColor(Theme.tabText) : NSColor(Theme.dimText))
+    }
+}
+
+final class HistoryButton: ChromeBoxButton {
     /// The menu for this direction (built when it is needed).
     var historyMenu: (() -> NSMenu?)?
 

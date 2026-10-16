@@ -18,6 +18,8 @@ import SwiftUI
 struct WorkspaceView: NSViewRepresentable {
     let workspace: WorkspaceState
     let selectedSession: UUID?
+    /// ContentView's leading pane inset (`PaneTreeView.leadingInset`).
+    var leadingInset: CGFloat = 0
 
     func makeNSView(context: Context) -> PaneTreeView {
         let view = PaneTreeView()
@@ -29,6 +31,7 @@ struct WorkspaceView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: PaneTreeView, context: Context) {
+        view.leadingInset = leadingInset
         view.apply(workspace, selected: selectedSession)
         // The keyboard belongs to the focused pane (see `focusFocusedPane`).
         DispatchQueue.main.async { view.focusFocusedPane() }
@@ -198,11 +201,22 @@ final class PaneTreeView: NSView {
         layoutPanes()
     }
 
-    /// The part of a change in this tab's width that reaches `session`'s pane
-    /// (a web page pinned for the sidebar slide, `SidebarSlide`).
-    func widthShare(ofSession session: UUID) -> CGFloat {
-        guard let state, state.zoomed == nil else { return 1 }
-        return state.layout.widthShare(of: session) ?? 1
+    /// The tree's padding from the detail column's left edge (ContentView's
+    /// pane inset) — where the tree starts when the left sidebar is closed.
+    var leadingInset: CGFloat = 0
+
+    /// `session`'s pane's left edge in WINDOW coordinates as it would be with
+    /// the left sidebar closed (the tree then starts at `leadingInset` and is
+    /// as much wider as the sidebar is wide now). nil = not in this tree.
+    func closedLeft(ofSession session: UUID) -> CGFloat? {
+        guard let state, window != nil else { return nil }
+        let left = convert(CGPoint.zero, to: nil).x
+        let grow = max(0, left - leadingInset)
+        if state.zoomed != nil { return leadingInset }
+        let rects = state.layout.rects(in: CGRect(x: 0, y: 0, width: bounds.width + grow, height: bounds.height),
+                                       divider: Self.dividerThickness)
+        guard let rect = rects[session] else { return nil }
+        return leadingInset + rect.minX.rounded()
     }
 
     private func layoutPanes() {

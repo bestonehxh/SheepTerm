@@ -622,6 +622,23 @@ public nonisolated enum WebLoginKey {
         abs(magnification - 1) < 0.001
     }
 
+    /// The page just changed size (the sidebar or the AI panel came or went,
+    /// a pane or window resize — width OR height): its login field moves only once the page has laid
+    /// itself out again and reported the new box, so the key hides now and is
+    /// placed again `settle` s after the width stopped changing — never left
+    /// behind at the old place (the user: the key lagged behind).
+    public struct KeyResizeGate: Sendable {
+        public static let settle: Double = 0.25
+        public private(set) var width: Double = 0
+        public private(set) var height: Double = 0
+        public init() {}
+        /// true = place the key now; false = the size changed: hide it and look again later.
+        public mutating func mayPlace(width: Double, height: Double) -> Bool {
+            defer { self.width = width; self.height = height }
+            return self.width == 0 || (abs(width - self.width) < 0.5 && abs(height - self.height) < 0.5)
+        }
+    }
+
     /// After a smart zoom the key is looked at again at these delays (s):
     /// the zoom lands after a round trip to the page plus its animation, and
     /// a busy page can take longer than any single guess.
@@ -676,6 +693,7 @@ public nonisolated enum WebLoginKey {
     /// tab's coordinates. `field` is the input's box in CSS pixels from the
     /// page's top-left; `zoom` = page zoom × magnification; `web` = the web
     /// view's frame in the tab (top-left origin).
+    /// The key button (its size kept; 5.0 (27) made it a solid accent pill so it is noticed).
     public static let keySize: Double = 18
     public static func keyFrame(field: (x: Double, y: Double, w: Double, h: Double), zoom: Double,
                                 web: (x: Double, y: Double, w: Double, h: Double)) -> (x: Double, y: Double, w: Double, h: Double)? {

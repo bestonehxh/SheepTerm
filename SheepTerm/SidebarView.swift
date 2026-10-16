@@ -446,13 +446,14 @@ struct SidebarView: View {
                 // An image (template) because a Menu label shows only text
                 // and images — shapes in it are dropped.
                 Image(nsImage: Self.menuGlyph)
-                    .frame(width: 26, height: 22)
+                    // The whole box opens the menu (a borderless Menu's control is its label).
+                    .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .foregroundStyle(.secondary)
+            .modifier(ChromeIconBox())
             .accessibilityLabel("Groups and Hosts")
         }
         .padding(.horizontal, 12)
