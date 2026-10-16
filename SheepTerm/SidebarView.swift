@@ -275,6 +275,7 @@ struct SidebarView: View {
             },
             onShareGroup: { model.showShareLink(groupID: $0.id) },
             onAddHosts: { model.showAddHosts(groupID: $0.id) },
+            onAddHost: { model.openAddHost(inGroup: $0) },
             onSetGroupCredential: { model.showGroupCredential(groupID: $0.id) },
             onDeleteGroups: { ids in
                 // The multi-group menu asked once, for all of them.

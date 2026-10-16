@@ -551,6 +551,217 @@ public nonisolated enum WebTrust {
 }
 
 /// Fill Login (button only, never automatic, never submits).
+/// The key in a login field (5.0 (23), Safari's): what its menu lists, and
+/// when a login the user typed is offered for saving. Pure — the page side is
+/// `WebLoginKey.script`, run in the app's own content world.
+public nonisolated enum WebLoginKey {
+    /// One saved login as the menu shows it (no password — that is read only
+    /// when the item is picked).
+    public struct Login: Equatable, Sendable {
+        public let id: UUID
+        public let name: String
+        public let username: String
+        public init(id: UUID, name: String, username: String) {
+            self.id = id; self.name = name; self.username = username
+        }
+        /// "admin — Lab FortiGate"; the name alone when there is no user.
+        public var title: String { username.isEmpty ? name : "\(username) — \(name)" }
+    }
+
+    /// The menu: this host's own login first (filled only on its own
+    /// address), then every other saved login by name (the user picks it,
+    /// so it may go into any page).
+    public static func menu(hostCredential: UUID?, all: [Login]) -> (host: Login?, others: [Login]) {
+        let host = all.first { $0.id == hostCredential }
+        let others = all.filter { $0.id != hostCredential }
+            .sorted { ($0.name.localizedLowercase, $0.username) < ($1.name.localizedLowercase, $1.username) }
+        return (host, others)
+    }
+
+    /// A link to `a` from the page at `b` stays in the same document: `a`
+    /// has a #fragment and the two are equal once it is cut off (a link to
+    /// "#" or "#top"). The same address WITHOUT a fragment is a new load —
+    /// WebKit's own rule.
+    public static func sameDocument(_ a: String?, _ b: String?) -> Bool {
+        guard let a, let b, a.contains("#") else { return false }
+        func cut(_ s: String) -> String { s.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? s }
+        return cut(a) == cut(b)
+    }
+
+    /// The key shows only when there is something to pick.
+    public static func showsKey(savedLogins: Int) -> Bool { savedLogins > 0 }
+
+    public enum Offer: Equatable, Sendable {
+        /// Nothing to ask.
+        case none
+        /// "Save login for <host>?" — a new credential.
+        case save
+        /// "Update password?" — this credential (same user, other password).
+        case update(UUID)
+    }
+
+    /// After a login the user TYPED went through (the page then has no
+    /// password field any more): what to offer. `hostLogin` = the saved
+    /// host's credential (its user and current password, nil = not readable
+    /// without a Keychain prompt), nil when the tab has none; `alreadySaved`
+    /// = some credential already holds exactly this user + password;
+    /// `declined` = Not Now was answered for this origin in this tab.
+    public static func offer(username: String, password: String,
+                             hostLogin: (id: UUID, username: String, password: String?)?,
+                             alreadySaved: Bool = false, declined: Bool) -> Offer {
+        guard !password.isEmpty, !declined, !alreadySaved else { return .none }
+        if let hostLogin, hostLogin.username == username {
+            // Not readable now: never offer to overwrite what we cannot compare.
+            guard let saved = hostLogin.password else { return .none }
+            return saved == password ? .none : .update(hostLogin.id)
+        }
+        return .save
+    }
+
+    /// The login went through when the page — after the submit settled — no
+    /// longer shows a password field.
+    public static func loggedIn(passwordFieldVisible: Bool) -> Bool { !passwordFieldVisible }
+
+    /// Where the key sits: inside the field's right edge, centred, in the
+    /// tab's coordinates. `field` is the input's box in CSS pixels from the
+    /// page's top-left; `zoom` = page zoom × magnification; `web` = the web
+    /// view's frame in the tab (top-left origin).
+    public static let keySize: Double = 18
+    public static func keyFrame(field: (x: Double, y: Double, w: Double, h: Double), zoom: Double,
+                                web: (x: Double, y: Double, w: Double, h: Double)) -> (x: Double, y: Double, w: Double, h: Double)? {
+        guard field.w > 0, field.h > 0, zoom > 0 else { return nil }
+        let left = web.x + field.x * zoom, top = web.y + field.y * zoom
+        let width = field.w * zoom, height = field.h * zoom
+        guard width >= keySize + 8 else { return nil }
+        let x = left + width - keySize - 4
+        let y = top + (height - keySize) / 2
+        // Off the visible page (scrolled away, under the bar): no key.
+        guard y >= web.y, y + keySize <= web.y + web.h, x >= web.x, x + keySize <= web.x + web.w else { return nil }
+        return (x, y, keySize, keySize)
+    }
+
+    /// Runs in the app's own `WKContentWorld` (the page cannot see it or call
+    /// the handler): reports the field the key belongs in — the login form's
+    /// user field, else its password field (Safari's place) — as `fields`
+    /// (one box, an empty list when there is no login form), again whenever
+    /// it moves or the page changes; and, when a form with a filled password is sent,
+    /// what was typed (`submit`). Defines `__sheepLoginCheck()` = a visible
+    /// password field is on the page now.
+    public static let script = """
+    (() => {
+      if (window.__sheepLogin) return;
+      window.__sheepLogin = true;
+      const post = (m) => { try { window.webkit.messageHandlers.sheepLogin.postMessage(m); } catch (e) {} };
+      // Visible = laid out, not hidden, not transparent, and not parked off
+      // the page (the "left:-9999px" autofill bait many login pages carry).
+      const visible = (el) => {
+        if (!el || el.disabled || el.readOnly) return false;
+        const r = el.getBoundingClientRect(), s = window.getComputedStyle(el);
+        if (r.width <= 0 || r.height <= 0 || s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
+        return r.right + window.scrollX > 0 && r.bottom + window.scrollY > 0;
+      };
+      const userType = (el) => ['text', 'email', 'tel', ''].includes((el.getAttribute('type') || '').toLowerCase());
+      // The user's own events only. The harness cannot make trusted events,
+      // so it sets __sheepLoginTestTrust — a global of THIS world, which the
+      // page cannot reach.
+      const trusted = (e) => e.isTrusted || window.__sheepLoginTestTrust === true;
+      // Password fields — including one the page's "show password" eye has
+      // turned into type=text for a moment: it is still the login's field.
+      const seenPassword = new Set();
+      const passwordFields = () => {
+        for (const el of document.querySelectorAll('input[type=password]')) seenPassword.add(el);
+        for (const el of Array.from(seenPassword)) if (!el.isConnected) seenPassword.delete(el);
+        return Array.from(document.querySelectorAll('input')).filter((el) => seenPassword.has(el) && visible(el));
+      };
+      const pageHasPassword = () => passwordFields().length > 0;
+      // The login form: the first visible password field, and the last
+      // visible user field before it that belongs with it (same form, or —
+      // no form — any before it): never a search box elsewhere on the page.
+      const loginFields = () => {
+        const pw = passwordFields()[0];
+        if (!pw) return [];
+        let user = null;
+        for (const el of Array.from(document.querySelectorAll('input'))) {
+          if (el === pw) break;
+          if (userType(el) && visible(el) && (pw.form ? el.form === pw.form : !el.form)) user = el;
+        }
+        return user ? [user, pw] : [pw];
+      };
+      // The key goes where Safari puts it: the user field, else the
+      // password field when the form has no user field.
+      let last = '', timer = 0;
+      const report = () => {
+        timer = 0;
+        const field = loginFields()[0];
+        const boxes = field ? [field].map((el) => { const r = el.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; }) : [];
+        const key = JSON.stringify(boxes);
+        if (key === last) return;
+        last = key;
+        post({k: 'fields', boxes: boxes});
+      };
+      // A short timer, not requestAnimationFrame: rAF stops in a page that
+      // is not on screen, and the key must be right when it comes back.
+      const again = () => { if (!timer) timer = setTimeout(report, 50); };
+      window.addEventListener('scroll', again, true);
+      window.addEventListener('resize', again);
+      document.addEventListener('focusin', again, true);
+      // Back/forward cache: the scripts do not run again, the page does.
+      window.addEventListener('pageshow', () => { last = ''; again(); });
+      new MutationObserver(again).observe(document.documentElement, {childList: true, subtree: true, attributes: true});
+      window.__sheepLoginReport = () => { last = ''; report(); };
+      report();
+      // What the USER typed, per password field (trusted input only): a
+      // value the page set itself — or our own fill — is never "typed".
+      const typed = new WeakMap();
+      document.addEventListener('input', (e) => {
+        if (!trusted(e) || !(e.target instanceof HTMLInputElement)) return;
+        if (e.target.type === 'password') seenPassword.add(e.target);
+        if (seenPassword.has(e.target)) typed.set(e.target, e.target.value);
+      }, true);
+      let sent = null;
+      const capture = () => {
+        const fields = loginFields();
+        const pw = fields[fields.length - 1];
+        if (!pw || !pw.value || typed.get(pw) !== pw.value) return;
+        // The user field — or, on a two-step login, the read-only one that
+        // shows the user chosen on the step before.
+        let user = fields.length > 1 ? fields[0].value : '';
+        if (!user) {
+          for (const el of Array.from(document.querySelectorAll('input'))) {
+            if (el === pw) break;
+            if (userType(el) && el.readOnly && el.value && (pw.form ? el.form === pw.form : !el.form)) user = el.value;
+          }
+        }
+        // A click on Submit and the form's own submit event are one login.
+        if (sent && sent.user === user && sent.pass === pw.value && Date.now() - sent.at < 1000) return;
+        sent = {user: user, pass: pw.value, at: Date.now()};
+        post({k: 'submit', user: user, pass: pw.value});
+      };
+      // Only the user's own actions, and only on THIS login form.
+      document.addEventListener('submit', (e) => {
+        const pw = loginFields().slice(-1)[0];
+        if (trusted(e) && pw && e.target === pw.form) capture();
+      }, true);
+      document.addEventListener('keydown', (e) => {
+        if (trusted(e) && e.key === 'Enter' && loginFields().includes(e.target)) capture();
+      }, true);
+      document.addEventListener('click', (e) => {
+        if (!trusted(e) || !e.target || !e.target.closest) return;
+        const b = e.target.closest('button, input[type=submit], input[type=image], [role=button]');
+        const pw = loginFields().slice(-1)[0];
+        if (!b || !pw) return;
+        // Any button of this login form (an AJAX login is often type=button);
+        // formless: a button after the password field. A "show password" eye
+        // may post too — harmless: the field it reveals still counts as the
+        // login form, so nothing is offered unless the form really goes.
+        const ofForm = pw.form ? (b.form === pw.form || pw.form.contains(b)) : (pw.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (ofForm) capture();
+      }, true);
+      window.__sheepLoginCheck = () => pageHasPassword();
+    })();
+    """
+}
+
 public nonisolated enum WebFillLogin {
     /// Run with `callAsyncJavaScript(_:arguments:in:contentWorld:)`; the
     /// values arrive as the JSON-encoded arguments `user` and `pass`, never

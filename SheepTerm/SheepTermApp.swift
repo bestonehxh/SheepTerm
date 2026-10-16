@@ -77,6 +77,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if env["SHEEPTERM_DEBUG_SIDEBAR"] == "1" || (env["SHEEPTERM_DEBUG_SHEET"] ?? "").hasPrefix("edithost:") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.sidebarShown = true }
         }
+        // SHEEPTERM_DEBUG_TOGGLE_SIDEBAR=n: the sidebar toggled every n seconds (frame captures of the toggle).
+        if let every = env["SHEEPTERM_DEBUG_TOGGLE_SIDEBAR"].flatMap(Double.init), every > 0 {
+            Timer.scheduledTimer(withTimeInterval: every, repeats: true) { _ in
+                MainActor.assumeIsolated { AppModel.shared.toggleSidebar() }
+            }
+        }
         if let urls = env["SHEEPTERM_DEBUG_OPEN_URLS"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 for text in urls.split(separator: " ") {

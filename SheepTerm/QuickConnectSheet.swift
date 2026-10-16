@@ -10,6 +10,8 @@ struct QuickConnectSheet: View {
     var addOnly = false
     /// Add Host…: the SSH | Web switch (`AddHostSheet`); nil elsewhere.
     var kindSwitch: Binding<ConnectionKind>? = nil
+    /// A group's context menu → Add Host…: the group the form starts in.
+    var initialGroup: String? = nil
 
     @EnvironmentObject var model: AppModel
     /// Observed explicitly: `credentials` is @Published on CredentialStore,
@@ -221,6 +223,7 @@ struct QuickConnectSheet: View {
             }
         }
         .onAppear {
+            if let initialGroup, groupNames.contains(initialGroup) { groupSelection = initialGroup }
             guard kind == .ssh else {
                 // The serial form has no text field at all, so there is
                 // nothing here to force a layout for — taking the user's

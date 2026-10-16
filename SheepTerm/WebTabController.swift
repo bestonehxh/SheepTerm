@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CryptoKit
 import SwiftUI
 import WebKit
@@ -10,7 +11,10 @@ import WebKit
 ///
 /// - Cookies/sessions persist in `WKWebsiteDataStore.default()` (View →
 ///   Clear Website Data… empties it).
-/// - No `WKScriptMessageHandler`: pages can call nothing in the app.
+/// - One `WKScriptMessageHandler` (`sheepLogin`), and only in the app's own
+///   content world (`loginWorld`): the page's scripts can neither see nor
+///   call it. It carries the login field's box (the key) and what the user
+///   typed into a login form (Save login) — never anything to run.
 /// - Never a session log, never highlight/snippets/broadcast/history.
 @MainActor
 final class WebTabController: NSObject {
@@ -52,6 +56,33 @@ final class WebTabController: NSObject {
     private var card: ConnectionCardView?
     private var overlay: ConnectionOverlayView?
 
+    // MARK: login key + Save login (5.0 (23))
+
+    /// The app's own JavaScript world: `WebLoginKey.script` and its handler
+    /// live here, out of the page's reach.
+    static let loginWorld = WKContentWorld.world(name: "SheepTermLogin")
+    private let loginProxy = WebLoginMessageProxy()
+    /// A login form the user sent, until the page says whether it went
+    /// through. The password lives only here (memory) and in the question.
+    private var pendingLogin: (origin: String, username: String, password: String)?
+    private var loginCheckGeneration = 0
+    /// Not Now was answered for these origins in this tab.
+    private var declinedSaveOrigins = Set<String>()
+    /// The login last put in from the key's menu, as a hash (equality is all
+    /// it is for — no second plaintext copy): sending exactly that is not a
+    /// new login to offer.
+    private var filledFromKey: SHA256.Digest?
+    /// The key's field as the page last reported it (CSS px): re-placed on
+    /// every layout of the tab and whenever the saved logins change.
+    private var keyBoxes: [(x: Double, y: Double, w: Double, h: Double)] = []
+    private var credentialsWatch: AnyCancellable?
+    /// When the pending login was sent: it is given up after a minute.
+    private var pendingSince = Date.distantPast
+
+    private static func digest(_ username: String, _ password: String) -> SHA256.Digest {
+        SHA256.hash(data: Data((username + "\u{0}" + password).utf8))
+    }
+
     /// The URL the page is on (or the saved one before anything loaded).
     var currentURL: String { webView.url?.absoluteString ?? host.address }
 
@@ -68,6 +99,10 @@ final class WebTabController: NSObject {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: WebLoginKey.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true,
+                         in: Self.loginWorld))
+        configuration.userContentController.add(loginProxy, contentWorld: Self.loginWorld, name: "sheepLogin")
         webView = SheepWebView(frame: CGRect(x: 0, y: 0, width: 800, height: 480), configuration: configuration)
         view = WebTabView(webView: webView)
         super.init()
@@ -77,6 +112,12 @@ final class WebTabController: NSObject {
         webView.onFocus = { [weak self] in self?.onFocus?() }
         webView.isHidden = host.address.isEmpty
         view.bar.controller = self
+        loginProxy.controller = self
+        view.onKey = { [weak self] button in self?.showLoginMenu(from: button) }
+        view.onLayout = { [weak self] in self?.placeKeys() }
+        credentialsWatch = AppModel.shared.credentialStore.$credentials
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.placeKeys() } }
         observations = [
             webView.observe(\.title) { [weak self] _, _ in MainActor.assumeIsolated { self?.titleChanged() } },
             webView.observe(\.url) { [weak self] _, _ in MainActor.assumeIsolated { self?.urlChanged() } },
@@ -121,6 +162,14 @@ final class WebTabController: NSObject {
         cardWaiters.removeAll()
         observations.removeAll()
         webView.stopLoading()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "sheepLogin", contentWorld: Self.loginWorld)
+        loginProxy.controller = nil
+        pendingLogin = nil
+        filledFromKey = nil
+        keyBoxes = []
+        credentialsWatch = nil
+        view.showKeys(at: [])
+        view.bar.hidePrompt()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         view.bar.controller = nil
@@ -177,6 +226,8 @@ final class WebTabController: NSObject {
         case .url(let url), .search(let url): target = url
         }
         guard let url = URL(string: target) else { return }
+        // The user goes somewhere else: a login sent before is not this page's.
+        pendingLogin = nil
         // An unsaved tab follows what is typed (`Host.adoptingTypedURL`):
         // its recent, title and any Trust & Connect are about this site.
         if savedHost == nil {
@@ -210,44 +261,118 @@ final class WebTabController: NSObject {
     /// NOW, else this tab's own (unsaved) host.
     private var liveHost: Host { savedHost ?? host }
 
-    /// The login this host saved: the credential's user wins over the host's
-    /// own field (the SSH rule), the password comes from the Keychain vault.
-    private var savedLogin: (username: String, credential: Credential?) {
-        let live = liveHost
-        let credential = live.credentialID.flatMap { AppModel.shared.credentialStore.credential(for: $0) }
-        if let credential, !credential.username.isEmpty { return (credential.username, credential) }
-        return (live.username, credential)
+    // MARK: - login key (5.0 (23))
+
+    /// From `WebLoginKey.script` (main frame, the app's world only).
+    func loginMessage(_ message: WKScriptMessage) {
+        guard !closed, message.frameInfo.isMainFrame, let body = message.body as? [String: Any],
+              let kind = body["k"] as? String else { return }
+        switch kind {
+        case "fields":
+            // The key's field (one box, or none): placed now and again on
+            // every layout (`placeKeys`).
+            let boxes = (body["boxes"] as? [[String: Any]]) ?? []
+            keyBoxes = boxes.compactMap { box in
+                guard let x = box["x"] as? Double, let y = box["y"] as? Double,
+                      let w = box["w"] as? Double, let h = box["h"] as? Double else { return nil }
+                return (x, y, w, h)
+            }
+            placeKeys()
+        case "submit":
+            guard let password = body["pass"] as? String, !password.isEmpty,
+                  let origin = committedURL, WebAddress.sameOrigin(origin, webView.url?.absoluteString ?? "") else { return }
+            pendingLogin = (origin, body["user"] as? String ?? "", password)
+            pendingSince = Date()
+            loginCheckGeneration &+= 1
+            let generation = loginCheckGeneration
+            // A full page load is checked at didFinish too; a single-page app
+            // (Aruba CX) never navigates, so look again a moment later.
+            // 8 s for the last look: a busy device's login check is slow.
+            for (delay, last) in [(1.5, false), (4.0, false), (8.0, true)] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.checkLogin(generation: generation, last: last)
+                }
+            }
+        default:
+            break
+        }
     }
 
-    var canFillLogin: Bool {
-        let login = savedLogin
-        return !login.username.isEmpty || login.credential != nil
+    /// The key over its field, from the last box the page reported and the
+    /// web view's frame NOW (a pane resize moves the page without moving the
+    /// field's CSS box); none without saved logins.
+    private func placeKeys() {
+        guard !closed, WebLoginKey.showsKey(savedLogins: AppModel.shared.credentialStore.credentials.count) else {
+            view.showKeys(at: [])
+            return
+        }
+        let zoom = Double(webView.pageZoom * webView.magnification)
+        let web = webView.frame
+        view.showKeys(at: keyBoxes.compactMap { box in
+            WebLoginKey.keyFrame(field: box, zoom: zoom, web: (web.minX, web.minY, web.width, web.height))
+                .map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }
+        })
     }
 
-    /// Button only. Checks the page's origin against the saved URL first,
-    /// then fills the first visible password field (and the user field before
-    /// it) with the values passed as arguments — never spliced into script,
-    /// never submitted.
-    func fillLogin() {
-        let login = savedLogin
-        let savedURL = liveHost.address
-        let password = login.credential.flatMap { AppModel.shared.credentialStore.password(for: $0) } ?? ""
-        if let refusal = WebFillLogin.check(pageURL: webView.url?.absoluteString, savedURL: savedURL,
-                                            username: login.username, hasPassword: !password.isEmpty,
-                                            provisional: WebFillLogin.isProvisional(currentURL: webView.url?.absoluteString,
-                                                                                    committedURL: committedURL)) {
+    /// The key's menu: this host's login first; every other one behind
+    /// "Other Logins" — a slip of the mouse cannot put a lab password into
+    /// some other page.
+    private func showLoginMenu(from button: NSView) {
+        let store = AppModel.shared.credentialStore
+        let all = store.credentials.map { WebLoginKey.Login(id: $0.id, name: $0.name, username: $0.username) }
+        let (own, others) = WebLoginKey.menu(hostCredential: liveHost.credentialID, all: all)
+        let menu = NSMenu()
+        if let own {
+            let item = NSMenuItem(title: own.title, action: #selector(pickLogin(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = own.id
+            menu.addItem(item)
+        }
+        if !others.isEmpty {
+            let sub = NSMenu()
+            for login in others {
+                let item = NSMenuItem(title: login.title, action: #selector(pickLogin(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = login.id
+                sub.addItem(item)
+            }
+            let holder = NSMenuItem(title: "Other Logins", action: nil, keyEquivalent: "")
+            holder.submenu = sub
+            menu.addItem(holder)
+        }
+        guard !menu.items.isEmpty else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 2), in: button)
+    }
+
+    @objc private func pickLogin(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID,
+              let credential = AppModel.shared.credentialStore.credential(for: id) else { return }
+        fill(credential, ownLogin: id == liveHost.credentialID)
+    }
+
+    /// Puts `credential` into the page — never submitted. The host's own
+    /// login only on the host's own address; another one (picked by the
+    /// user) into the page on screen, never into a page still being replaced.
+    private func fill(_ credential: Credential, ownLogin: Bool) {
+        let password = AppModel.shared.credentialStore.password(for: credential) ?? ""
+        let pageURL = webView.url?.absoluteString
+        let target = ownLogin ? liveHost.address : (committedURL ?? "")
+        if let refusal = WebFillLogin.check(pageURL: pageURL, savedURL: target, username: credential.username,
+                                            hasPassword: !password.isEmpty,
+                                            provisional: WebFillLogin.isProvisional(currentURL: pageURL, committedURL: committedURL)) {
             view.bar.notice(refusal.message)
             NSSound.beep()
             return
         }
         // The document itself is checked too (`expected`): `webView.url` can
         // name a page that is not the one on screen yet.
-        guard let expected = WebFillLogin.expectedOrigin(savedURL: savedURL) else {
+        guard let expected = WebFillLogin.expectedOrigin(savedURL: target) else {
             view.bar.notice(WebFillLogin.Refusal.otherOrigin.message)
             return
         }
+        filledFromKey = Self.digest(credential.username, password)
         webView.callAsyncJavaScript(WebFillLogin.script,
-                                    arguments: ["user": login.username, "pass": password, "expected": expected],
+                                    arguments: ["user": credential.username, "pass": password, "expected": expected],
                                     in: nil, in: .defaultClient) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -260,6 +385,81 @@ final class WebTabController: NSObject {
                 self.view.bar.notice("No login form on this page")
             case .failure:
                 self.view.bar.notice("Could not fill this page")
+            }
+        }
+    }
+
+    /// After a login form was sent: no password field on the page any more =
+    /// it went through → offer to save it. Still one, on a page that has
+    /// finished loading, at the last look = it did not. A slow device UI
+    /// still loading at the last look is left to didFinish; after a minute
+    /// the login is given up whatever happens.
+    private func checkLogin(generation: Int, last: Bool) {
+        guard !closed, generation == loginCheckGeneration, pendingLogin != nil else { return }
+        if Date().timeIntervalSince(pendingSince) > 60 { pendingLogin = nil; return }
+        webView.callAsyncJavaScript("return window.__sheepLoginCheck ? window.__sheepLoginCheck() : null",
+                                    arguments: [:], in: nil, in: Self.loginWorld) { [weak self] result in
+            guard let self, generation == self.loginCheckGeneration, let pending = self.pendingLogin else { return }
+            if case .success(let value as Bool) = result, WebLoginKey.loggedIn(passwordFieldVisible: value) {
+                self.pendingLogin = nil
+                self.offerSave(pending)
+            } else if last, !self.webView.isLoading {
+                // Still the login form — or no answer at all (the script is
+                // gone: a download, a non-HTML page): it did not go through.
+                self.pendingLogin = nil
+            }
+        }
+    }
+
+    private func offerSave(_ login: (origin: String, username: String, password: String)) {
+        let typed = Self.digest(login.username, login.password)
+        defer { filledFromKey = nil }
+        if filledFromKey == typed { return }
+        let store = AppModel.shared.credentialStore
+        let saved = savedHost.flatMap { WebAddress.sameOrigin($0.address, login.origin) ? $0 : nil }
+        let hostCredential = saved?.credentialID.flatMap { store.credential(for: $0) }
+        let originKey = WebAddress.origin(of: login.origin).map { "\($0.scheme)://\($0.host):\($0.port)" } ?? login.origin
+        // Compared without a Keychain prompt: a hand-typed login must not be
+        // what makes the vault ask for access.
+        // Already saved = some credential holds this user and password — or
+        // holds this user with a password not readable without a prompt
+        // (right after an update): never risk a duplicate on a guess.
+        let alreadySaved = store.credentials.contains {
+            guard $0.username == login.username else { return false }
+            guard let saved = Keychain.passwordWithoutPrompt(for: $0.id) else { return true }
+            return saved == login.password
+        }
+        let offer = WebLoginKey.offer(username: login.username, password: login.password,
+                                      hostLogin: hostCredential.map { ($0.id, $0.username, Keychain.passwordWithoutPrompt(for: $0.id)) },
+                                      alreadySaved: alreadySaved,
+                                      declined: declinedSaveOrigins.contains(originKey))
+        let place = saved?.name ?? WebAddress.displayHost(of: login.origin)
+        switch offer {
+        case .none:
+            return
+        case .save:
+            view.bar.ask("Save login for \(place)?", action: "Save") { [weak self] yes in
+                guard let self else { return }
+                guard yes else { self.declinedSaveOrigins.insert(originKey); return }
+                let credential = store.add(name: place, username: login.username, password: login.password)
+                // A saved host with no login of its own gets this one.
+                if var host = self.savedHost, WebAddress.sameOrigin(host.address, login.origin),
+                   store.credential(for: host.credentialID) == nil {
+                    host.credentialID = credential.id
+                    AppModel.shared.store.updateHost(host)
+                }
+                self.view.bar.notice("Login saved")
+            }
+        case .update(let id):
+            view.bar.ask("Update the password for \(login.username)?", action: "Update") { [weak self] yes in
+                guard let self else { return }
+                guard yes else { self.declinedSaveOrigins.insert(originKey); return }
+                if Keychain.setPassword(login.password, for: id) {
+                    self.view.bar.notice("Password updated")
+                } else {
+                    self.view.bar.notice("The password could not be saved")
+                    NSSound.beep()
+                }
             }
         }
     }
@@ -473,9 +673,20 @@ extension WebTabController: WKNavigationDelegate {
         // Subframes: also about:, blob:, data: — nothing that hands off to
         // another app or reads local files (`WebFramePolicy`).
         let isMain = navigationAction.targetFrame?.isMainFrame ?? true
+        // A link clicked, Back/Forward or Reload is not where a login lands
+        // (a form post, or the page's own script, is): a login sent before
+        // and not settled is dropped — never offered on the next page.
         guard WebFramePolicy.allows(navigationAction.request.url, mainFrame: isMain) else {
             if isMain { view.bar.notice("Only http:// and https:// open in a web tab") }
             return (.cancel, preferences)
+        }
+        // A link to a fragment of the same page (a Bootstrap `<a href="#"
+        // role="button">` login) is not leaving it.
+        if isMain, pendingLogin != nil,
+           [.backForward, .reload].contains(navigationAction.navigationType)
+            || (navigationAction.navigationType == .linkActivated
+                && !WebLoginKey.sameDocument(navigationAction.request.url?.absoluteString, webView.url?.absoluteString)) {
+            pendingLogin = nil
         }
         if isMain { mainTargetURL = navigationAction.request.url?.absoluteString }
         return (.allow, preferences)
@@ -505,6 +716,8 @@ extension WebTabController: WKNavigationDelegate {
         // A new main-frame navigation: a refused certificate may be asked about again.
         refusals.newNavigation()
         blockedThisNavigation = 0
+        keyBoxes = []
+        view.showKeys(at: [])
         onStatus?("loading \(WebAddress.displayHost(of: currentURL))…")
     }
 
@@ -521,6 +734,24 @@ extension WebTabController: WKNavigationDelegate {
             didFirstLoad = true
             onFirstLoad?()
         }
+        // A login form sent a moment ago and a new page is in: did it go through?
+        if pendingLogin != nil {
+            let generation = loginCheckGeneration
+            checkLogin(generation: generation, last: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.checkLogin(generation: generation, last: true)
+            }
+        }
+#if DEBUG
+        // Screenshot runs only: SHEEPTERM_DEBUG_LOGIN_KEY=focus puts the caret
+        // in the page's password field (the key appears); =save also raises
+        // Save login's question for a sample login.
+        if let mode = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_LOGIN_KEY"] {
+            webView.window?.makeFirstResponder(webView)
+            webView.evaluateJavaScript("document.querySelector('input[type=password]')?.focus()")
+            if mode == "save" { offerSave((committedURL ?? currentURL, "admin", "demo-only")) }
+        }
+#endif
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
@@ -535,6 +766,12 @@ extension WebTabController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         report(error)
+        // The login's own navigation failed (unreachable, certificate
+        // refused): it did not go through.
+        if !webView.isLoading { pendingLogin = nil }
+        // The page on screen stayed: its key comes back.
+        webView.callAsyncJavaScript("window.__sheepLoginReport && window.__sheepLoginReport()", arguments: [:],
+                                    in: nil, in: Self.loginWorld) { _ in }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -685,16 +922,61 @@ final class SheepWebView: WKWebView {
     }
 }
 
-/// The tab's view: the bar on top, the page under it.
+/// The tab's view: the bar on top, the page under it, and the login key
+/// over a focused login field (5.0 (23) — an app view, so the page can
+/// neither see nor restyle it).
 final class WebTabView: NSView {
     let bar = WebBarView()
     let webView: WKWebView
+    /// The key was clicked (the controller shows the login menu at it).
+    var onKey: ((NSView) -> Void)?
+    /// Every layout (a pane resize moves the page under a key).
+    var onLayout: (() -> Void)?
+    /// One key per login field on screen (user, password) — created as needed.
+    private var keyButtons: [NSButton] = []
+
+    private func makeKey() -> NSButton {
+        let image = NSImage(systemSymbolName: "key.fill", accessibilityDescription: "Saved logins")?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        let button = NSButton(image: image ?? NSImage(), target: self, action: #selector(keyClicked(_:)))
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.refusesFirstResponder = true
+        button.contentTintColor = NSColor(Theme.accent)
+        button.toolTip = "Saved logins"
+        addSubview(button)
+        return button
+    }
+
+    /// A key at each frame; the rest hidden (an empty list hides them all).
+    func showKeys(at frames: [CGRect]) {
+        while keyButtons.count < frames.count { keyButtons.append(makeKey()) }
+        for (index, button) in keyButtons.enumerated() {
+            if index < frames.count {
+                button.frame = frames[index]
+                button.isHidden = false
+            } else {
+                button.isHidden = true
+            }
+        }
+    }
+
+    @objc private func keyClicked(_ sender: NSButton) { onKey?(sender) }
 
     init(webView: WKWebView) {
         self.webView = webView
         super.init(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
         wantsLayer = true
         layer?.backgroundColor = NSColor(Theme.chrome).cgColor
+        // Nothing of the page draws outside the tab. WebKit paints a resize
+        // a frame or two late: when the sidebar opens, the page moves right
+        // and narrows at once, and for those frames the OLD, wider picture
+        // sat at the new origin — its right edge spilled past the tab and
+        // jumped back (the user: "ขอบเว็บทางขวากระตุก"). Clipped, the late
+        // frames are cut at the tab's edge instead. (macOS 14+ views no
+        // longer clip by default.)
+        clipsToBounds = true
+        layer?.masksToBounds = true
         addSubview(webView)
         addSubview(bar)
     }
@@ -709,6 +991,7 @@ final class WebTabView: NSView {
         webView.frame = CGRect(x: 0, y: WebBarView.height, width: bounds.width,
                                height: max(0, bounds.height - WebBarView.height))
         for case let overlay as ConnectionOverlayView in subviews { overlay.frame = bounds }
+        onLayout?()
     }
 }
 
@@ -723,7 +1006,6 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     private let back = WebBarView.button("chevron.left", "Back (⌘[)")
     private let forward = WebBarView.button("chevron.right", "Forward (⌘])")
     private let reload = WebBarView.button("arrow.clockwise", "Reload (⌘R)")
-    private let fill = WebBarView.button("key", "Fill Login — the saved username and password, into this page (never submitted)")
     private let external = WebBarView.button("arrow.up.right.square", "Open in Default Browser")
     private let urlField = NSTextField()
     /// The URL field (an empty tab's keyboard target).
@@ -731,6 +1013,15 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     private let findField = NSSearchField()
     private let noticeLabel = NSTextField(labelWithString: "")
     private var noticeGeneration = 0
+    /// Save login's question (5.0 (23)): a line and two small buttons in
+    /// the URL field's right end, in place of a notice — never a dialog.
+    private let promptLabel = NSTextField(labelWithString: "")
+    private let promptYes = NSButton(title: "Save", target: nil, action: nil)
+    private let promptNo = NSButton(title: "Not Now", target: nil, action: nil)
+    private var promptAnswer: ((Bool) -> Void)?
+    private var promptGeneration = 0
+    private var promptShown: Bool { !promptLabel.isHidden }
+    private var queuedNotice: String?
     private var findShown = false
 
     override init(frame frameRect: NSRect) {
@@ -738,7 +1029,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         wantsLayer = true
         layer?.backgroundColor = NSColor(Theme.chrome).cgColor
         for (button, action) in [(back, #selector(goBack)), (forward, #selector(goForward)), (reload, #selector(reloadOrStop)),
-                                 (fill, #selector(fillLogin)), (external, #selector(openExternal))] {
+                                 (external, #selector(openExternal))] {
             button.target = self
             button.action = action
             addSubview(button)
@@ -777,6 +1068,21 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         noticeLabel.lineBreakMode = .byTruncatingTail
         noticeLabel.isHidden = true
         addSubview(noticeLabel)
+        promptLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        promptLabel.textColor = NSColor(Theme.tabText)
+        promptLabel.lineBreakMode = .byTruncatingTail
+        for (button, action) in [(promptYes, #selector(promptSaid(_:))), (promptNo, #selector(promptSaid(_:)))] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 11)
+            button.refusesFirstResponder = true
+            button.target = self
+            button.action = action
+            button.isHidden = true
+            addSubview(button)
+        }
+        promptLabel.isHidden = true
+        addSubview(promptLabel)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -808,7 +1114,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
             x += size + 2
         }
         var right = bounds.width - 8
-        for button in [external, fill] {
+        for button in [external] {
             right -= size
             button.frame = CGRect(x: right, y: (h - size) / 2, width: size, height: size)
             right -= 2
@@ -824,6 +1130,24 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         let fieldBack = subviews.first { $0.identifier?.rawValue == "urlBack" }
         fieldBack?.frame = CGRect(x: fieldX, y: 4, width: fieldWidth, height: h - 8)
         let textHeight = urlField.intrinsicContentSize.height
+        if promptShown {
+            promptLabel.sizeToFit()
+            promptYes.sizeToFit()
+            promptNo.sizeToFit()
+            let buttons = promptYes.frame.width + promptNo.frame.width + 4
+            let labelWidth = min(promptLabel.frame.width, max(60, fieldWidth * 0.7 - buttons - 8))
+            let width = labelWidth + 8 + buttons
+            var px = fieldX + fieldWidth - width - 4
+            promptLabel.frame = CGRect(x: px, y: (h - promptLabel.frame.height) / 2, width: labelWidth, height: promptLabel.frame.height)
+            px += labelWidth + 8
+            promptNo.frame = CGRect(x: px, y: (h - promptNo.frame.height) / 2, width: promptNo.frame.width, height: promptNo.frame.height)
+            px += promptNo.frame.width + 4
+            promptYes.frame = CGRect(x: px, y: (h - promptYes.frame.height) / 2, width: promptYes.frame.width, height: promptYes.frame.height)
+            let textWidth = WebBarGeometry.urlTextWidth(fieldWidth: fieldWidth, noticeWidth: width)
+            urlField.frame = CGRect(x: fieldX + 8, y: (h - textHeight) / 2, width: textWidth, height: textHeight)
+            noticeLabel.frame = .zero
+            return
+        }
         noticeLabel.sizeToFit()
         let noticeWidth = min(noticeLabel.frame.width, fieldWidth * 0.6)
         // The URL text stops where a shown notice starts (it used to run under it).
@@ -844,9 +1168,8 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
         reload.setAccessibilityLabel(web.isLoading ? "Stop" : "Reload")
         reload.isEnabled = !controller.isEmpty
-        fill.isEnabled = controller.canFillLogin
         external.isEnabled = WebAddress.isLoadable(controller.webView.url ?? URL(string: controller.host.address))
-        for button in [back, forward, reload, fill, external] {
+        for button in [back, forward, reload, external] {
             button.contentTintColor = NSColor(button.isEnabled ? Theme.tabText : Theme.dimText).withAlphaComponent(button.isEnabled ? 0.85 : 0.4)
         }
         if urlField.currentEditor() == nil {
@@ -856,6 +1179,8 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
 
     /// A short line at the right of the URL field, gone after a few seconds.
     func notice(_ text: String) {
+        // A question is up: it keeps the place; the notice shows after it.
+        if promptShown { queuedNotice = text; return }
         noticeGeneration &+= 1
         let generation = noticeGeneration
         noticeLabel.stringValue = text
@@ -866,6 +1191,41 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
             self.noticeLabel.isHidden = true
             self.needsLayout = true
         }
+    }
+
+    /// Save login's question: `answer(true)` = the action, `false` = Not Now.
+    /// A newer question replaces it (unanswered); it goes by itself after a
+    /// minute, unanswered — the password it holds goes with it.
+    func ask(_ text: String, action: String, answer: @escaping (Bool) -> Void) {
+        promptGeneration &+= 1
+        let generation = promptGeneration
+        promptAnswer = answer
+        promptLabel.stringValue = text
+        promptYes.title = action
+        for view in [promptLabel, promptYes, promptNo] as [NSView] { view.isHidden = false }
+        noticeLabel.isHidden = true
+        needsLayout = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self, self.promptGeneration == generation else { return }
+            self.hidePrompt()
+        }
+    }
+
+    func hidePrompt() {
+        promptGeneration &+= 1
+        promptAnswer = nil
+        for view in [promptLabel, promptYes, promptNo] as [NSView] { view.isHidden = true }
+        needsLayout = true
+        if let text = queuedNotice {
+            queuedNotice = nil
+            notice(text)
+        }
+    }
+
+    @objc private func promptSaid(_ sender: NSButton) {
+        let answer = promptAnswer
+        hidePrompt()
+        answer?(sender === promptYes)
     }
 
     func focusLocation() {
@@ -905,7 +1265,6 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     @objc private func goBack() { controller?.goBack() }
     @objc private func goForward() { controller?.goForward() }
     @objc private func reloadOrStop() { controller?.reloadOrStop() }
-    @objc private func fillLogin() { controller?.fillLogin() }
     @objc private func openExternal() { controller?.openInDefaultBrowser() }
 
     @objc private func urlEntered() {
@@ -938,5 +1297,15 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
             return true
         }
         return false
+    }
+}
+
+/// Hands `WebLoginKey.script`'s messages to the tab without the content
+/// controller holding the tab (it retains its handlers).
+final class WebLoginMessageProxy: NSObject, WKScriptMessageHandler {
+    weak var controller: WebTabController?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        MainActor.assumeIsolated { controller?.loginMessage(message) }
     }
 }

@@ -28,9 +28,11 @@ struct WebHostSheet: View {
     private static let defaultGroup = "Quick Connect"
     private static let newGroupTag = "\u{0}new-group"
 
-    init(mode: Mode, kindSwitch: Binding<ConnectionKind>? = nil, prefill: (name: String, url: String)? = nil) {
+    init(mode: Mode, kindSwitch: Binding<ConnectionKind>? = nil, prefill: (name: String, url: String)? = nil,
+         groupName: String? = nil) {
         self.mode = mode
         self.kindSwitch = kindSwitch
+        if let groupName { _groupSelection = State(initialValue: groupName) }
         if let prefill {
             _name = State(initialValue: prefill.name)
             _url = State(initialValue: prefill.url)
@@ -174,12 +176,14 @@ struct WebHostSheet: View {
 struct AddHostSheet: View {
     @State var kind: ConnectionKind
     var webPrefill: (name: String, url: String)? = nil
+    /// The group the form starts in (a group's context menu → Add Host…).
+    var groupName: String? = nil
 
     var body: some View {
         if kind == .web {
-            WebHostSheet(mode: .add, kindSwitch: $kind, prefill: webPrefill)
+            WebHostSheet(mode: .add, kindSwitch: $kind, prefill: webPrefill, groupName: groupName)
         } else {
-            QuickConnectSheet(kind: .ssh, addOnly: true, kindSwitch: $kind)
+            QuickConnectSheet(kind: .ssh, addOnly: true, kindSwitch: $kind, initialGroup: groupName)
         }
     }
 }

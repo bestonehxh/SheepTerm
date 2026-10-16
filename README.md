@@ -8,7 +8,7 @@
 SSH, serial and local shell with highlighting that knows your vendor — plus device web UIs and an AI that reads the output with you.</p>
 
 <p align="center">
-  <a href="https://github.com/bestonehxh/SheepTerm/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_5.0_%2822%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
+  <a href="https://github.com/bestonehxh/SheepTerm/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_5.0_%2823%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
   <a href="https://github.com/bestonehxh/SheepTerm-Windows/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download SheepTerm for Windows"></a>
 </p>
 
@@ -45,7 +45,7 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 
 ## Install
 
-1. Download `SheepTerm-5.0-22.zip`, unzip, drag **SheepTerm.app** into `Applications`.
+1. Download `SheepTerm-5.0-23.zip`, unzip, drag **SheepTerm.app** into `Applications`.
 2. Not notarized: right-click → **Open** the first time, or run `xattr -dr com.apple.quarantine /Applications/SheepTerm.app`.
 3. Updates are built in and verified with an Ed25519 signature.
 

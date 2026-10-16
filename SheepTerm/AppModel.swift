@@ -86,6 +86,8 @@ struct QuickConnectRequest: Identifiable {
     /// "Save as Host…" on a web tab: the Add Host form starts on Web with
     /// these (name, URL).
     var webPrefill: (name: String, url: String)? = nil
+    /// A group's context menu → Add Host…: the group it starts in.
+    var groupName: String? = nil
 }
 
 /// One showing of the "Add Hosts…" sheet. `groupID` is the group it was
@@ -1507,8 +1509,8 @@ final class AppModel: ObservableObject {
     }
 
     /// ≡ → Add Host…: one SSH host into a group, no session.
-    func openAddHost() {
-        quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true)
+    func openAddHost(inGroup group: HostGroup? = nil) {
+        quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true, groupName: group?.name)
     }
 
     /// Saves without connecting (Add Host…). Same door as Quick Connect's

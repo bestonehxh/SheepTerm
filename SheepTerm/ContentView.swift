@@ -264,7 +264,7 @@ struct DetailPane: View {
         .background(Theme.chrome, ignoresSafeAreaEdges: [])
         .sheet(item: $model.quickConnect) { request in
             if request.addOnly {
-                AddHostSheet(kind: request.kind, webPrefill: request.webPrefill)
+                AddHostSheet(kind: request.kind, webPrefill: request.webPrefill, groupName: request.groupName)
             } else {
                 QuickConnectSheet(kind: request.kind, addOnly: request.addOnly)
             }

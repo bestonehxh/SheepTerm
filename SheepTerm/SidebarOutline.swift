@@ -69,6 +69,8 @@ struct SidebarOutline: NSViewRepresentable {
     let onExportGroup: (HostGroup) -> Void
     let onShareGroup: (HostGroup) -> Void
     let onAddHosts: (HostGroup) -> Void
+    /// A group's context menu → Add Host…: one host, the form opened on this group.
+    var onAddHost: (HostGroup) -> Void = { _ in }
     let onSetGroupCredential: (HostGroup) -> Void
     /// Deletes without asking: the multi-group menu has already asked once,
     /// for all of them, and one call is one write. `onDeleteGroup` keeps its
@@ -1286,6 +1288,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             guard let group = node.group else { return nil }
             add(menu, "Export Group…") { [weak self] in self?.parent.onExportGroup(group) }
             add(menu, "Share Link…") { [weak self] in self?.parent.onShareGroup(group) }
+            add(menu, "Add Host…") { [weak self] in self?.parent.onAddHost(group) }
             add(menu, "Add Hosts…") { [weak self] in self?.parent.onAddHosts(group) }
             // Not while a search is on: `buildRoots` hides a heading with no
             // matching hosts, so a heading created mid-search would never
