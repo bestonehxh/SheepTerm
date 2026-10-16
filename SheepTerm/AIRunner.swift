@@ -446,8 +446,15 @@ nonisolated enum AIRunPrep {
 /// Turns a request into a process spec. Separate from the run so the tests
 /// can check exactly what would be executed.
 nonisolated struct AIRunPlanner {
-    /// Per-app scratch: `work` (the empty cwd), `tmp` (child TMPDIR),
-    /// `prompts` (Claude's system prompt file, removed after the run).
+    /// Per-app scratch: `claude-work` (Claude's empty cwd), `codex-runs/<uuid>`
+    /// (one per Codex run: its `work` cwd and `tmp` TMPDIR, removed after the
+    /// run), `prompts` (Claude's system prompt file, removed after the run).
+    ///
+    /// Claude runs UNSANDBOXED with the user's environment and loads
+    /// `.claude/settings.json` (env, apiKeyHelper) and `CLAUDE.md` from its
+    /// cwd. So its cwd is never a folder the Codex sandbox may write (a Codex
+    /// turn steered by device output could plant them there) — the two never
+    /// share `work`/`tmp` again (Windows review M5, 5.0 (21)).
     var root: String
     var baseEnvironment: [String: String]
     var loginPath: String?
@@ -458,15 +465,50 @@ nonisolated struct AIRunPlanner {
         (NSTemporaryDirectory() as NSString).appendingPathComponent("SheepTerm-AI-\(getuid())")
     }
 
-    var workDir: String { (root as NSString).appendingPathComponent("work") }
-    var tmpDir: String { (root as NSString).appendingPathComponent("tmp") }
+    /// Claude's cwd (and the Claude status check's). Never a Codex write root.
+    var claudeWorkDir: String { (root as NSString).appendingPathComponent("claude-work") }
+    /// Parent of the per-run Codex folders (and the Codex status check's cwd).
+    var codexRunsDir: String { (root as NSString).appendingPathComponent("codex-runs") }
     var promptsDir: String { (root as NSString).appendingPathComponent("prompts") }
+    /// A Codex run folder left behind (the app was killed mid-run) is
+    /// removed once it is this old; a live run is never that long.
+    static let staleCodexRunAge: TimeInterval = 24 * 3600
 
     func prepareDirectories() throws {
-        for dir in [workDir, tmpDir, promptsDir] {
+        // Before 5.0 (21) Claude and the sandboxed Codex shared `work` and
+        // `tmp`; whatever a Codex run left there is not kept.
+        for legacy in ["work", "tmp"] {
+            try? FileManager.default.removeItem(atPath: (root as NSString).appendingPathComponent(legacy))
+        }
+        for dir in [claudeWorkDir, codexRunsDir, promptsDir] {
             try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
         }
+    }
+
+    /// The only folders a sandboxed Codex run may write: CODEX_HOME and its
+    /// own run folder. Canonical (the sandbox matches real paths).
+    func codexWriteRoots(runDir: String) -> [String] {
+        [codexHome, runDir].map(canonicalPath)
+    }
+
+    /// A fresh folder for one Codex run (`work` = cwd, `tmp` = TMPDIR);
+    /// stale ones from a killed app are swept first.
+    func makeCodexRunDir() throws -> String {
+        let fm = FileManager.default
+        let now = Date()
+        for name in (try? fm.contentsOfDirectory(atPath: codexRunsDir)) ?? [] {
+            let path = (codexRunsDir as NSString).appendingPathComponent(name)
+            if let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+               now.timeIntervalSince(modified) > Self.staleCodexRunAge {
+                try? fm.removeItem(atPath: path)
+            }
+        }
+        let runDir = (codexRunsDir as NSString).appendingPathComponent(UUID().uuidString)
+        for dir in [runDir, (runDir as NSString).appendingPathComponent("work"), (runDir as NSString).appendingPathComponent("tmp")] {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        }
+        return runDir
     }
 
     func claudeSpec(binary: AIBinary, system: String, prompt: String, model: String, sessionID: String, resume: Bool) throws -> AIProcessRun.Spec {
@@ -479,7 +521,7 @@ nonisolated struct AIRunPlanner {
         return AIProcessRun.Spec(
             executable: binary.path,
             arguments: AICLI.claudeArguments(systemPromptFile: file, model: model, sessionID: sessionID, resume: resume),
-            environment: env, cwd: workDir, stdin: Data(prompt.utf8), cleanup: [file])
+            environment: env, cwd: claudeWorkDir, stdin: Data(prompt.utf8), cleanup: [file])
     }
 
     var codexHome: String {
@@ -489,6 +531,9 @@ nonisolated struct AIRunPlanner {
 
     func codexSpec(binary: AIBinary, prompt: String, threadID: String?) throws -> AIProcessRun.Spec {
         try prepareDirectories()
+        let runDir = try makeCodexRunDir()
+        let workDir = (runDir as NSString).appendingPathComponent("work")
+        let tmpDir = (runDir as NSString).appendingPathComponent("tmp")
         let codexArgs = AICLI.codexArguments(threadID: threadID)
         var readRoots = CodexSandbox.installRoots(forResolved: binary.resolved)
         var path = "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -501,15 +546,15 @@ nonisolated struct AIRunPlanner {
         env["CODEX_HOME"] = codexHome
         guard sandboxCodex else {
             return AIProcessRun.Spec(executable: binary.path, arguments: codexArgs, environment: env, cwd: workDir,
-                                     stdin: Data(prompt.utf8))
+                                     stdin: Data(prompt.utf8), cleanup: [runDir])
         }
         let profile = CodexSandbox.profile(readRoots: readRoots.map(canonicalPath),
-                                           writeRoots: [codexHome, workDir, tmpDir].map(canonicalPath))
+                                           writeRoots: codexWriteRoots(runDir: runDir))
         // The RESOLVED binary: the found path is often a symlink in a folder the profile does not open (the standalone
         // installer's ~/.local/bin/codex -> ~/.codex/packages/…), and exec through it was "Operation not permitted".
         return AIProcessRun.Spec(executable: "/usr/bin/sandbox-exec",
                                  arguments: ["-p", profile, binary.resolved] + codexArgs,
-                                 environment: env, cwd: workDir, stdin: Data(prompt.utf8))
+                                 environment: env, cwd: workDir, stdin: Data(prompt.utf8), cleanup: [runDir])
     }
 
     /// Login status, off the main thread (blocks up to `timeout`).
@@ -518,7 +563,8 @@ nonisolated struct AIRunPlanner {
         try? prepareDirectories()
         let env = AICLI.childEnvironment(baseEnvironment, provider: provider, path: loginPath, tmpdir: nil)
         let args = provider == .claude ? AICLI.claudeStatusArguments : AICLI.codexStatusArguments
-        guard let result = runCapture(binary.path, args, environment: env, cwd: workDir, timeout: timeout) else {
+        let cwd = provider == .claude ? claudeWorkDir : codexRunsDir
+        guard let result = runCapture(binary.path, args, environment: env, cwd: cwd, timeout: timeout) else {
             return .unknown("didn't answer")
         }
         return provider == .claude ? AICLI.claudeStatus(exitCode: result.status, output: result.output)

@@ -76,6 +76,13 @@ nonisolated final class SSHWorker: Sendable {
         /// (not on a drop, a timeout or the user's Cancel). Try Again asks
         /// that login's password again instead of reusing the refused one.
         var refusedLogin: RefusedLogin?
+        /// Logins whose CONFIGURED password (a saved credential, the session
+        /// cache) the server refused on this run. A refusal is not undone by
+        /// the server hanging up afterwards (its LoginGraceTime while the
+        /// "Wrong password" card is up): the session then ends "connection
+        /// lost", but Try Again must still ask — reloading the saved password
+        /// would send the one the server already refused.
+        var configuredRefusedThisRun: [RefusedLogin] = []
         /// Fired once per login when the password the session was STARTED
         /// with (a saved credential, the session cache) is refused — the app
         /// stops offering a cached one. Never carries the password.
@@ -155,6 +162,10 @@ nonisolated final class SSHWorker: Sendable {
     var challengePrompt: ChallengePrompt? {
         get { state.withLock { $0.challengePrompt } }
         set { state.withLock { $0.challengePrompt = newValue } }
+    }
+    private var configuredRefusedThisRun: [RefusedLogin] {
+        get { state.withLock { $0.configuredRefusedThisRun } }
+        set { state.withLock { $0.configuredRefusedThisRun = newValue } }
     }
     /// See `State.refusedLogin`. Read by the controller once the session closed.
     var refusedLogin: RefusedLogin? {
@@ -428,6 +439,7 @@ nonisolated final class SSHWorker: Sendable {
         var config = initialConfig
         refusedHost = nil
         refusedLogin = nil
+        configuredRefusedThisRun = []
         // config.port is an unvalidated Int.
         guard (1...65535).contains(config.port) else {
             closeSession("invalid port \(config.port) — must be between 1 and 65535")
@@ -524,6 +536,8 @@ nonisolated final class SSHWorker: Sendable {
                 if let refusal = hostKeyRefusedDuringAuth {
                     closeSession(refusal, hostKeyRefusal: true)
                 } else if let transport = authTransportError {
+                    // A configured password already refused stays refused.
+                    if configuredRefusedThisRun.contains(.target) { refusedLogin = .target }
                     closeSession(transport)
                 } else {
                     if !authCancelled { refusedLogin = .target }
@@ -723,10 +737,17 @@ nonisolated final class SSHWorker: Sendable {
                 if let refusal = hostKeyRefusedDuringAuth {
                     closeSession(refusal, hostKeyRefusal: true)
                 } else if let transport = authTransportError {
+                    if configuredRefusedThisRun.contains(.jumpHost) { refusedLogin = .jumpHost }
                     closeSession(prefix + transport)
+                } else if authCancelled {
+                    // "connection cancelled" FIRST, never behind the prefix:
+                    // the controller and `ConnectionCardPlan.offersTryAgain`
+                    // key the user's own Cancel on that prefix (no red
+                    // failure, no Try Again, no auto-reconnect re-asking).
+                    closeSession("connection cancelled — no password given for jump host \(hop.host)")
                 } else {
-                    if !authCancelled { refusedLogin = .jumpHost }
-                    closeSession(prefix + (authCancelled ? "connection cancelled — no password given" : "authentication failed"))
+                    refusedLogin = .jumpHost
+                    closeSession(prefix + "authentication failed")
                 }
             }
             link.close()
@@ -1934,6 +1955,7 @@ nonisolated final class SSHWorker: Sendable {
         func configuredPasswordRefused() {
             guard passwordIsConfigured, configuredPasswordSent else { return }
             passwordIsConfigured = false
+            configuredRefusedThisRun.append(side)
             onConfiguredPasswordRefused?(side)
         }
         /// Rounds refused so far on this connection. The first question of a

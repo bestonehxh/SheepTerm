@@ -323,8 +323,9 @@ public nonisolated enum CodexSandbox {
     }
 
     /// The profile. `readRoots` = install roots (Codex and, for the npm
-    /// package, Node); `writeRoots` = CODEX_HOME, the work dir, the child's
-    /// TMPDIR. Everything written is readable too.
+    /// package, Node); `writeRoots` = CODEX_HOME and the run's own folder
+    /// (its work dir and the child's TMPDIR) — never Claude's cwd
+    /// (`AIRunPlanner.codexWriteRoots`). Everything written is readable too.
     /// Every ancestor directory of `paths`, for `getcwd` (which reads each
     /// parent): those directories only, not what is below them.
     public static func ancestors(of paths: [String]) -> [String] {
