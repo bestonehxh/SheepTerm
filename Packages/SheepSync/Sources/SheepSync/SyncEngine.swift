@@ -142,6 +142,14 @@ struct SyncLocalState: Codable, Equatable {
 @MainActor
 @Observable
 public final class SyncEngine {
+    /// The warning after records from the cloud did not land here (retried
+    /// next sync). Line 2 = what cleared a stuck one in practice: signing out
+    /// of Google and in again starts this device's sync state afresh.
+    public static func notAppliedWarning(count: Int) -> String {
+        "\(count) item\(count == 1 ? "" : "s") from the cloud could not be applied here; will retry.\n"
+            + "If this keeps coming back, sign out of Google and sign in again."
+    }
+
     public private(set) var phase: SyncPhase
     /// The signed-in Google address.
     public private(set) var account: String?
@@ -853,7 +861,9 @@ public final class SyncEngine {
                                          digest: current.map { sealer.digest(id: id, payload: $0) })
             }
             if !failed.isEmpty {
-                warning = "\(failed.count) item\(failed.count == 1 ? "" : "s") from the cloud could not be applied on this Mac; will retry."
+                // "here", not "on this Mac": the engine is shared with Windows. The second line is
+                // the fix that worked when one stuck (a stale record in this device's sync state).
+                warning = Self.notAppliedWarning(count: failed.count)
             }
             if oldShadow == nil, result.refusedJoin {
                 // Still joining: the app refuses to apply a join it could

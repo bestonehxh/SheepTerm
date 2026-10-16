@@ -30,6 +30,8 @@ final class WebTabController: NSObject {
     var onFocus: (() -> Void)?
     /// First page that finished loading (recents).
     var onFirstLoad: (() -> Void)?
+    /// Context menu → Open Link in New Tab: a web tab right after this one.
+    var onOpenInNewTab: ((URL) -> Void)?
 
     private var observations: [NSKeyValueObservation] = []
     private var didFirstLoad = false
@@ -103,6 +105,10 @@ final class WebTabController: NSObject {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        // Safari's tail on WebKit's user agent (5.0 (25)): device admin pages
+        // that sniff for Safari serve it the code Safari gets.
+        configuration.applicationNameForUserAgent = WebUserAgent.applicationName(
+            safariVersion: Bundle(path: "/Applications/Safari.app")?.infoDictionary?["CFBundleShortVersionString"] as? String)
         configuration.userContentController.addUserScript(
             WKUserScript(source: WebLoginKey.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true,
                          in: Self.loginWorld))
@@ -113,6 +119,20 @@ final class WebTabController: NSObject {
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
+        // Pinch to zoom, as in Safari.
+        webView.allowsMagnification = true
+        webView.onOpenLinkInNewTab = { [weak self] url in self?.onOpenInNewTab?(url) }
+        webView.onMagnifyEnd = { [weak self] in self?.placeKeys() }
+        // Smart zoom: `magnification` still reads 100 % here (WebKit asks the
+        // page for the zoom target first, then animates) — hide at once, then
+        // look again until the zoom has landed (review 5.0 (25) round 3).
+        webView.onSmartZoom = { [weak self] in
+            guard let self else { return }
+            self.view.showKeys(at: [])
+            for delay in WebLoginKey.smartZoomChecks {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.placeKeys() }
+            }
+        }
         webView.onFocus = { [weak self] in self?.onFocus?() }
         webView.isHidden = host.address.isEmpty
         view.bar.controller = self
@@ -212,6 +232,30 @@ final class WebTabController: NSObject {
 
     func goBack() { webView.goBack() }
     func goForward() { webView.goForward() }
+    func go(to item: WKBackForwardListItem) { webView.go(to: item) }
+    /// The history list that way, nearest page first (WebKit's backList is oldest first).
+    func history(back: Bool) -> [WKBackForwardListItem] {
+        back ? webView.backForwardList.backList.reversed() : webView.backForwardList.forwardList
+    }
+
+    // MARK: - zoom (5.0 (25))
+
+    private static let zoomKey = "webZoomBySite"
+    static var zoomTable: [String: Double] {
+        (UserDefaults.standard.dictionary(forKey: zoomKey) as? [String: Double]) ?? [:]
+    }
+
+    /// View → Bigger / Smaller / Default Size on a web tab: one Safari step,
+    /// remembered for this site (`delta` 0 = 100 %).
+    func zoom(_ delta: Int) {
+        let next = delta == 0 ? 1 : WebZoom.step(from: Double(webView.pageZoom), by: delta)
+        webView.pageZoom = next
+        webView.magnification = 1
+        // The page reports its field in CSS px only when THAT changes: the key moves with the zoom here.
+        placeKeys()
+        guard let site = committedURL.flatMap(WebLoginKey.siteKey) else { return }
+        UserDefaults.standard.set(WebZoom.remember(next, for: site, in: Self.zoomTable), forKey: Self.zoomKey)
+    }
     func reloadOrStop() {
         if webView.isLoading { webView.stopLoading() } else { webView.reload() }
     }
@@ -265,6 +309,8 @@ final class WebTabController: NSObject {
     /// What Fill Login and the certificate check use: the saved host as it is
     /// NOW, else this tab's own (unsaved) host.
     private var liveHost: Host { savedHost ?? host }
+    /// What a tab opened from this one inherits on the same origin (`Host.webTab`).
+    var hostForNewTabs: Host { liveHost }
 
     // MARK: - login key (5.0 (23))
 
@@ -311,7 +357,13 @@ final class WebTabController: NSObject {
             view.showKeys(at: [])
             return
         }
-        let zoom = Double(webView.pageZoom * webView.magnification)
+        // Pinched in: the visible part of the page is shifted by the pinch
+        // centre, which the key's placement does not know — no key until 100 %.
+        guard WebLoginKey.keysShown(magnification: Double(webView.magnification)) else {
+            view.showKeys(at: [])
+            return
+        }
+        let zoom = Double(webView.pageZoom)
         let web = webView.frame
         view.showKeys(at: keyBoxes.compactMap { box in
             WebLoginKey.keyFrame(field: box, zoom: zoom, web: (web.minX, web.minY, web.width, web.height))
@@ -766,6 +818,9 @@ extension WebTabController: WKNavigationDelegate {
         dialogGate.mainFrameNavigated()
         committedURL = webView.url?.absoluteString
         mainTargetURL = nil
+        // The zoom this site was left at (Safari remembers it per site).
+        let zoom = WebZoom.zoom(for: committedURL.flatMap(WebLoginKey.siteKey), in: Self.zoomTable)
+        if abs(webView.pageZoom - zoom) > 0.001 { webView.pageZoom = zoom; placeKeys() }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -835,7 +890,15 @@ extension WebTabController: WKUIDelegate {
     /// window.open / target=_blank: the same tab.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url, WebAddress.isLoadable(url) {
+        // Taken FIRST: a refused URL below must not leave the mark for the
+        // next target=_blank (review 5.0 (25) #2).
+        let newTab = (webView as? SheepWebView)?.takeOpenInNewTab() ?? false
+        guard let url = navigationAction.request.url, WebAddress.isLoadable(url) else { return nil }
+        // The context menu's Open Link in New Tab: its own tab. Anything else
+        // a page opens (window.open, target=_blank) stays in this tab.
+        if newTab {
+            onOpenInNewTab?(url)
+        } else {
             webView.load(navigationAction.request)
         }
         return nil
@@ -954,6 +1017,40 @@ extension WebTabController: WKDownloadDelegate {
 /// WKWebView that says when it takes the keyboard (pane focus).
 final class SheepWebView: WKWebView {
     var onFocus: (() -> Void)?
+    var onOpenLinkInNewTab: ((URL) -> Void)?
+    /// Set by the context menu's Open Link in New Tab just before WebKit asks
+    /// for a new web view (`createWebViewWith`); taken once.
+    private var newTabMark = WebNewTabMark()
+    private let newTabMenu = WebNewTabMenu()
+    /// A pinch ended: the login keys are placed again (or stay hidden while zoomed).
+    var onMagnifyEnd: (() -> Void)?
+    /// A two-finger double-tap began a zoom (`smartMagnify`).
+    var onSmartZoom: (() -> Void)?
+
+    func takeOpenInNewTab() -> Bool { newTabMark.take() }
+
+    /// WebKit's "Open Link in New Window" becomes "Open Link in New Tab"
+    /// (`WebNewTabMenu`: WebKit's item, retitled, left otherwise untouched).
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        newTabMark.clear()
+        newTabMenu.prepare(menu) { [weak self] in self?.newTabMark.set() }
+    }
+
+    // Every phase: the key hides as soon as the pinch leaves 100 %, and is
+    // placed again when it ends back at 100 %.
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
+        onMagnifyEnd?()
+    }
+
+    /// Two-finger double-tap: WebKit animates `magnification` without any
+    /// `magnify(with:)` (review 5.0 (25) round 2) — hide now, place again
+    /// once the animation is over.
+    override func smartMagnify(with event: NSEvent) {
+        super.smartMagnify(with: event)
+        onSmartZoom?()
+    }
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
@@ -1043,10 +1140,10 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
 
     weak var controller: WebTabController?
 
-    private let back = WebBarView.button("chevron.left", "Back (⌘[)")
-    private let forward = WebBarView.button("chevron.right", "Forward (⌘])")
-    private let reload = WebBarView.button("arrow.clockwise", "Reload (⌘R)")
-    private let external = WebBarView.button("arrow.up.right.square", "Open in Default Browser")
+    private let back = WebBarView.button("chevron.left", "Back (⌘[)", HistoryButton())
+    private let forward = WebBarView.button("chevron.right", "Forward (⌘])", HistoryButton())
+    private let reload = WebBarView.button("arrow.clockwise", "Reload (⌘R)", NSButton())
+    private let external = WebBarView.button("arrow.up.right.square", "Open in Default Browser", NSButton())
     private let urlField = NSTextField()
     /// The URL field (an empty tab's keyboard target).
     var locationField: NSView { urlField }
@@ -1074,6 +1171,9 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
             button.action = action
             addSubview(button)
         }
+        // Hold (or right-click) Back / Forward: the pages that way, nearest first.
+        back.historyMenu = { [weak self] in self?.historyMenu(back: true) }
+        forward.historyMenu = { [weak self] in self?.historyMenu(back: false) }
         urlField.isBordered = false
         urlField.drawsBackground = false
         urlField.focusRingType = .none
@@ -1130,10 +1230,11 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    private static func button(_ symbol: String, _ help: String) -> NSButton {
+    private static func button<B: NSButton>(_ symbol: String, _ help: String, _ button: B) -> B {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
-        let button = NSButton(image: image ?? NSImage(), target: nil, action: nil)
+        button.image = image ?? NSImage()
+        button.title = ""
         button.isBordered = false
         button.bezelStyle = .regularSquare
         button.imagePosition = .imageOnly
@@ -1303,6 +1404,25 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     }
 
     @objc private func goBack() { controller?.goBack() }
+
+    private func historyMenu(back: Bool) -> NSMenu? {
+        guard let controller else { return nil }
+        let items = controller.history(back: back)
+        let menu = NSMenu()
+        for item in items {
+            let title = item.title?.isEmpty == false ? item.title! : item.url.absoluteString
+            let entry = NSMenuItem(title: title, action: #selector(goToHistory(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = item
+            menu.addItem(entry)
+        }
+        return menu
+    }
+
+    @objc private func goToHistory(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? WKBackForwardListItem else { return }
+        controller?.go(to: item)
+    }
     @objc private func goForward() { controller?.goForward() }
     @objc private func reloadOrStop() { controller?.reloadOrStop() }
     @objc private func openExternal() { controller?.openInDefaultBrowser() }
@@ -1347,5 +1467,49 @@ final class WebLoginMessageProxy: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         MainActor.assumeIsolated { controller?.loginMessage(message) }
+    }
+}
+
+/// Back / Forward in the bar: a click goes one page; holding the button (or
+/// a right-click) lists the pages that way, Safari's history menu.
+final class HistoryButton: NSButton {
+    /// The menu for this direction (built when it is needed).
+    var historyMenu: (() -> NSMenu?)?
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled, let window else { return }
+        // Held 0.4 s without letting go: the menu instead of the click.
+        // Released inside = the click; outside = cancelled (as any button).
+        highlight(true)
+        defer { highlight(false) }
+        let deadline = Date().addingTimeInterval(0.4)
+        var inside = true
+        while Date() < deadline {
+            guard let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged],
+                                              until: Date().addingTimeInterval(0.02), inMode: .eventTracking, dequeue: true) else { continue }
+            inside = bounds.contains(convert(next.locationInWindow, from: nil))
+            highlight(inside)
+            if next.type == .leftMouseUp {
+                if inside { sendAction(action, to: target) }
+                return
+            }
+        }
+        guard inside else {
+            // Held outside: wait for the release, nothing happens.
+            _ = window.nextEvent(matching: [.leftMouseUp], until: .distantFuture, inMode: .eventTracking, dequeue: true)
+            return
+        }
+        highlight(false)
+        showHistory()
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        showHistory()
+    }
+
+    private func showHistory() {
+        guard let menu = historyMenu?(), !menu.items.isEmpty else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.height + 2), in: self)
     }
 }

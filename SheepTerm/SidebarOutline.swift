@@ -1355,6 +1355,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 self?.parent.model.collapseSidebar()
             }
             if node.id.hasPrefix("recent-") {
+                // Not for a recent of a host that is already saved (no second copy).
+                if host.kind == .ssh || host.kind == .web,
+                   !RecentSave.isSaved(host, in: parent.store.groups.flatMap(\.hosts)) {
+                    add(menu, "Save as Host…") { [weak self] in self?.parent.model.saveRecentAsHost(host) }
+                }
                 menu.addItem(.separator())
                 add(menu, "Remove from Recent") { [weak self] in self?.parent.store.removeRecent(host) }
             }

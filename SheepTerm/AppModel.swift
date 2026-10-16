@@ -88,6 +88,8 @@ struct QuickConnectRequest: Identifiable {
     var webPrefill: (name: String, url: String)? = nil
     /// A group's context menu → Add Host…: the group it starts in.
     var groupName: String? = nil
+    /// Recent → Save as Host… on an SSH recent: the form starts with it.
+    var sshPrefill: Host? = nil
 }
 
 /// One showing of the "Add Hosts…" sheet. `groupID` is the group it was
@@ -343,6 +345,18 @@ final class AppModel: ObservableObject {
     /// View → Terminal Font → Bigger / Smaller (⌘+ / ⌘−), like Terminal.app.
     func stepTerminalFontSize(_ delta: Double) {
         terminalFontSize = Theme.clampFontSize(terminalFontSize + delta)
+    }
+
+    /// View → Bigger / Smaller / Default Size: on a web tab the PAGE zooms
+    /// (Safari's steps, remembered per site); anywhere else the terminal font.
+    func stepSize(_ delta: Int) {
+        if let web = selectedWebController {
+            web.zoom(delta)
+        } else if delta == 0 {
+            terminalFontSize = Theme.defaultFontSize
+        } else {
+            stepTerminalFontSize(Double(delta))
+        }
     }
 
     /// Pushes the current theme AND font (Settings → Terminal) onto every
@@ -1050,6 +1064,20 @@ final class AppModel: ObservableObject {
         quickConnect = QuickConnectRequest(kind: .web, addOnly: true, webPrefill: prefill)
     }
 
+    /// Recent → Save as Host…: the Add Host form, filled from the recent
+    /// (`RecentSave`); nothing is saved until its Add.
+    func saveRecentAsHost(_ recent: Host) {
+        switch RecentSave.plan(for: recent, saved: store.groups.flatMap(\.hosts),
+                               credentialExists: { self.credentialStore.credential(for: $0) != nil }) {
+        case .web(let name, let url):
+            quickConnect = QuickConnectRequest(kind: .web, addOnly: true, webPrefill: (name, url))
+        case .ssh(let host):
+            quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true, sshPrefill: host)
+        case .unsupported, .alreadySaved:
+            NSSound.beep()
+        }
+    }
+
     private func openWeb(_ host: Host) {
         let controller = WebTabController(host: host)
         let tab = SessionTab(content: .web(controller), title: host.name)
@@ -1058,6 +1086,13 @@ final class AppModel: ObservableObject {
         controller.onFocus = { [weak self, weak tab] in
             guard let self, let tab, self.selectedID != tab.id else { return }
             self.selectedID = tab.id
+        }
+        controller.onOpenInNewTab = { [weak self, weak tab, weak controller] url in
+            guard let self, let tab, let controller, self.tabs.contains(where: { $0.id == tab.id }),
+                  let host = Host.webTab(opening: url.absoluteString, from: controller.hostForNewTabs) else { return }
+            self.pendingPlacement = .tabAfter(tab.id)
+            self.open(host: host)
+            self.pendingPlacement = .newTab
         }
         controller.onFirstLoad = { [weak self, weak tab] in
             guard let self, let tab, !tab.didNoteRecent else { return }

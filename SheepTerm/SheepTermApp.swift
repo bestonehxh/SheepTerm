@@ -579,12 +579,13 @@ struct SheepTermCommands: Commands {
                 Label("Terminal Theme", systemImage: "paintpalette")
             }
             Menu {
-                Button("Bigger") { model.stepTerminalFontSize(1) }
+                Button("Bigger") { model.stepSize(1) }
                     .keyboardShortcut("=", modifiers: .command)
-                Button("Smaller") { model.stepTerminalFontSize(-1) }
+                Button("Smaller") { model.stepSize(-1) }
                     .keyboardShortcut("-", modifiers: .command)
-                Button("Default Size (\(Int(Theme.defaultFontSize)) pt)") {
-                    model.terminalFontSize = Theme.defaultFontSize
+                // On a web tab these three zoom the page (Safari's), so the last one says so.
+                Button(model.selectedWebController != nil ? "Actual Size" : "Default Size (\(Int(Theme.defaultFontSize)) pt)") {
+                    model.stepSize(0)
                 }
                 Divider()
                 Toggle(Theme.fontFamilyLabel(Theme.systemFontFamily), isOn: Binding(

@@ -12,6 +12,9 @@ struct QuickConnectSheet: View {
     var kindSwitch: Binding<ConnectionKind>? = nil
     /// A group's context menu → Add Host…: the group the form starts in.
     var initialGroup: String? = nil
+    /// Recent → Save as Host…: the recent's values (`RecentSave`), filled in once.
+    var prefill: Host? = nil
+    @State private var prefilled = false
 
     @EnvironmentObject var model: AppModel
     /// Observed explicitly: `credentials` is @Published on CredentialStore,
@@ -224,6 +227,27 @@ struct QuickConnectSheet: View {
         }
         .onAppear {
             if let initialGroup, groupNames.contains(initialGroup) { groupSelection = initialGroup }
+            if kind == .ssh, let prefill, !prefilled {
+                prefilled = true
+                name = prefill.name
+                address = prefill.address
+                port = String(prefill.port)
+                portEdited = true
+                username = prefill.username
+                credentialSelection = prefill.credentialID
+                cipherMode = prefill.cipherMode ?? .auto
+                agentForward = prefill.agentForward ?? false
+                disablePaging = prefill.disablePaging ?? false
+                noLog = prefill.skipsLog
+                vendor = prefill.highlightVendor
+                jumpHostID = prefill.jumpHostID
+                if let jumpID = prefill.jumpHostID {
+                    jumpText = model.store.groups.flatMap(\.hosts).first { $0.id == jumpID }
+                        .map { JumpHostRow.text(for: $0, credentials: credentialStore) } ?? ""
+                } else {
+                    jumpText = prefill.jumpSpecValue ?? ""
+                }
+            }
             guard kind == .ssh else {
                 // The serial form has no text field at all, so there is
                 // nothing here to force a layout for — taking the user's

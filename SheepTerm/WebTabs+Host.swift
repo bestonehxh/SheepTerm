@@ -76,4 +76,18 @@ extension Host {
                     kind: .web, address: normalized, port: WebAddress.effectivePort(of: normalized),
                     username: user, credentialID: credentialID)
     }
+
+    /// Open Link in New Tab (5.0 (25)): a web tab for `url`. On the same
+    /// origin as the tab it came from it keeps that host's login and its
+    /// trusted certificate — a link inside a lab device's own UI must not ask
+    /// about the certificate again or lose the key's login.
+    static func webTab(opening url: String, from source: Host) -> Host? {
+        guard var host = Host.web(name: "", url: url) else { return nil }
+        if source.kind == .web, WebAddress.sameOrigin(host.address, source.address) {
+            host.webTrustedCertSHA256 = source.webTrustedCertSHA256
+            host.credentialID = source.credentialID
+            if host.username.isEmpty { host.username = source.username }
+        }
+        return host
+    }
 }

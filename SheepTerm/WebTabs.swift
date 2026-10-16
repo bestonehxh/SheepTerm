@@ -615,6 +615,19 @@ public nonisolated enum WebLoginKey {
         return login.websites.contains(site)
     }
 
+    /// The key is drawn only at 100 % magnification (pinch / smart zoom):
+    /// zoomed in, the visible part of the page is shifted by the zoom centre,
+    /// which the key's placement does not know. Page zoom (⌘=) is fine.
+    public static func keysShown(magnification: Double) -> Bool {
+        abs(magnification - 1) < 0.001
+    }
+
+    /// After a smart zoom the key is looked at again at these delays (s):
+    /// the zoom lands after a round trip to the page plus its animation, and
+    /// a busy page can take longer than any single guess.
+    /// (No 0.25 s look: a zoom still animating then reads 100 % and flashed the key.)
+    public static let smartZoomChecks: [Double] = [0.5, 1, 2]
+
     /// A link to `a` from the page at `b` stays in the same document: `a`
     /// has a #fragment and the two are equal once it is cut off (a link to
     /// "#" or "#top"). The same address WITHOUT a fragment is a new load —
@@ -797,6 +810,46 @@ public nonisolated enum WebLoginKey {
       window.__sheepLoginCheck = () => pageHasPassword();
     })();
     """
+}
+
+/// Web tab zoom (5.0 (25), Safari's ⌘+ / ⌘−): the steps, and the zoom
+/// remembered per site (`WebLoginKey.siteKey`).
+public nonisolated enum WebZoom {
+    public static let steps: [Double] = [0.5, 0.75, 0.85, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3]
+
+    /// The next step up (`delta` > 0) or down from `current`; a value
+    /// between steps moves to the nearest one in that direction.
+    public static func step(from current: Double, by delta: Int) -> Double {
+        if delta > 0 { return steps.first { $0 > current + 0.001 } ?? steps.last! }
+        if delta < 0 { return steps.last { $0 < current - 0.001 } ?? steps.first! }
+        return current
+    }
+
+    /// What is stored for `site`: nothing for 100 % (the default needs no entry).
+    public static func remember(_ zoom: Double, for site: String, in table: [String: Double]) -> [String: Double] {
+        var out = table
+        out[site] = abs(zoom - 1) < 0.001 ? nil : min(max(zoom, steps.first!), steps.last!)
+        return out
+    }
+
+    public static func zoom(for site: String?, in table: [String: Double]) -> Double {
+        guard let site, let value = table[site], value.isFinite else { return 1 }
+        return min(max(value, steps.first!), steps.last!)
+    }
+}
+
+/// The web tab's user agent (5.0 (25)): WebKit's own string names no
+/// browser, and old device admin pages pick a different (often broken) code
+/// path for it. Appending Safari's tail — the version of the Safari on this
+/// Mac — makes them serve what Safari gets.
+public nonisolated enum WebUserAgent {
+    public static func applicationName(safariVersion: String?) -> String {
+        let version = safariVersion.flatMap { v -> String? in
+            let digits = v.split(separator: ".").prefix(2).filter { $0.allSatisfy(\.isNumber) }
+            return digits.isEmpty ? nil : digits.joined(separator: ".")
+        } ?? "26.0"
+        return "Version/\(version) Safari/605.1.15"
+    }
 }
 
 public nonisolated enum WebFillLogin {

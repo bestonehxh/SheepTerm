@@ -234,6 +234,13 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertNotNil(b.engine.lastError)
         // Still refused: B must not upload "stale" as a fresh edit.
         await b.engine.syncNow()
+        // The warning names no platform (the engine runs on Windows too) and says what clears a stuck one.
+        XCTAssertEqual(b.engine.lastError, SyncEngine.notAppliedWarning(count: 1))
+        let text = SyncEngine.notAppliedWarning(count: 1)
+        XCTAssertTrue(text.hasPrefix("1 item from the cloud could not be applied here"))
+        XCTAssertFalse(text.contains("Mac"))
+        XCTAssertTrue(text.contains("\nIf this keeps coming back, sign out of Google and sign in again."))
+        XCTAssertTrue(SyncEngine.notAppliedWarning(count: 3).hasPrefix("3 items "))
         await a.engine.syncNow()
         XCTAssertEqual(a.app["hosts"], "cloud")
         b.app.refuse = []

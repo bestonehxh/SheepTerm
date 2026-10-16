@@ -176,6 +176,8 @@ struct WebHostSheet: View {
 struct AddHostSheet: View {
     @State var kind: ConnectionKind
     var webPrefill: (name: String, url: String)? = nil
+    /// Recent → Save as Host… on an SSH recent.
+    var sshPrefill: Host? = nil
     /// The group the form starts in (a group's context menu → Add Host…).
     var groupName: String? = nil
 
@@ -183,7 +185,7 @@ struct AddHostSheet: View {
         if kind == .web {
             WebHostSheet(mode: .add, kindSwitch: $kind, prefill: webPrefill, groupName: groupName)
         } else {
-            QuickConnectSheet(kind: .ssh, addOnly: true, kindSwitch: $kind, initialGroup: groupName)
+            QuickConnectSheet(kind: .ssh, addOnly: true, kindSwitch: $kind, initialGroup: groupName, prefill: sshPrefill)
         }
     }
 }
