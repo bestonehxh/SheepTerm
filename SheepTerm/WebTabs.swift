@@ -556,26 +556,63 @@ public nonisolated enum WebTrust {
 /// `WebLoginKey.script`, run in the app's own content world.
 public nonisolated enum WebLoginKey {
     /// One saved login as the menu shows it (no password — that is read only
-    /// when the item is picked).
+    /// when the item is picked). `websites` = its sites (`siteKey` form).
     public struct Login: Equatable, Sendable {
         public let id: UUID
         public let name: String
         public let username: String
-        public init(id: UUID, name: String, username: String) {
-            self.id = id; self.name = name; self.username = username
+        public let websites: [String]
+        public init(id: UUID, name: String, username: String, websites: [String] = []) {
+            self.id = id; self.name = name; self.username = username; self.websites = websites
         }
         /// "admin — Lab FortiGate"; the name alone when there is no user.
         public var title: String { username.isEmpty ? name : "\(username) — \(name)" }
     }
 
-    /// The menu: this host's own login first (filled only on its own
-    /// address), then every other saved login by name (the user picks it,
-    /// so it may go into any page).
-    public static func menu(hostCredential: UUID?, all: [Login]) -> (host: Login?, others: [Login]) {
-        let host = all.first { $0.id == hostCredential }
-        let others = all.filter { $0.id != hostCredential }
-            .sorted { ($0.name.localizedLowercase, $0.username) < ($1.name.localizedLowercase, $1.username) }
-        return (host, others)
+    /// A page or a saved address as a site: "scheme://host:port", the port
+    /// always written (80/443 filled in), host lower-case, IPv6 in brackets
+    /// (so the key parses back to itself) — the same origin rule Fill Login
+    /// uses. nil when unparseable or not http(s).
+    public static func siteKey(_ url: String) -> String? {
+        guard let origin = WebAddress.origin(of: url), origin.scheme == "http" || origin.scheme == "https" else { return nil }
+        let host = origin.host.contains(":") ? "[\(origin.host)]" : origin.host
+        return "\(origin.scheme)://\(host):\(origin.port)"
+    }
+
+    /// A credential's list as stored: each entry normalised, unparseable
+    /// ones dropped, duplicates gone, order kept.
+    public static func cleanedSites(_ sites: [String]) -> [String] {
+        var out: [String] = []
+        for site in sites {
+            guard let key = siteKey(site), !out.contains(key) else { continue }
+            out.append(key)
+        }
+        return out
+    }
+
+    /// The menu: the logins for THIS page — the saved host's own credential
+    /// (on the host's own address, or a site it lists), then every credential
+    /// that lists the page's site; every other login behind "Other Logins".
+    /// Off those, the host's own credential is not offered at all (picking it
+    /// would only be refused).
+    public static func menu(hostCredential: UUID?, hostAddress: String?, page: String?, all: [Login]) -> (site: [Login], others: [Login]) {
+        let site = page.flatMap(siteKey)
+        let byName: (Login, Login) -> Bool = { ($0.name.localizedLowercase, $0.username) < ($1.name.localizedLowercase, $1.username) }
+        let onHost = page.map { page in hostAddress.map { WebAddress.sameOrigin(page, $0) } ?? false } ?? false
+        let hostLogin = all.filter { $0.id == hostCredential }
+        let own = hostLogin.filter { onHost || site.map($0.websites.contains) == true }
+        let forSite = all.filter { $0.id != hostCredential && site.map($0.websites.contains) == true }.sorted(by: byName)
+        let mine = Set((own + forSite + hostLogin).map(\.id))
+        return (own + forSite, all.filter { !mine.contains($0.id) }.sorted(by: byName))
+    }
+
+    /// Whether `login` may be filled into `page` as a site login (its own
+    /// address): the saved host's credential on the host's origin, or a
+    /// credential that lists the page's site.
+    public static func isSiteLogin(_ login: Login, page: String, hostCredential: UUID?, hostAddress: String?) -> Bool {
+        if login.id == hostCredential, let hostAddress, WebAddress.sameOrigin(page, hostAddress) { return true }
+        guard let site = siteKey(page) else { return false }
+        return login.websites.contains(site)
     }
 
     /// A link to `a` from the page at `b` stays in the same document: `a`

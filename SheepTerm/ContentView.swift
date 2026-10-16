@@ -24,7 +24,9 @@ struct ContentView: View {
                     // you could scroll rows straight over the traffic lights.
                     // The search field is the hard edge.
                     .clipped()
+                    .transition(.move(edge: .leading))
                 SidebarResizeHandle()
+                    .transition(.move(edge: .leading))
             }
             VStack(spacing: 0) {
                 TopBarView()
@@ -390,7 +392,7 @@ struct TopBarView: View {
                 Button("New Serial Console…") { model.openQuickConnect(.serial) }
                 Button("New Web Tab") { model.newWebTab() }
                 Divider()
-                Button("Credentials…") { model.showCredentials = true }
+                Button("Passwords…") { model.showCredentials = true }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 15, weight: .medium))

@@ -2156,8 +2156,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The sidebar slides in and out (0.2 s) instead of appearing at once:
+    /// done in one frame, the page under a web tab jumped 260 pt sideways
+    /// while WebKit repainted a frame late — the right edge visibly kicked
+    /// (the user, 2026-10-16). A terminal sends its new size only once the
+    /// slide has settled (`ResizeCoalescer`), never per frame.
+    static let sidebarAnimation = Animation.easeInOut(duration: 0.2)
+
     func toggleSidebar() {
-        sidebarShown.toggle()
+        withAnimation(Self.sidebarAnimation) { sidebarShown.toggle() }
         // Closing the sidebar must hand keyboard focus back to the
         // terminal — a sidebar-less window with focus stranded on the
         // (now hidden) List leaves the input-source HUD with no caret.
@@ -2171,7 +2178,7 @@ final class AppModel: ObservableObject {
     /// Sidebar auto-collapses once a session is opened from it,
     /// giving the terminal the full window (expand again with ⌘0).
     func collapseSidebar() {
-        sidebarShown = false
+        withAnimation(Self.sidebarAnimation) { sidebarShown = false }
         DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
     }
 

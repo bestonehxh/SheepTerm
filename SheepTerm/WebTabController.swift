@@ -72,6 +72,10 @@ final class WebTabController: NSObject {
     /// it is for — no second plaintext copy): sending exactly that is not a
     /// new login to offer.
     private var filledFromKey: SHA256.Digest?
+    /// Every login put in from the key in this tab (hashes): such a login is
+    /// never linked to a site silently — picking one from Other Logins must
+    /// not make it this site's login because the page posted the form twice.
+    private var keyFills = Set<SHA256.Digest>()
     /// The key's field as the page last reported it (CSS px): re-placed on
     /// every layout of the tab and whenever the saved logins change.
     private var keyBoxes: [(x: Double, y: Double, w: Double, h: Double)] = []
@@ -166,6 +170,7 @@ final class WebTabController: NSObject {
         loginProxy.controller = nil
         pendingLogin = nil
         filledFromKey = nil
+        keyFills.removeAll()
         keyBoxes = []
         credentialsWatch = nil
         view.showKeys(at: [])
@@ -314,18 +319,18 @@ final class WebTabController: NSObject {
         })
     }
 
-    /// The key's menu: this host's login first; every other one behind
+    /// The key's menu: this page's logins first (the saved host's own, then
+    /// every credential that lists this site); every other one behind
     /// "Other Logins" — a slip of the mouse cannot put a lab password into
     /// some other page.
     private func showLoginMenu(from button: NSView) {
-        let store = AppModel.shared.credentialStore
-        let all = store.credentials.map { WebLoginKey.Login(id: $0.id, name: $0.name, username: $0.username) }
-        let (own, others) = WebLoginKey.menu(hostCredential: liveHost.credentialID, all: all)
         let menu = NSMenu()
-        if let own {
-            let item = NSMenuItem(title: own.title, action: #selector(pickLogin(_:)), keyEquivalent: "")
+        let (site, others) = WebLoginKey.menu(hostCredential: liveHost.credentialID, hostAddress: liveHost.address,
+                                              page: committedURL, all: loginsForMenu)
+        for login in site {
+            let item = NSMenuItem(title: login.title, action: #selector(pickLogin(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = own.id
+            item.representedObject = login.id
             menu.addItem(item)
         }
         if !others.isEmpty {
@@ -347,16 +352,39 @@ final class WebTabController: NSObject {
     @objc private func pickLogin(_ item: NSMenuItem) {
         guard let id = item.representedObject as? UUID,
               let credential = AppModel.shared.credentialStore.credential(for: id) else { return }
-        fill(credential, ownLogin: id == liveHost.credentialID)
+        let page = committedURL ?? ""
+        let login = WebLoginKey.Login(id: credential.id, name: credential.name, username: credential.username,
+                                      websites: credential.websites ?? [])
+        let siteLogin = WebLoginKey.isSiteLogin(login, page: page, hostCredential: liveHost.credentialID,
+                                                hostAddress: liveHost.address)
+        // The saved host's own login goes into the host's own address only
+        // (or a site it lists) — never into a page the tab wandered off to.
+        if credential.id == liveHost.credentialID, !siteLogin {
+            view.bar.notice(WebFillLogin.Refusal.otherOrigin.message)
+            NSSound.beep()
+            return
+        }
+        fill(credential, siteLogin: siteLogin)
+    }
+
+    private var loginsForMenu: [WebLoginKey.Login] {
+        AppModel.shared.credentialStore.credentials.map {
+            WebLoginKey.Login(id: $0.id, name: $0.name, username: $0.username, websites: $0.websites ?? [])
+        }
     }
 
     /// Puts `credential` into the page — never submitted. The host's own
     /// login only on the host's own address; another one (picked by the
     /// user) into the page on screen, never into a page still being replaced.
-    private func fill(_ credential: Credential, ownLogin: Bool) {
+    /// `siteLogin`: the page's own login (the saved host's credential on its
+    /// address, or one that lists this site) — checked against that address;
+    /// any other picked login goes into the committed page on screen.
+    private func fill(_ credential: Credential, siteLogin: Bool) {
         let password = AppModel.shared.credentialStore.password(for: credential) ?? ""
         let pageURL = webView.url?.absoluteString
-        let target = ownLogin ? liveHost.address : (committedURL ?? "")
+        let page = committedURL ?? ""
+        let target = siteLogin && credential.id == liveHost.credentialID && WebAddress.sameOrigin(page, liveHost.address)
+            ? liveHost.address : page
         if let refusal = WebFillLogin.check(pageURL: pageURL, savedURL: target, username: credential.username,
                                             hasPassword: !password.isEmpty,
                                             provisional: WebFillLogin.isProvisional(currentURL: pageURL, committedURL: committedURL)) {
@@ -371,6 +399,7 @@ final class WebTabController: NSObject {
             return
         }
         filledFromKey = Self.digest(credential.username, password)
+        keyFills.insert(filledFromKey!)
         webView.callAsyncJavaScript(WebFillLogin.script,
                                     arguments: ["user": credential.username, "pass": password, "expected": expected],
                                     in: nil, in: .defaultClient) { [weak self] result in
@@ -429,6 +458,13 @@ final class WebTabController: NSObject {
             guard let saved = Keychain.passwordWithoutPrompt(for: $0.id) else { return true }
             return saved == login.password
         }
+        // The same login is saved already: this site joins its list, so the
+        // key offers it here first next time (Safari's "for this website").
+        if !keyFills.contains(typed), let same = store.credentials.first(where: {
+            $0.username == login.username && Keychain.passwordWithoutPrompt(for: $0.id) == login.password
+        }) {
+            store.addWebsite(login.origin, to: same.id)
+        }
         let offer = WebLoginKey.offer(username: login.username, password: login.password,
                                       hostLogin: hostCredential.map { ($0.id, $0.username, Keychain.passwordWithoutPrompt(for: $0.id)) },
                                       alreadySaved: alreadySaved,
@@ -441,7 +477,8 @@ final class WebTabController: NSObject {
             view.bar.ask("Save login for \(place)?", action: "Save") { [weak self] yes in
                 guard let self else { return }
                 guard yes else { self.declinedSaveOrigins.insert(originKey); return }
-                let credential = store.add(name: place, username: login.username, password: login.password)
+                let credential = store.add(name: place, username: login.username, password: login.password,
+                                           websites: WebLoginKey.siteKey(login.origin).map { [$0] } ?? [])
                 // A saved host with no login of its own gets this one.
                 if var host = self.savedHost, WebAddress.sameOrigin(host.address, login.origin),
                    store.credential(for: host.credentialID) == nil {
@@ -455,6 +492,9 @@ final class WebTabController: NSObject {
                 guard let self else { return }
                 guard yes else { self.declinedSaveOrigins.insert(originKey); return }
                 if Keychain.setPassword(login.password, for: id) {
+                    // Sessions that logged in with the old one must not reuse it.
+                    AppModel.shared.forgetCachedPasswords(forCredential: id)
+                    store.addWebsite(login.origin, to: id)
                     self.view.bar.notice("Password updated")
                 } else {
                     self.view.bar.notice("The password could not be saved")

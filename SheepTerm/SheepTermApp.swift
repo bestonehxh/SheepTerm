@@ -91,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if env["SHEEPTERM_DEBUG_SIDEBAR"] == "1" { AppModel.shared.sidebarShown = true }
             }
         }
+        if env["SHEEPTERM_DEBUG_SHEET"] == "passwords" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.showCredentials = true }
+        }
         if env["SHEEPTERM_DEBUG_SHEET"] == "newwebtab" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.newWebTab() }
         }
@@ -405,7 +408,7 @@ struct SheepTermCommands: Commands {
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(!mainWindowKey.isKey)
             Divider()
-            Button("Credentials…") { model.showCredentials = true }
+            Button("Passwords…") { model.showCredentials = true }
             Button("Known Hosts…") { model.openKnownHosts() }
             Divider()
             Toggle("Log Sessions to File", isOn: $model.sessionLogging)

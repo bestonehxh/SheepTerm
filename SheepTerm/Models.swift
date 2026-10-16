@@ -4758,3 +4758,17 @@ extension String {
         range(of: query, options: [.caseInsensitive, .diacriticInsensitive], locale: .current) != nil
     }
 }
+
+/// A saved login (credentials.json). The password is never here — it lives
+/// in the Keychain vault, keyed by `id` (`CredentialStore`).
+struct Credential: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var name: String
+    var username: String
+    /// The web sites this login belongs to (5.0 (24), Safari's): origins as
+    /// `WebLoginKey.siteKey` writes them ("https://192.168.225.39:443"). The
+    /// login key lists these first on such a page and fills them only there.
+    /// Optional so every credentials.json written before decodes unchanged;
+    /// nil and [] mean the same.
+    var websites: [String]? = nil
+}

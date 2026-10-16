@@ -2,11 +2,6 @@ import AppKit
 import Combine
 import Foundation
 
-struct Credential: Identifiable, Codable, Hashable {
-    var id = UUID()
-    var name: String
-    var username: String
-}
 
 /// Credential metadata lives in credentials.json; the password itself only
 /// ever lives in the macOS Keychain, keyed by the credential's UUID.
@@ -61,10 +56,9 @@ final class CredentialStore: ObservableObject {
     ///
     /// Passwords are not part of a backup, so a credential restored from
     /// another Mac has no Keychain entry here. NOTE: it will be prompted for
-    /// on EVERY connection, not stored after the first — `Keychain.setPassword`
-    /// has exactly one caller, `add(name:username:password:)`, and there is no
-    /// re-save path. The doc used to claim otherwise. Editing the credential
-    /// and entering the password stores it; that is the way to fix it today.
+    /// on EVERY connection, not stored after the first: connecting never
+    /// re-saves it. Passwords → Edit (or Update after a web login typed by
+    /// hand) stores it; that is the way to fix it.
     func reloadFromDisk() {
         let (loaded, warning) = Self.load()
         credentials = loaded
@@ -184,14 +178,14 @@ final class CredentialStore: ObservableObject {
         alert.messageText = "Credentials not saved"
         alert.informativeText = """
             SheepTerm could not write credentials.json (\(error.localizedDescription)). \
-            The credential you just changed is not saved; its password was not stored either.
+            The change you just made to the credential list is not saved.
             """
         alert.addButton(withTitle: "OK")
         alert.sheepStyled().runModal()
     }
 
     @discardableResult
-    func add(name: String, username: String, password: String) -> Credential {
+    func add(name: String, username: String, password: String, websites: [String] = []) -> Credential {
         // The NAME goes through the store's own name pass (the one door every
         // caller shares — there is no rename for a credential). A name with an
         // inner tab or newline only had its ENDS trimmed, and once it was
@@ -203,9 +197,10 @@ final class CredentialStore: ObservableObject {
         // pure control characters). Storing the RAW input put an invisible
         // label in every picker and alert; every other name door in the
         // stores refuses instead, so this one does too.
+        let sites = WebLoginKey.cleanedSites(websites)
         let credential = Credential(
             name: cleaned.isEmpty ? "Unnamed Credential" : cleaned,
-            username: username)
+            username: username, websites: sites.isEmpty ? nil : sites)
         noteUserMutation()
         credentials.append(credential)
         uiTrace("CredentialStore.add appended \(credential.name) → \(credentials.count) entries")
@@ -250,6 +245,40 @@ final class CredentialStore: ObservableObject {
             """
         alert.addButton(withTitle: "OK")
         alert.sheepStyled().runModal()
+    }
+
+    /// Passwords page / Save login: a credential's name, user or web sites
+    /// changed (the password goes through `Keychain.setPassword`). False when
+    /// it is not there any more or the file did not take it.
+    @discardableResult
+    func update(_ credential: Credential) -> Bool {
+        guard let index = credentials.firstIndex(where: { $0.id == credential.id }) else { return false }
+        var changed = credential
+        let cleaned = ConfigurationHygiene.cleanedName(credential.name)
+        changed.name = cleaned.isEmpty ? credentials[index].name : cleaned
+        changed.websites = WebLoginKey.cleanedSites(credential.websites ?? [])
+        if changed.websites?.isEmpty == true { changed.websites = nil }
+        guard changed != credentials[index] else { return true }
+        let before = credentials[index]
+        noteUserMutation()
+        credentials[index] = changed
+        guard save() else {
+            credentials[index] = before
+            return false
+        }
+        return true
+    }
+
+    /// Save login: `origin`'s site joins the credential's list (no-op when
+    /// it is there already).
+    @discardableResult
+    func addWebsite(_ origin: String, to id: UUID) -> Bool {
+        guard var credential = credential(for: id), let site = WebLoginKey.siteKey(origin) else { return false }
+        var sites = credential.websites ?? []
+        guard !sites.contains(site) else { return true }
+        sites.append(site)
+        credential.websites = sites
+        return update(credential)
     }
 
     func credential(for id: UUID?) -> Credential? {

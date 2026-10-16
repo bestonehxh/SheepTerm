@@ -8,6 +8,8 @@ import Synchronization
 final class SSHTerminalController: NSObject {
     /// The view, its fading scroller and SafePaste. See SessionTerminalHost.
     let terminalHost = SessionTerminalHost(safePaste: true)
+    /// The device hears the new size once it settles (`ResizeCoalescer`).
+    private lazy var resizes = ResizeCoalescer { [weak self] cols, rows in self?.worker.resize(cols: cols, rows: rows) }
     var terminalView: TerminalView { terminalHost.terminalView }
     private(set) var host: Host
     /// Set by `stop()` (tab closed): no prompt may appear for a tab that is gone.
@@ -878,7 +880,7 @@ extension SSHTerminalController: TerminalViewDelegate {
     }
 
     func sizeChanged(_ view: TerminalView, cols: Int, rows: Int) {
-        worker.resize(cols: cols, rows: rows)
+        resizes.changed(cols: cols, rows: rows)
     }
 
     func titleChanged(_ view: TerminalView, title: String) {

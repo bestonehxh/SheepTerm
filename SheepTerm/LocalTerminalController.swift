@@ -10,6 +10,8 @@ final class LocalTerminalController: NSObject {
     /// it exists for device CLIs, where a multi-line paste is a configuration
     /// change; a shell pastes the way every other macOS terminal does.
     let terminalHost = SessionTerminalHost(safePaste: false)
+    /// The shell hears the new size once it settles (`ResizeCoalescer`).
+    private lazy var resizes = ResizeCoalescer { [weak self] cols, rows in self?.process.resize(cols: cols, rows: rows) }
     var terminalView: TerminalView { terminalHost.terminalView }
     /// Set in `init` — `LocalProcess` needs its delegate, which is `self`.
     private var process: LocalProcess!
@@ -119,7 +121,7 @@ extension LocalTerminalController: TerminalViewDelegate {
     }
 
     func sizeChanged(_ view: TerminalView, cols: Int, rows: Int) {
-        process.resize(cols: cols, rows: rows)
+        resizes.changed(cols: cols, rows: rows)
     }
 
     func titleChanged(_ view: TerminalView, title: String) {
