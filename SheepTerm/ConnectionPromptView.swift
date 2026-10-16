@@ -783,7 +783,8 @@ struct StageTrack: View {
     let nodes: [Node]
     let current: Int
     let failed: Bool
-    private static let node: CGFloat = 24
+    /// 40 pt nodes (was 24): the user picked the largest of four on a real card.
+    private static let node: CGFloat = 40
 
     init(current: ConnectionStage, failed: Bool) {
         nodes = ConnectionStage.allCases.map { Node(label: $0.label, symbol: $0.symbol) }
@@ -826,12 +827,12 @@ struct StageTrack: View {
                     Circle().stroke(fill.opacity(0.45), lineWidth: 1.5).padding(-3)
                 }
                 Image(systemName: stage.symbol)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(reached ? Color.white : Theme.dimText)
             }
             .frame(width: Self.node, height: Self.node)
             Text(stage.label)
-                .font(.system(size: 10, weight: isCurrent ? .semibold : .regular))
+                .font(.system(size: 12.5, weight: isCurrent ? .semibold : .regular))
                 .foregroundStyle(isCurrent ? Color.primary : Color.secondary)
                 .fixedSize()
                 .frame(width: Self.node)
