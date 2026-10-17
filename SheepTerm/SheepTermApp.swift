@@ -389,6 +389,9 @@ struct SheepTermCommands: Commands {
         // and an update check is not an every-day keystroke.
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { AppUpdater.shared.checkNow() }
+            Button("♥ Support SheepTerm…") {
+                NSWorkspace.shared.open(URL(string: "https://github.com/sponsors/bestonehxh")!)
+            }
         }
 
         CommandGroup(after: .newItem) {

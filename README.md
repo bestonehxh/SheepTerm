@@ -12,7 +12,7 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
   <a href="https://github.com/bestonehxh/SheepTerm-Windows/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download SheepTerm for Windows"></a>
 </p>
 
-<p align="center"><a href="https://sheepterm.com/">Website</a> · <a href="https://github.com/bestonehxh/SheepTerm/releases">Release notes</a> · <a href="https://github.com/bestonehxh/SheepTerm-Windows">SheepTerm for Windows</a></p>
+<p align="center"><a href="https://sheepterm.com/">Website</a> · <a href="https://github.com/sponsors/bestonehxh">♥ Support SheepTerm</a> · <a href="https://github.com/bestonehxh/SheepTerm/releases">Release notes</a> · <a href="https://github.com/bestonehxh/SheepTerm-Windows">SheepTerm for Windows</a></p>
 
 <p align="center"><img src="docs/images/hero.webp" width="900" alt="SheepTerm with three panes: Cisco, Aruba CX and FortiGate output highlighted per vendor, beside a sidebar of saved hosts"></p>
 
