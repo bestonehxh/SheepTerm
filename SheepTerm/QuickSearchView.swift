@@ -173,22 +173,22 @@ struct QuickSearchView: View {
                 }
                 Text(name)
                     .font(.system(size: 12.5))
+                    .foregroundStyle(isHighlighted ? Color.white : Color.primary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 if let detail {
                     Text(detail)
                         .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isHighlighted ? Color.white.opacity(0.72) : Color.secondary)
                         .lineLimit(1)
                 }
             }
             .contentShape(Rectangle())
             .padding(.vertical, 3)
             .padding(.horizontal, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(isHighlighted ? Theme.accent.opacity(0.22) : Color.clear)
-            )
+            // The sidebar's Graphite boxes (the user): faint under the
+            // pointer, stronger with brighter text on the highlighted row.
+            .modifier(GraphiteRowBox(highlighted: isHighlighted))
         }
         .buttonStyle(.plain)
     }
@@ -219,5 +219,19 @@ struct QuickSearchView: View {
         if let target = connectTarget ?? matches.first {
             connect(target)
         }
+    }
+}
+
+/// The sidebar's row boxes in SwiftUI (`SidebarRowView.boxColor`): white 6 %
+/// under the pointer, 14 % on the highlighted row.
+struct GraphiteRowBox: ViewModifier {
+    let highlighted: Bool
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.white.opacity(highlighted ? 0.14 : (hovering ? 0.06 : 0))))
+            .onHover { hovering = $0 }
     }
 }

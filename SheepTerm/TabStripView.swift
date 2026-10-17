@@ -510,6 +510,8 @@ private struct SerialShadowChip: View {
     let onOpen: () -> Void
     let onDismiss: () -> Void
     @State private var hovering = false
+    @State private var glowUp = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 6) {
@@ -531,10 +533,17 @@ private struct SerialShadowChip: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? Theme.tabActive.opacity(0.5) : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(Theme.accent.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-        .foregroundStyle(hovering ? Theme.tabText : Theme.accent)
+        // Clear white like the sidebar's selected row, a hairline edge and a
+        // soft white glow that breathes so it is noticed (the user; still
+        // when Reduce Motion is on). Only while the shadow is up (≤ 15 s).
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hovering ? 0.2 : 0.14)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+        .shadow(color: Color.white.opacity(reduceMotion ? 0.6 : (glowUp ? 0.7 : 0.2)), radius: 6)
+        .foregroundStyle(Color.white)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { glowUp = true }
+        }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { onOpen() }

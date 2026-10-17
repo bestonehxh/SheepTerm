@@ -785,6 +785,8 @@ struct StageTrack: View {
     let failed: Bool
     /// 40 pt nodes (was 24): the user picked the largest of four on a real card.
     private static let node: CGFloat = 40
+    /// The muted blue of the app icon's ring.
+    private static let frost = Color(red: 0.36, green: 0.53, blue: 0.69)
 
     init(current: ConnectionStage, failed: Bool) {
         nodes = ConnectionStage.allCases.map { Node(label: $0.label, symbol: $0.symbol) }
@@ -803,9 +805,9 @@ struct StageTrack: View {
             ForEach(nodes.indices, id: \.self) { index in
                 if index != 0 {
                     Rectangle()
-                        .fill(index <= current ? Theme.accent : Theme.controlFill)
-                        .frame(height: 3)
-                        .padding(.top, (Self.node - 3) / 2)
+                        .fill(index <= current ? Theme.accent.opacity(0.55) : Color.white.opacity(0.08))
+                        .frame(height: 2)
+                        .padding(.top, (Self.node - 2) / 2)
                 }
                 column(index)
             }
@@ -818,22 +820,35 @@ struct StageTrack: View {
         let stage = nodes[index]
         let reached = index <= current
         let isCurrent = index == current
-        let fill: Color = isCurrent && failed ? Color(nsColor: SheepAlert.destructiveRed)
-            : (reached ? Theme.accent : Theme.controlFill)
+        // Frosted blue glass like the ring of the app icon (the user): one
+        // soft blue, a touch lighter in the middle, no edge, nothing inside,
+        // no light behind it (tried, dropped); the current step is ringed in
+        // white light as bright as its glyph and label. A failure turns the glass red.
+        let glass: Color = isCurrent && failed ? Color(nsColor: SheepAlert.destructiveRed) : Self.frost
         return VStack(spacing: 4) {
             ZStack {
-                Circle().fill(fill)
+                if reached {
+                    Circle().fill(RadialGradient(colors: [glass.opacity(0.95), glass.opacity(0.78)],
+                                                 center: .center, startRadius: 2, endRadius: Self.node / 2))
+                } else {
+                    Circle().fill(Color.white.opacity(0.07))
+                }
                 if isCurrent {
-                    Circle().stroke(fill.opacity(0.45), lineWidth: 1.5).padding(-3)
+                    Circle().stroke(Color.white, lineWidth: 1.3).padding(-4)
+                        .shadow(color: Color.white.opacity(0.62), radius: 4)
+                        .shadow(color: Color.white.opacity(0.3), radius: 8)
                 }
                 Image(systemName: stage.symbol)
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(reached ? Color.white : Theme.dimText)
+                    .foregroundStyle(reached ? (isCurrent ? Color.white : Color.white.opacity(0.85)) : Theme.dimText)
+                    // The current step's glyph and label: the same full white, a faint glow.
+                    .shadow(color: isCurrent ? Color.white.opacity(0.45) : .clear, radius: 3)
             }
             .frame(width: Self.node, height: Self.node)
             Text(stage.label)
                 .font(.system(size: 12.5, weight: isCurrent ? .semibold : .regular))
-                .foregroundStyle(isCurrent ? Color.primary : Color.secondary)
+                .foregroundStyle(isCurrent ? Color.white : Color.secondary)
+                .shadow(color: isCurrent ? Color.white.opacity(0.45) : .clear, radius: 3)
                 .fixedSize()
                 .frame(width: Self.node)
         }
