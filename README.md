@@ -23,7 +23,7 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 - **Real MAC / ARP on macOS 27** — in local tabs and View ▸ Network Info.
 - **Password retry** — a wrong password asks again on the same connection.
 - **Bundled terminal fonts** and easier-to-read themes.
-- **简体中文 (Simplified Chinese, `zh-Hans`)** — menus, settings and dialogs in Chinese, following your system language.
+- **简体中文 (Simplified Chinese, `zh-Hans`)** — the interface follows your system language, with English as the fallback.
 
 ## Features
 
