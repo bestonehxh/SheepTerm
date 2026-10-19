@@ -51,7 +51,7 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 
 The interface follows your Mac's system language. If the system language is not supported, SheepTerm falls back to English. To switch manually, open **Settings → General → Language → App Language**, choose a language, then quit and reopen SheepTerm.
 
-All translations live in one Xcode String Catalog (`SheepTerm/Localization/Localizable.xcstrings`), so changing or adding a language is a single-file change. See [LOCALIZATION.md](LOCALIZATION.md) for details.
+All translations live in one Xcode String Catalog (`SheepTerm/Localization/Localizable.xcstrings`) instead of separate `.strings` files. See [LOCALIZATION.md](LOCALIZATION.md) for details, including how to add another language.
 
 ## Install
 
