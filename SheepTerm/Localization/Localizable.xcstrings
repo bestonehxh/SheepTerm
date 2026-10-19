@@ -11,17 +11,44 @@
             "state" : "new",
             "value" : "%1$@ (%2$@)"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@（%2$@）"
+          }
         }
       }
     },
     "%@ ago" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@前"
+          }
+        }
+      }
     },
     "%@ key · SHA256" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 密钥 · SHA256"
+          }
+        }
+      }
     },
     "%lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld"
+          }
+        }
+      }
     },
     "%lld host%@ · credentials %@" : {
       "localizations" : {
@@ -29,6 +56,12 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%1$lld host%2$@ · credentials %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台主机%2$@ · 凭据 %3$@"
           }
         }
       }
@@ -40,6 +73,12 @@
             "state" : "new",
             "value" : "%1$lld host%2$@%3$@ · %4$@"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台主机%2$@%3$@ · %4$@"
+          }
         }
       }
     },
@@ -50,11 +89,264 @@
             "state" : "new",
             "value" : "%1$lld of %2$lld selected"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选择 %1$lld / %2$lld"
+          }
         }
       }
     },
     "%lld pt" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 磅"
+          }
+        }
+      }
+    },
+    "Baud rate" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "波特率"
+          }
+        }
+      }
+    },
+    "Cancel the connection (Esc)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消连接（Esc）"
+          }
+        }
+      }
+    },
+    "Cipher mode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加密模式"
+          }
+        }
+      }
+    },
+    "Close this message" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭此消息"
+          }
+        }
+      }
+    },
+    "Confirm new passphrase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认新密码短语"
+          }
+        }
+      }
+    },
+    "Confirm passphrase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认密码短语"
+          }
+        }
+      }
+    },
+    "Connect this time only — the key is not saved and the next connection asks again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅本次连接——不会保存该密钥，下次连接时会再次询问"
+          }
+        }
+      }
+    },
+    "Create" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建"
+          }
+        }
+      }
+    },
+    "Current passphrase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前密码短语"
+          }
+        }
+      }
+    },
+    "Device family" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备系列"
+          }
+        }
+      }
+    },
+    "Don't trust this certificate — nothing is loaded or saved (Return / Esc)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不信任此证书——不会载入或保存任何内容（Return / Esc）"
+          }
+        }
+      }
+    },
+    "Don't trust this key — the connection is cancelled and nothing is saved (Return / Esc)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不信任此密钥——连接将取消，且不会保存任何内容（Return / Esc）"
+          }
+        }
+      }
+    },
+    "New passphrase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新密码短语"
+          }
+        }
+      }
+    },
+    "New Section" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建区段"
+          }
+        }
+      }
+    },
+    "Open this time only — nothing is saved and the next visit asks again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅本次打开——不会保存任何内容，下次访问时会再次询问"
+          }
+        }
+      }
+    },
+    "Remember this certificate for this host and open the page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记住此主机的证书并打开页面"
+          }
+        }
+      }
+    },
+    "Rename Group" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名分组"
+          }
+        }
+      }
+    },
+    "Rename Section" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名区段"
+          }
+        }
+      }
+    },
+    "Replace the trusted certificate with this one and open the page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用此证书替换已信任的证书并打开页面"
+          }
+        }
+      }
+    },
+    "Return" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回车"
+          }
+        }
+      }
+    },
+    "Review the saved key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看已保存的密钥"
+          }
+        }
+      }
+    },
+    "Save this key to known_hosts and connect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将此密钥保存到 known_hosts 并连接"
+          }
+        }
+      }
+    },
+    "Share passphrase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共享密码短语"
+          }
+        }
+      }
+    },
+    "Sync passphrase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步密码短语"
+          }
+        }
+      }
     },
     "↩ connect first result · esc close" : {
       "localizations" : {
@@ -89,14 +381,34 @@
       }
     },
     "⌘T tab · ⌘0 sidebar · ⌘1–9 switch" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⌘T 标签页 · ⌘0 侧边栏 · ⌘1–9 切换"
+          }
+        }
+      }
     },
     "⌘T tab · ⌘0 sidebar · ⌘1–9 switch · ⌃⌥B break" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⌘T 标签页 · ⌘0 侧边栏 · ⌘1–9 切换 · ⌃⌥B 发送中断信号"
+          }
+        }
+      }
     },
     "🐑" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🐑"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "🐑"
@@ -111,12 +423,24 @@
             "state" : "translated",
             "value" : "💤"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "💤"
+          }
         }
       }
     },
     "10.10.1.1" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "10.10.1.1"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "10.10.1.1"
@@ -131,12 +455,24 @@
             "state" : "translated",
             "value" : "22"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "22"
+          }
         }
       }
     },
     "192.168.225.39" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "192.168.225.39"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "192.168.225.39"
@@ -161,10 +497,24 @@
       }
     },
     "Actual Size" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实际大小"
+          }
+        }
+      }
     },
     "Add" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加"
+          }
+        }
+      }
     },
     "Add a password" : {
       "localizations" : {
@@ -189,11 +539,24 @@
             "state" : "translated",
             "value" : "Add an empty row (or press Return in the last one)"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加一个空行（或在最后一行按回车键）"
+          }
         }
       }
     },
     "Add Host" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加主机"
+          }
+        }
+      }
     },
     "Add Host…" : {
       "localizations" : {
@@ -244,7 +607,14 @@
       }
     },
     "Add Password" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加密码"
+          }
+        }
+      }
     },
     "Add row" : {
       "localizations" : {
@@ -263,11 +633,24 @@
       }
     },
     "Add Snippet" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加代码片段"
+          }
+        }
+      }
     },
     "admin" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "admin"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "admin"
@@ -282,12 +665,24 @@
             "state" : "translated",
             "value" : "After this the link stops working and the file is deleted from your Google Drive. Hosts already imported stay with the recipients."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此后链接将失效，文件也会从您的 Google 云端硬盘中删除。已导入的主机仍会保留在接收者那里。"
+          }
         }
       }
     },
     "AI" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "AI"
@@ -301,6 +696,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Allow remote programs to set the clipboard (OSC 52)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许远程程序设置剪贴板（OSC 52）"
           }
         }
       }
@@ -344,6 +745,12 @@
             "state" : "translated",
             "value" : "Applied to every open tab immediately; the grid re-measures, so columns and rows change with it. Also in View → Terminal Font, with ⌘+ / ⌘− for the size. On a display running a scaled resolution (the 13″ Air's stock 1470 × 956 is one) the whole screen is resampled before it reaches the eye, and a larger or heavier face survives that better than a thin one; Termius draws roughly 14 pt Semibold. Font smoothing is macOS's stroke thickening: on it makes light-on-dark text bolder with a soft grey edge, off (the default) draws thinner, cleaner stems — the same edge the Claude app's text has."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即应用到所有已打开的标签页；网格会重新测量，因此列数和行数也会随之变化。也可在“显示” → “终端字体”中调整，用 ⌘+ / ⌘− 改变大小。在运行缩放分辨率的显示器上（13 英寸 Air 的默认 1470 × 956 就是一例），整个画面在到达眼睛之前会被重新采样，因此较大或较粗的字形比细字更能保持清晰；Termius 大约使用 14 磅半粗体。字体平滑是 macOS 的笔画增粗：开启后会让深色背景上的浅色文字更粗，并带有柔和的灰色边缘；关闭（默认）则会绘制得更细、更干净——与 Claude 应用文字的边缘效果相同。"
+          }
         }
       }
     },
@@ -370,6 +777,12 @@
             "state" : "translated",
             "value" : "ARP"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARP"
+          }
         }
       }
     },
@@ -377,6 +790,12 @@
       "extractionState" : "stale",
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "arrow.down.to.line"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "arrow.down.to.line"
@@ -392,17 +811,44 @@
             "state" : "translated",
             "value" : "arrow.up.circle.fill"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "arrow.up.circle.fill"
+          }
         }
       }
     },
     "Ask %@" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "询问 %@"
+          }
+        }
+      }
     },
     "At least %lld characters." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "至少需要 %lld 个字符。"
+          }
+        }
+      }
     },
     "At least %lld characters. The link opens nothing without it. Tell the recipients by another route (phone, LINE) — never together with the link." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "至少需要 %lld 个字符。没有它，链接无法打开任何内容。请通过其他方式（电话、LINE）告知接收者——切勿与链接一起发送。"
+          }
+        }
+      }
     },
     "Auto-page (--More--)" : {
       "localizations" : {
@@ -410,6 +856,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Auto-page (--More--)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动翻页（--More--）"
           }
         }
       }
@@ -533,6 +985,12 @@
             "state" : "translated",
             "value" : "Branch — BKK"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支机构 — BKK"
+          }
         }
       }
     },
@@ -575,6 +1033,12 @@
             "state" : "translated",
             "value" : "built in — Packages/SheepSSH"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内置 — Packages/SheepSSH"
+          }
         }
       }
     },
@@ -584,6 +1048,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "built in — Packages/SheepVT"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内置 — Packages/SheepVT"
           }
         }
       }
@@ -627,11 +1097,24 @@
             "state" : "translated",
             "value" : "Cancel Import"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消导入"
+          }
         }
       }
     },
     "CERT AUTHORITY" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "证书颁发机构"
+          }
+        }
+      }
     },
     "Certificate · SHA-256" : {
       "localizations" : {
@@ -762,7 +1245,14 @@
       }
     },
     "Checking %@…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在检查 %@…"
+          }
+        }
+      }
     },
     "Checks GitHub a few seconds after every launch and once a day while SheepTerm is open. Nothing is installed until you press Install & Relaunch, and only a download whose signature matches is installed." : {
       "localizations" : {
@@ -770,6 +1260,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Checks GitHub a few seconds after every launch and once a day while SheepTerm is open. Nothing is installed until you press Install & Relaunch, and only a download whose signature matches is installed."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次启动几秒后检查 GitHub，并在 SheepTerm 保持打开时每天检查一次。在您按下“安装并重新启动”之前不会安装任何内容，并且只会安装签名匹配的下载项。"
           }
         }
       }
@@ -813,6 +1309,12 @@
             "state" : "translated",
             "value" : "Claude model"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 模型"
+          }
         }
       }
     },
@@ -822,6 +1324,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Clear"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
           }
         }
       }
@@ -880,6 +1388,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Clear website data?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除网站数据？"
           }
         }
       }
@@ -982,10 +1496,24 @@
       }
     },
     "Collapse All" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部折叠"
+          }
+        }
+      }
     },
     "Comes from “%@” — a credential's username and its password are one login. Pick “None (enter manually)” to type a different name." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自“%@”——凭据的用户名和密码属于同一个登录。选择“无（手动输入）”可输入其他名称。"
+          }
+        }
+      }
     },
     "Command" : {
       "localizations" : {
@@ -1004,7 +1532,14 @@
       }
     },
     "Command History · %@" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令历史记录 · %@"
+          }
+        }
+      }
     },
     "Command History…" : {
       "localizations" : {
@@ -1028,6 +1563,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Commands you send often. The Snippets menu types one into the current tab; a multi-line snippet goes through Safe Paste like any paste."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您经常发送的命令。“代码片段”菜单会将其中一条输入到当前标签页；多行片段会像普通粘贴一样经过安全粘贴。"
           }
         }
       }
@@ -1104,6 +1645,12 @@
             "state" : "translated",
             "value" : "Contains non-ASCII characters — sent exactly as typed"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包含非 ASCII 字符——将按原样发送"
+          }
         }
       }
     },
@@ -1113,6 +1660,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Continue"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续"
           }
         }
       }
@@ -1124,11 +1677,24 @@
             "state" : "translated",
             "value" : "Cookies, logins and caches of every web tab are removed. Open pages may sign you out."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将移除所有网页标签页的 Cookie、登录信息和缓存。已打开的页面可能会让您退出登录。"
+          }
         }
       }
     },
     "Copied" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拷贝"
+          }
+        }
+      }
     },
     "Copy" : {
       "localizations" : {
@@ -1141,7 +1707,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制"
+            "value" : "拷贝"
           }
         }
       }
@@ -1157,7 +1723,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部复制"
+            "value" : "全部拷贝"
           }
         }
       }
@@ -1173,7 +1739,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制全部输出"
+            "value" : "拷贝全部输出"
           }
         }
       }
@@ -1189,7 +1755,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制指纹"
+            "value" : "拷贝指纹"
           }
         }
       }
@@ -1205,7 +1771,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制 IP"
+            "value" : "拷贝 IP"
           }
         }
       }
@@ -1221,13 +1787,20 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制 IPv4"
+            "value" : "拷贝 IPv4"
           }
         }
       }
     },
     "Copy Link" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷贝链接"
+          }
+        }
+      }
     },
     "Copy MAC" : {
       "localizations" : {
@@ -1240,7 +1813,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制 MAC"
+            "value" : "拷贝 MAC"
           }
         }
       }
@@ -1251,6 +1824,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Could not remove the host key"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法移除主机密钥"
           }
         }
       }
@@ -1277,6 +1856,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Create New Group"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建新分组"
           }
         }
       }
@@ -1330,7 +1915,14 @@
       }
     },
     "Credential, row %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭据，第 %lld 行"
+          }
+        }
+      }
     },
     "Credentials not saved" : {
       "localizations" : {
@@ -1338,6 +1930,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Credentials not saved"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭据未保存"
           }
         }
       }
@@ -1348,6 +1946,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cryptography comes from macOS itself (CryptoKit, CommonCrypto, Security) and is updated with the system."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加密功能由 macOS 自身提供（CryptoKit、CommonCrypto、Security），并随系统更新。"
           }
         }
       }
@@ -1385,7 +1989,14 @@
       }
     },
     "Default Size (%lld pt)" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认大小（%lld 磅）"
+          }
+        }
+      }
     },
     "Delete" : {
       "localizations" : {
@@ -1404,7 +2015,14 @@
       }
     },
     "Delete %lld Selected…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除选中的 %lld 项…"
+          }
+        }
+      }
     },
     "Delete Group" : {
       "localizations" : {
@@ -1423,7 +2041,14 @@
       }
     },
     "Delete Selected…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除所选…"
+          }
+        }
+      }
     },
     "Delete snippet" : {
       "localizations" : {
@@ -1479,6 +2104,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Deletes the encrypted copy in your Google Drive. This Mac's hosts and passwords are kept and uploaded again under a new passphrase; your other Macs will ask for the new one."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除您 Google 云端硬盘中的加密副本。此 Mac 上的主机和密码会保留，并使用新密码短语重新上传；您的其他 Mac 会要求输入新密码短语。"
           }
         }
       }
@@ -1586,6 +2217,12 @@
             "state" : "translated",
             "value" : "Don't send — the command stays typed (Return / Esc)"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不发送——命令会保留在输入行（Return / Esc）"
+          }
         }
       }
     },
@@ -1628,6 +2265,12 @@
             "state" : "translated",
             "value" : "Drag to change the order shown in the sidebar"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖动以更改侧边栏中的显示顺序"
+          }
         }
       }
     },
@@ -1642,7 +2285,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "创建副本"
+            "value" : "复制"
           }
         }
       }
@@ -1664,7 +2307,14 @@
       }
     },
     "Edit “%@”" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑“%@”"
+          }
+        }
+      }
     },
     "Edit Host" : {
       "localizations" : {
@@ -1689,11 +2339,24 @@
             "state" : "translated",
             "value" : "Edit Host…"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑主机…"
+          }
         }
       }
     },
     "Edit Password" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑密码"
+          }
+        }
+      }
     },
     "Edit Snippets…" : {
       "localizations" : {
@@ -1718,6 +2381,12 @@
             "state" : "translated",
             "value" : "Encrypts everything before it leaves this Mac. Nobody can recover it — not Google, not SheepTerm. You will type it once on each Mac."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在离开此 Mac 之前加密所有内容。没有人能恢复它——Google 不能，SheepTerm 也不能。您需要在每台 Mac 上输入一次。"
+          }
         }
       }
     },
@@ -1738,10 +2407,24 @@
       }
     },
     "Every session log in %@. Double-click a line to open the log; the newest logs come first." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 中的所有会话日志。双击某一行以打开日志；最新的日志排在前面。"
+          }
+        }
+      }
     },
     "Expand All" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部展开"
+          }
+        }
+      }
     },
     "Export Group…" : {
       "localizations" : {
@@ -1765,6 +2448,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fill Login (the key in the tab's bar) types this login into the page — only on this host's own address, never submitted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“填充登录”（标签页栏中的钥匙）会将此登录信息输入到页面中——仅限此主机自己的地址，绝不会提交"
           }
         }
       }
@@ -1952,6 +2641,12 @@
             "state" : "new",
             "value" : "For %1$@ · %2$@"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于 %1$@ · %2$@"
+          }
         }
       }
     },
@@ -1961,6 +2656,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Forgets the Google sign-in and the vault key on this Mac. Your hosts and passwords stay here, and the synced copy stays for your other Macs."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "忘记此 Mac 上的 Google 登录和保管库密钥。您的主机和密码会保留在这里，同步副本也会为您的其他 Mac 保留。"
           }
         }
       }
@@ -2014,7 +2715,14 @@
       }
     },
     "From %@" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 %@"
+          }
+        }
+      }
     },
     "General" : {
       "localizations" : {
@@ -2054,6 +2762,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Google account addresses, separated by commas. SheepTerm opens the link only when signed in as one of them. The file on your Drive is encrypted; without the passphrase it is unreadable."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 账户地址，用逗号分隔。仅当登录的账户是其中之一时，SheepTerm 才会打开该链接。您云端硬盘中的文件已加密；没有密码短语将无法读取。"
           }
         }
       }
@@ -2107,7 +2821,14 @@
       }
     },
     "hashed entry · line %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "哈希条目 · 第 %lld 行"
+          }
+        }
+      }
     },
     "Header not recognised" : {
       "localizations" : {
@@ -2116,14 +2837,34 @@
             "state" : "translated",
             "value" : "Header not recognised"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法识别表头"
+          }
         }
       }
     },
     "Hide password" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏密码"
+          }
+        }
+      }
     },
     "Hides the whole Recent section — header included. SheepTerm remembers at most %lld recent connections, so that is the ceiling here too." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏整个“最近连接”部分——包括标题。SheepTerm 最多记住 %lld 个最近连接，因此这里也是这个上限。"
+          }
+        }
+      }
     },
     "Highlight" : {
       "localizations" : {
@@ -2174,10 +2915,24 @@
       }
     },
     "Host / IP, row %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机 / IP，第 %lld 行"
+          }
+        }
+      }
     },
     "Host keys you trusted, from %@. Remove one only when you know the device's key really changed." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您信任的主机密钥，来自 %@。只有在您确认设备密钥确实已更改时，才移除其中一个。"
+          }
+        }
+      }
     },
     "Hosts added here never write a session log, even with Log Sessions to File on." : {
       "localizations" : {
@@ -2185,6 +2940,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hosts added here never write a session log, even with Log Sessions to File on."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在此添加的主机永远不会写入会话日志，即使已开启“将会话日志保存到文件”。"
           }
         }
       }
@@ -2196,6 +2957,12 @@
             "state" : "translated",
             "value" : "Hosts, groups, snippets, settings and passwords on every Mac — encrypted with your passphrase before they leave this one."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每台 Mac 上的主机、分组、代码片段、设置和密码——在离开这台 Mac 之前使用您的密码短语加密。"
+          }
         }
       }
     },
@@ -2205,6 +2972,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hosts, groups, snippets, settings and saved passwords follow you to every Mac signed in to the same Google account. Everything is encrypted on this Mac with your sync passphrase before it is uploaded to a hidden SheepTerm folder in your own Google Drive."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机、分组、代码片段、设置和已保存的密码会跟随您到登录同一 Google 账户的每台 Mac。所有内容都会先在这台 Mac 上使用您的同步密码短语加密，然后上传到您自己的 Google 云端硬盘中的隐藏 SheepTerm 文件夹。"
           }
         }
       }
@@ -2216,6 +2989,12 @@
             "state" : "translated",
             "value" : "How the sidebar and tab bar are painted. Liquid Glass picks up the desktop behind the window (macOS 26); Solid Color keeps the flat chrome tile. The layout is the same either way — the terminal itself is never translucent."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "侧边栏和标签页栏的绘制方式。“液态玻璃”会透出窗口后面的桌面（macOS 26）；“纯色”则保留平整的界面色块。两种方式的布局相同——终端本身永远不会半透明。"
+          }
         }
       }
     },
@@ -2225,6 +3004,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "http:// or https:// — https:// is added when there is no scheme"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "http:// 或 https://——未指定协议时会自动添加 https://"
           }
         }
       }
@@ -2316,6 +3101,12 @@
             "state" : "new",
             "value" : "Imported “%1$@” — %2$lld host%3$@%4$@."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入“%1$@”——%2$lld 台主机%3$@%4$@。"
+          }
         }
       }
     },
@@ -2400,7 +3191,14 @@
       }
     },
     "Interface" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接口"
+          }
+        }
+      }
     },
     "Interface summary" : {
       "localizations" : {
@@ -2435,13 +3233,34 @@
       }
     },
     "IP" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "IP"
+          }
+        }
+      }
     },
     "IPv4" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "IPv4"
+          }
+        }
+      }
     },
     "IPv6" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "IPv6"
+          }
+        }
+      }
     },
     "Keep" : {
       "localizations" : {
@@ -2449,6 +3268,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Keep"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留"
           }
         }
       }
@@ -2459,6 +3284,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Keep Saved Host"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留已保存的主机"
           }
         }
       }
@@ -2502,6 +3333,12 @@
             "state" : "translated",
             "value" : "known_hosts marks this key @revoked, so the connection was refused. "
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "known_hosts 将此密钥标记为 @revoked，因此连接被拒绝。"
+          }
         }
       }
     },
@@ -2511,6 +3348,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lab FortiGate"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实验室 FortiGate"
           }
         }
       }
@@ -2548,7 +3391,14 @@
       }
     },
     "Leave empty to keep the saved password" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留空以保留已保存的密码"
+          }
+        }
+      }
     },
     "Left" : {
       "localizations" : {
@@ -2573,6 +3423,12 @@
             "state" : "translated",
             "value" : "Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许此主机使用您本地的 ssh-agent 密钥继续跳转。仅对您信任的主机启用——连接期间，那里的 root 用户可以使用该套接字。"
+          }
         }
       }
     },
@@ -2582,6 +3438,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lets vim or tmux on a device copy into the Mac's clipboard. Off by default: a compromised device could plant a command for your next ⌘V. When on, pasting text a session set always asks first. Reading the clipboard is never allowed."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许设备上的 vim 或 tmux 复制到 Mac 的剪贴板。默认关闭：被攻破的设备可能会为您的下一次 ⌘V 埋下命令。开启后，粘贴由会话设置的文本时始终会先询问。永远不允许读取剪贴板。"
           }
         }
       }
@@ -2603,7 +3465,14 @@
       }
     },
     "line %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 行"
+          }
+        }
+      }
     },
     "Link" : {
       "localizations" : {
@@ -2676,11 +3545,24 @@
             "state" : "translated",
             "value" : "Logs into this host first and tunnels the connection through it (ProxyJump). Type user@host[:port] or pick a saved host; empty = direct. The jump host needs TCP forwarding allowed."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先登录此主机并通过它建立连接隧道（ProxyJump）。输入 user@host[:port] 或选择已保存的主机；留空 = 直接连接。跳板机需要允许 TCP 转发。"
+          }
         }
       }
     },
     "MAC" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MAC"
+          }
+        }
+      }
     },
     "MAC, address, interface, error text…" : {
       "localizations" : {
@@ -2688,6 +3570,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "MAC, address, interface, error text…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MAC、地址、接口、错误文本…"
           }
         }
       }
@@ -2698,6 +3586,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS 27 hides MAC addresses and the ARP table from commands in a local tab. On: ifconfig, arp, ndp, netstat and networksetup run through launchd and show the real values. Applies to new local tabs."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS 27 会在本地标签页的命令中隐藏 MAC 地址和 ARP 表。开启后：ifconfig、arp、ndp、netstat 和 networksetup 会通过 launchd 运行并显示真实值。适用于新的本地标签页。"
           }
         }
       }
@@ -2740,6 +3634,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Merge into Existing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并到现有分组"
           }
         }
       }
@@ -2831,6 +3731,12 @@
             "state" : "translated",
             "value" : "Move to Group"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动到分组"
+          }
         }
       }
     },
@@ -2883,11 +3789,24 @@
       }
     },
     "Name, row %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称，第 %lld 行"
+          }
+        }
+      }
     },
     "name@gmail.com, other@gmail.com" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "name@gmail.com, other@gmail.com"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "name@gmail.com, other@gmail.com"
@@ -3002,13 +3921,20 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新建分区…"
+            "value" : "新建区段…"
           }
         }
       }
     },
     "New Serial Console" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建串口控制台"
+          }
+        }
+      }
     },
     "New Serial Console…" : {
       "localizations" : {
@@ -3027,7 +3953,14 @@
       }
     },
     "New SSH Connection" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建 SSH 连接"
+          }
+        }
+      }
     },
     "New SSH Connection…" : {
       "localizations" : {
@@ -3110,10 +4043,24 @@
       }
     },
     "No match" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无匹配结果"
+          }
+        }
+      }
     },
     "No saved passwords yet" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚无已保存的密码"
+          }
+        }
+      }
     },
     "No serial device found" : {
       "localizations" : {
@@ -3228,7 +4175,14 @@
       }
     },
     "None of the hosts in this group has a saved credential." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此分组中没有主机保存了凭据。"
+          }
+        }
+      }
     },
     "Not available in this build" : {
       "localizations" : {
@@ -3279,7 +4233,14 @@
       }
     },
     "Nothing recorded for this host yet" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机暂无记录"
+          }
+        }
+      }
     },
     "Nothing was added — the saved host already has these settings." : {
       "localizations" : {
@@ -3287,6 +4248,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nothing was added — the saved host already has these settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未添加任何内容——已保存的主机已有这些设置。"
           }
         }
       }
@@ -3298,6 +4265,12 @@
             "state" : "translated",
             "value" : "Nothing was added."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未添加任何内容。"
+          }
         }
       }
     },
@@ -3308,11 +4281,24 @@
             "state" : "translated",
             "value" : "Nothing was changed."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未更改任何内容。"
+          }
         }
       }
     },
     "Now send the passphrase another way — phone, LINE, in person — never in the same message as the link. Anyone with both can open the share." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现在通过其他方式发送密码短语——电话、LINE、当面——切勿与链接放在同一条消息中。同时拥有两者的人都能打开共享。"
+          }
+        }
+      }
     },
     "OK" : {
       "localizations" : {
@@ -3337,6 +4323,12 @@
             "state" : "translated",
             "value" : "One file with every group and host, the Recent list, credential names and all app settings. Passwords are never included — they stay in this Mac's Keychain. Restoring replaces the current configuration and copies it aside first."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个文件包含所有分组和主机、“最近连接”列表、凭据名称以及所有应用设置。密码永远不会包含在内——它们保留在此 Mac 的钥匙串中。恢复会替换当前配置，并先将其备份到一旁。"
+          }
         }
       }
     },
@@ -3347,6 +4339,12 @@
             "state" : "translated",
             "value" : "One per line — a bare address means https"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每行一个——仅填写地址时表示 https"
+          }
         }
       }
     },
@@ -3356,6 +4354,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Only the reference is stored — passwords stay in the Keychain. Serial consoles in the group are left alone."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅保存引用——密码保留在钥匙串中。该分组中的串口控制台不受影响。"
           }
         }
       }
@@ -3377,7 +4381,14 @@
       }
     },
     "Open %@" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 %@"
+          }
+        }
+      }
     },
     "Open in Split" : {
       "localizations" : {
@@ -3444,7 +4455,14 @@
       }
     },
     "Open serial console %@" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开串口控制台 %@"
+          }
+        }
+      }
     },
     "optional" : {
       "localizations" : {
@@ -3485,11 +4503,24 @@
             "state" : "translated",
             "value" : "Other Logins"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他登录信息"
+          }
         }
       }
     },
     "Passphrase…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码短语…"
+          }
+        }
+      }
     },
     "Passphrases don't match" : {
       "localizations" : {
@@ -3514,6 +4545,12 @@
             "state" : "translated",
             "value" : "Password not removed from the Keychain"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码未从钥匙串中移除"
+          }
         }
       }
     },
@@ -3523,6 +4560,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Password not saved to the Keychain"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码未保存到钥匙串"
           }
         }
       }
@@ -3549,6 +4592,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Passwords live in the Keychain — filling this saves it as a new credential for this host."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码保存在钥匙串中——填写此项会将其保存为此主机的新凭据。"
           }
         }
       }
@@ -3608,6 +4657,12 @@
             "state" : "translated",
             "value" : "Paste Immediately"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即粘贴"
+          }
         }
       }
     },
@@ -3617,6 +4672,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Paste stopped part-way"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴中途停止"
           }
         }
       }
@@ -3628,6 +4689,12 @@
             "state" : "translated",
             "value" : "Paste text a session put on the clipboard?"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴会话放入剪贴板的文本？"
+          }
         }
       }
     },
@@ -3637,6 +4704,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择高亮规则。“自动”只给所有设备共有的内容着色——地址、掩码、MAC、VLAN ID、up/down。指定设备系列后会添加其端口名称，并按该平台的含义读取状态词。"
           }
         }
       }
@@ -3743,6 +4816,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Read a .csv / .tsv / .txt file — the same rules as a paste"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取 .csv / .tsv / .txt 文件——规则与粘贴相同"
           }
         }
       }
@@ -3886,7 +4965,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重新加载"
+            "value" : "重新载入"
           }
         }
       }
@@ -3902,7 +4981,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重新加载页面"
+            "value" : "重新载入页面"
           }
         }
       }
@@ -3946,6 +5025,12 @@
             "state" : "translated",
             "value" : "Remove History"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除历史记录"
+          }
         }
       }
     },
@@ -3972,6 +5057,12 @@
             "state" : "translated",
             "value" : "Remove Host"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除主机"
+          }
         }
       }
     },
@@ -3992,7 +5083,14 @@
       }
     },
     "Remove row %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除第 %lld 行"
+          }
+        }
+      }
     },
     "Remove Section" : {
       "localizations" : {
@@ -4005,7 +5103,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "移除分区"
+            "value" : "移除区段"
           }
         }
       }
@@ -4085,7 +5183,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重命名分区…"
+            "value" : "重命名区段…"
           }
         }
       }
@@ -4129,6 +5227,12 @@
             "state" : "translated",
             "value" : "Replace"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换"
+          }
         }
       }
     },
@@ -4138,6 +5242,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rescan serial devices (plug the console cable into a powered switch first)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新扫描串口设备（请先将控制台线插入已通电的交换机）"
           }
         }
       }
@@ -4159,7 +5269,14 @@
       }
     },
     "Reset Sync…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置同步…"
+          }
+        }
+      }
     },
     "Reset Sync… — delete the synced copy and start again from this Mac" : {
       "localizations" : {
@@ -4168,11 +5285,24 @@
             "state" : "translated",
             "value" : "Reset Sync… — delete the synced copy and start again from this Mac"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置同步…——删除同步副本并从此 Mac 重新开始"
+          }
         }
       }
     },
     "Reset…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置…"
+          }
+        }
+      }
     },
     "Restart SheepTerm to apply the language. Active sessions stay open until you quit." : {
       "localizations" : {
@@ -4196,6 +5326,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Restore"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复"
           }
         }
       }
@@ -4222,6 +5358,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Restore this backup?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复此备份？"
           }
         }
       }
@@ -4265,11 +5407,24 @@
             "state" : "translated",
             "value" : "Revoke"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "吊销"
+          }
         }
       }
     },
     "REVOKED" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已吊销"
+          }
+        }
+      }
     },
     "Right" : {
       "localizations" : {
@@ -4293,6 +5448,12 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Runs `%1$@ %2$@` in a new terminal tab"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在新的终端标签页中运行“%1$@ %2$@”"
           }
         }
       }
@@ -4320,6 +5481,12 @@
             "state" : "translated",
             "value" : "Safe Paste Limit"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安全粘贴上限"
+          }
         }
       }
     },
@@ -4329,6 +5496,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Same as SheepTerm → Check for Updates…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与“SheepTerm” → “检查更新…”相同"
           }
         }
       }
@@ -4404,6 +5577,12 @@
             "state" : "translated",
             "value" : "Saved credentials could not be read"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取已保存的凭据"
+          }
         }
       }
     },
@@ -4413,6 +5592,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Saved hosts could not be read"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取已保存的主机"
           }
         }
       }
@@ -4439,6 +5624,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Saved snippets could not be read"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取已保存的代码片段"
           }
         }
       }
@@ -4550,13 +5741,20 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "分区"
+            "value" : "区段"
           }
         }
       }
     },
     "Section, row %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "区段，第 %lld 行"
+          }
+        }
+      }
     },
     "Select All" : {
       "localizations" : {
@@ -4582,6 +5780,12 @@
             "state" : "translated",
             "value" : "selection.pin.in.out"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "selection.pin.in.out"
+          }
         }
       }
     },
@@ -4596,7 +5800,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "半粗"
+            "value" : "半粗体"
           }
         }
       }
@@ -4672,6 +5876,12 @@
             "state" : "translated",
             "value" : "Send Line by Line"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "逐行发送"
+          }
         }
       }
     },
@@ -4681,6 +5891,12 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Sends %1$lld saved login%2$@ (username and password) with the group."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随分组发送 %1$lld 个已保存的登录%2$@（用户名和密码）。"
           }
         }
       }
@@ -4708,11 +5924,24 @@
             "state" : "translated",
             "value" : "Set by a device or program (OSC 52), not by a copy."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由设备或程序（OSC 52）设置，而非通过拷贝操作设置。"
+          }
         }
       }
     },
     "Set Credential for “%@”" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为“%@”设置凭据"
+          }
+        }
+      }
     },
     "Set Credential for Group…" : {
       "localizations" : {
@@ -4731,7 +5960,14 @@
       }
     },
     "Share “%@” as a Link" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将“%@”共享为链接"
+          }
+        }
+      }
     },
     "Share Link…" : {
       "localizations" : {
@@ -4836,6 +6072,12 @@
             "state" : "translated",
             "value" : "Show Backup Folder"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示备份文件夹"
+          }
         }
       }
     },
@@ -4878,11 +6120,24 @@
             "state" : "translated",
             "value" : "show interfaces status | include connected"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "show interfaces status | include connected"
+          }
         }
       }
     },
     "Show password" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示密码"
+          }
+        }
+      }
     },
     "Show Recent" : {
       "localizations" : {
@@ -4933,7 +6188,14 @@
       }
     },
     "Sign in to Sync" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录以同步"
+          }
+        }
+      }
     },
     "Sign in with Google" : {
       "localizations" : {
@@ -5054,6 +6316,12 @@
             "state" : "translated",
             "value" : "Snippets not saved"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码片段未保存"
+          }
         }
       }
     },
@@ -5112,6 +6380,12 @@
             "state" : "translated",
             "value" : "SSH"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH"
+          }
         }
       }
     },
@@ -5139,6 +6413,12 @@
             "state" : "translated",
             "value" : "stop.circle.fill"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "stop.circle.fill"
+          }
         }
       }
     },
@@ -5159,7 +6439,14 @@
       }
     },
     "Switches to this session" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到此会话"
+          }
+        }
+      }
     },
     "Sync" : {
       "localizations" : {
@@ -5178,7 +6465,14 @@
       }
     },
     "Sync account" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步账户"
+          }
+        }
+      }
     },
     "Sync is not available in this build" : {
       "localizations" : {
@@ -5245,10 +6539,24 @@
       }
     },
     "System-wide (%@) — read-only; an administrator must edit it." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统范围（%@）——只读；必须由管理员编辑。"
+          }
+        }
+      }
     },
     "Tab %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签页 %lld"
+          }
+        }
+      }
     },
     "Tabs" : {
       "localizations" : {
@@ -5322,6 +6630,12 @@
             "state" : "translated",
             "value" : "text.append"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "text.append"
+          }
         }
       }
     },
@@ -5332,6 +6646,12 @@
             "state" : "translated",
             "value" : "That group no longer exists."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该分组已不存在。"
+          }
         }
       }
     },
@@ -5341,6 +6661,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "That is not a SheepTerm share link"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这不是有效的 SheepTerm 共享链接"
           }
         }
       }
@@ -5368,6 +6694,12 @@
             "state" : "translated",
             "value" : "The connection was refused — this can mean a man-in-the-middle. "
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接被拒绝——这可能意味着中间人攻击。"
+          }
         }
       }
     },
@@ -5378,11 +6710,24 @@
             "state" : "translated",
             "value" : "The group could not be exported"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法导出该分组"
+          }
         }
       }
     },
     "The name “%@” is already used." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称“%@”已被使用。"
+          }
+        }
+      }
     },
     "The passphrase chosen when sync was turned on on your first Mac. This Mac's current hosts are set aside (like a restore) before the synced ones replace them." : {
       "localizations" : {
@@ -5390,6 +6735,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The passphrase chosen when sync was turned on on your first Mac. This Mac's current hosts are set aside (like a restore) before the synced ones replace them."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在您的第一台 Mac 上开启同步时选择的密码短语。在同步的主机替换它们之前，此 Mac 当前的主机会被放到一旁（类似于恢复）。"
           }
         }
       }
@@ -5417,6 +6768,12 @@
             "state" : "translated",
             "value" : "This cannot be undone."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此操作无法撤销。"
+          }
         }
       }
     },
@@ -5426,6 +6783,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This host never writes a session log, even with Log Sessions to File on."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机永远不会写入会话日志，即使已开启“将会话日志保存到文件”。"
           }
         }
       }
@@ -5452,6 +6815,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This session never writes a log file, even with Log Sessions to File on. Saved with the host if you save it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话永远不会写入日志文件，即使已开启“将会话日志保存到文件”。如果保存主机，此设置会随主机一起保存。"
           }
         }
       }
@@ -5625,6 +6994,12 @@
             "state" : "translated",
             "value" : "Types one line, then Return, into every ticked tab. Only connected SSH and serial tabs are listed; local shells are not."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入一行文本，然后按 Return，将其发送到每个勾选的标签页。仅列出已连接的 SSH 和串口标签页；本地 Shell 不在其中。"
+          }
         }
       }
     },
@@ -5634,6 +7009,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Types the line into the session; press Return there to run it"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将该行输入到会话中；在那里按 Return 运行"
           }
         }
       }
@@ -5693,6 +7074,12 @@
             "state" : "translated",
             "value" : "Update Saved Host"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新已保存的主机"
+          }
         }
       }
     },
@@ -5715,6 +7102,12 @@
     "URL" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "URL"
@@ -5745,12 +7138,24 @@
             "state" : "translated",
             "value" : "Used by every row that leaves its Credential cell empty. A cell holding text that names no saved credential is that host's username instead — it does not fall back to this. Only the reference is saved — passwords stay in the Keychain."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于每一行中“凭据”单元格为空的行。如果单元格中的文本未指向任何已保存的凭据，则会将该文本视为主机的用户名——不会回退到此设置。仅保存引用——密码保留在钥匙串中。"
+          }
         }
       }
     },
     "user@host" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "user@host"
+          }
+        },
+        "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "user@host"
@@ -5845,6 +7250,12 @@
             "state" : "translated",
             "value" : "When a session that had been working drops, reconnect automatically (3 tries: 2 s / 5 s / 10 s). Serial counts: a console cable on a rebooting switch drops exactly the way an SSH session does. SSH sessions also send a keepalive every 60 s to survive device idle-timeouts."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当原本正常工作的会话断开时，自动重新连接（尝试 3 次：2 秒 / 5 秒 / 10 秒）。串口也适用：重启中的交换机上的控制台线断开方式与 SSH 会话完全相同。SSH 会话还会每 60 秒发送一次 keepalive，以承受设备空闲超时。"
+          }
         }
       }
     },
@@ -5876,6 +7287,436 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最大化窗格"
+          }
+        }
+      }
+    },
+    "ArubaOS (Controller / MM)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ArubaOS（控制器 / MM）"
+          }
+        }
+      }
+    },
+    "Auto (all vendors)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动（所有厂商）"
+          }
+        }
+      }
+    },
+    "Auto (recommended)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动（推荐）"
+          }
+        }
+      }
+    },
+    "Delete %lld Groups" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 %lld 个分组"
+          }
+        }
+      }
+    },
+    "Delete %lld Hosts" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 %lld 台主机"
+          }
+        }
+      }
+    },
+    "Details…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "详情…"
+          }
+        }
+      }
+    },
+    "Host key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机密钥"
+          }
+        }
+      }
+    },
+    "Install & Relaunch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安装并重新启动"
+          }
+        }
+      }
+    },
+    "Later" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "稍后"
+          }
+        }
+      }
+    },
+    "Legacy allowed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许旧版算法"
+          }
+        }
+      }
+    },
+    "Linux / server" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Linux / 服务器"
+          }
+        }
+      }
+    },
+    "Local Shell" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地 Shell"
+          }
+        }
+      }
+    },
+    "Modern only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅限现代算法"
+          }
+        }
+      }
+    },
+    "No Section" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无区段"
+          }
+        }
+      }
+    },
+    "Open Link in New Tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在新标签页中打开链接"
+          }
+        }
+      }
+    },
+    "SF Mono (System)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SF Mono（系统）"
+          }
+        }
+      }
+    },
+    "Skip This Version" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过此版本"
+          }
+        }
+      }
+    },
+    "This Mac" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本机"
+          }
+        }
+      }
+    },
+    "User" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用户"
+          }
+        }
+      }
+    },
+    "%lld hosts go with them." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台主机会随之删除。"
+          }
+        }
+      }
+    },
+    "%lld hosts stay in “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台主机保留在“%@”中。"
+          }
+        }
+      }
+    },
+    "1 host goes with them." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 台主机会随之删除。"
+          }
+        }
+      }
+    },
+    "1 host stays in “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 台主机保留在“%@”中。"
+          }
+        }
+      }
+    },
+    "and %lld more" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以及另外 %lld 台"
+          }
+        }
+      }
+    },
+    "Aruba CX" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aruba CX"
+          }
+        }
+      }
+    },
+    "Check Point Gaia" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check Point Gaia"
+          }
+        }
+      }
+    },
+    "Cisco IOS / IOS-XE / NX-OS" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cisco IOS / IOS-XE / NX-OS"
+          }
+        }
+      }
+    },
+    "Delete %lld groups?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要删除 %lld 个分组吗？"
+          }
+        }
+      }
+    },
+    "Fortinet FortiOS" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fortinet FortiOS"
+          }
+        }
+      }
+    },
+    "H3C / HPE Comware" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "H3C / HPE Comware"
+          }
+        }
+      }
+    },
+    "Huawei VRP" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Huawei VRP"
+          }
+        }
+      }
+    },
+    "Juniper Junos" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Juniper Junos"
+          }
+        }
+      }
+    },
+    "Palo Alto PAN-OS" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Palo Alto PAN-OS"
+          }
+        }
+      }
+    },
+    "Remove %lld hosts?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除 %lld 台主机吗？"
+          }
+        }
+      }
+    },
+    "Remove “%@”?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除“%@”吗？"
+          }
+        }
+      }
+    },
+    "Remove the heading “%@”?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除区段“%@”吗？"
+          }
+        }
+      }
+    },
+    "Answer" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答"
+          }
+        }
+      }
+    },
+    "Answer (hidden)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答（隐藏）"
+          }
+        }
+      }
+    },
+    "Certificate" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "证书"
+          }
+        }
+      }
+    },
+    "Not accepted — try again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未被接受——请重试"
+          }
+        }
+      }
+    },
+    "Page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "页面"
+          }
+        }
+      }
+    },
+    "Password" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码"
+          }
+        }
+      }
+    },
+    "Wrong password" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码错误"
           }
         }
       }

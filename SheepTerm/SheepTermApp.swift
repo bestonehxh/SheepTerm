@@ -495,7 +495,7 @@ struct SheepTermCommands: Commands {
             }
             Menu {
                 ForEach(Vendor.allCases) { family in
-                    Toggle(family.label, isOn: Binding(
+                    Toggle(family.localizedLabel, isOn: Binding(
                         get: { model.selectedTab?.highlightVendor == family },
                         set: { _ in model.setHighlightVendorCurrent(family) }
                     ))
@@ -698,6 +698,30 @@ struct SheepTermCommands: Commands {
                 Button("Tab \(number)") { model.selectTab(number: number) }
                     .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
             }
+        }
+    }
+}
+
+/// The app's spelling of a device family, from the string catalog.
+///
+/// `Vendor.label` lives in the shared Windows source (root `Package.swift`),
+/// where there is no catalog and the value is used in log lines and in the AI
+/// prompt as a plain English identifier — so the localization lives here, at
+/// the point the user reads it.
+extension Vendor {
+    var localizedLabel: String {
+        switch self {
+        case .auto: return String(localized: "Auto (all vendors)")
+        case .cisco: return String(localized: "Cisco IOS / IOS-XE / NX-OS")
+        case .arubaCX: return String(localized: "Aruba CX")
+        case .arubaOS: return String(localized: "ArubaOS (Controller / MM)")
+        case .huawei: return String(localized: "Huawei VRP")
+        case .comware: return String(localized: "H3C / HPE Comware")
+        case .juniper: return String(localized: "Juniper Junos")
+        case .panos: return String(localized: "Palo Alto PAN-OS")
+        case .fortios: return String(localized: "Fortinet FortiOS")
+        case .gaia: return String(localized: "Check Point Gaia")
+        case .linux: return String(localized: "Linux / server")
         }
     }
 }

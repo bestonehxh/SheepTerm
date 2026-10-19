@@ -88,7 +88,7 @@ enum Theme {
     }
 
     static func fontFamilyLabel(_ family: String) -> String {
-        family == systemFontFamily ? "SF Mono (System)" : family
+        family == systemFontFamily ? String(localized: "SF Mono (System)") : family
     }
 
     /// Every installed family with a fixed-pitch member, once per launch —

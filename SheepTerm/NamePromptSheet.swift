@@ -5,14 +5,14 @@ import SwiftUI
 /// where a section goes is decided by the row it was opened from, never by a
 /// second picker in here.
 struct NamePromptSheet: View {
-    let title: String
-    let confirmLabel: String
+    let title: LocalizedStringKey
+    let confirmLabel: LocalizedStringKey
     let onCommit: (String) -> Void
 
     @State private var name: String
     @Environment(\.dismiss) private var dismiss
 
-    init(title: String, confirmLabel: String = "Save", initialName: String = "",
+    init(title: LocalizedStringKey, confirmLabel: LocalizedStringKey = "Save", initialName: String = "",
          onCommit: @escaping (String) -> Void) {
         self.title = title
         self.confirmLabel = confirmLabel

@@ -629,7 +629,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
         if let target = parent.connectTarget {
             let section = item(id: "section-connect", kind: .section)
-            section.title = "Connect"
+            section.title = String(localized: "Connect")
             let row = item(id: "connect-target", kind: .staticRow)
             row.host = target
             section.children = [row]
@@ -637,9 +637,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         }
 
         let local = item(id: "section-local", kind: .section)
-        local.title = "This Mac"
+        local.title = String(localized: "This Mac")
         let shell = item(id: "local", kind: .staticRow)
-        shell.title = "Local Shell"
+        shell.title = String(localized: "Local Shell")
         local.children = [shell]
         result.append(local)
 
@@ -1282,7 +1282,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             }
         }
         if !offered.isEmpty { submenu.addItem(.separator()) }
-        add(submenu, "No Section") { [weak self] in
+        add(submenu, String(localized: "No Section")) { [weak self] in
             guard let self else { return }
             let filed = self.parent.store.filedCount(ofHostIDs: ids)
             // The same words as Move to Group above, from the one place that
@@ -1333,8 +1333,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                                                 hosts: self.parent.store.hosts(inGroup: group.id))
                 let alert = SheepAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "Remove the heading “\(label)”?"
-                alert.informativeText = "\(count) host\(count == 1 ? "" : "s") stay in “\(group.name)”."
+                alert.messageText = String(localized: "Remove the heading “\(label)”?")
+                alert.informativeText = (count == 1
+                    ? String(localized: "1 host stays in “\(group.name)”.")
+                    : String(localized: "\(count) hosts stay in “\(group.name)”."))
                 alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
                 alert.addButton(withTitle: String(localized: "Remove Section"))
                 // An EMPTY heading is removed without asking: there is
@@ -1423,7 +1425,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 guard let self else { return }
                 let alert = SheepAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "Remove “\(host.name)”?"
+                alert.messageText = String(localized: "Remove “\(host.name)”?")
                 alert.informativeText = String(localized: "This cannot be undone.")
                 alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
                 alert.addButton(withTitle: String(localized: "Remove"))
@@ -1462,13 +1464,15 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // with them" before deleting thirty-five.
         let hostCount = HostStore.hostCount(ofGroupIDs: Set(groups.map(\.id)),
                                             in: parent.store.groups)
-        add(menu, "Delete \(groups.count) Groups") { [weak self] in
+        add(menu, String(localized: "Delete \(groups.count) Groups")) { [weak self] in
             guard let self else { return }
             let alert = SheepAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Delete \(groups.count) groups?"
-            alert.informativeText = "\(hostCount) host\(hostCount == 1 ? "" : "s") go with them. "
-                + "This cannot be undone."
+            alert.messageText = String(localized: "Delete \(groups.count) groups?")
+            alert.informativeText = (hostCount == 1
+                ? String(localized: "1 host goes with them.")
+                : String(localized: "\(hostCount) hosts go with them."))
+                + " " + String(localized: "This cannot be undone.")
             alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
             alert.addButton(withTitle: String(localized: "Delete"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
@@ -1517,16 +1521,16 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         }
         menu.addItem(sectionSubmenu(for: hosts))
         menu.addItem(.separator())
-        add(menu, "Delete \(hosts.count) Hosts") { [weak self] in
+        add(menu, String(localized: "Delete \(hosts.count) Hosts")) { [weak self] in
             guard let self else { return }
             let alert = SheepAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Remove \(hosts.count) hosts?"
+            alert.messageText = String(localized: "Remove \(hosts.count) hosts?")
             // Two names and a count, not a list: the list pushed this alert
             // into the wide layout, and the number is what matters here.
             let named = hosts.prefix(2).map(\.name).joined(separator: ", ")
-            let more = hosts.count > 2 ? " and \(hosts.count - 2) more" : ""
-            alert.informativeText = "\(named)\(more). This cannot be undone."
+            let more = hosts.count > 2 ? " " + String(localized: "and \(hosts.count - 2) more") : ""
+            alert.informativeText = "\(named)\(more). " + String(localized: "This cannot be undone.")
             alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
             alert.addButton(withTitle: String(localized: "Remove"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }

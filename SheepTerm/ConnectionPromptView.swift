@@ -500,7 +500,7 @@ struct ConnectionCardContent: View {
         switch model.page {
         case .progress:
             CardPage(content: { ProgressView().controlSize(.small) },
-                     buttons: { CardButton("Cancel", role: .neutral, help: "Cancel the connection (Esc)") { model.escape() } })
+                     buttons: { CardButton(String(localized: "Cancel"), role: .neutral, help: String(localized: "Cancel the connection (Esc)")) { model.escape() } })
         case .question(let prompt):
             if case .hostKey(let question) = prompt.step {
                 HostKeyPage(model: model, question: question)
@@ -516,11 +516,11 @@ struct ConnectionCardContent: View {
                 ForEach(plan.buttons.indices, id: \.self) { index in
                     switch plan.buttons[index] {
                     case .openKnownHosts:
-                        CardButton("Open Known Hosts…", role: .accent, help: "Review the saved key") { model.send(.openKnownHosts) }
+                        CardButton(String(localized: "Open Known Hosts…"), role: .accent, help: String(localized: "Review the saved key")) { model.send(.openKnownHosts) }
                     case .tryAgain:
-                        CardButton("Try Again", role: .green, help: "Return") { model.send(.tryAgain) }
+                        CardButton(String(localized: "Try Again"), role: .green, help: String(localized: "Return")) { model.send(.tryAgain) }
                     default:
-                        CardButton("Close", role: .neutral, help: "Close this message") { model.send(.close) }
+                        CardButton(String(localized: "Close"), role: .neutral, help: String(localized: "Close this message")) { model.send(.close) }
                     }
                 }
             })
@@ -622,7 +622,7 @@ private struct EntryPage: View {
             // username or password does not need the wide card's full line).
             PopupTextEntry(placeholder: placeholder, secure: prompt.isSecure, text: $text,
                            focusTrigger: model.focusRequest, focusOnAppear: model.focusOnAppear,
-                           error: prompt.plan?.note,
+                           error: localizedNote(prompt.plan?.note),
                            onSubmit: submit) { focused in
                 if focused { model.onFocus?() }
             }
@@ -630,7 +630,7 @@ private struct EntryPage: View {
             .disabled(model.entry.busy)
             .id(model.pageID)
         }, buttons: {
-            CardButton("Cancel", role: .neutral, help: "Cancel the connection (Esc)") { model.escape() }
+            CardButton(String(localized: "Cancel"), role: .neutral, help: String(localized: "Cancel the connection (Esc)")) { model.escape() }
             CardButton(submitTitle, role: .green, help: "Return", busy: model.entry.busy, action: submit)
         })
         .onChange(of: model.pageID) { _, _ in text = "" }
@@ -649,15 +649,32 @@ private struct EntryPage: View {
 #endif
 
     private var submitTitle: String {
-        if case .submit(let title)? = prompt.plan?.returnKey { return title }
-        return prompt.isSecure ? "Connect" : "Continue"
+        if case .submit(let title)? = prompt.plan?.returnKey {
+            switch title {
+            case "Connect": return String(localized: "Connect")
+            case "Continue": return String(localized: "Continue")
+            default: return title
+            }
+        }
+        return prompt.isSecure ? String(localized: "Connect") : String(localized: "Continue")
+    }
+
+    /// The shared plan's red line, from the string catalog (see
+    /// `ConnectionStage.localizedLabel`).
+    private func localizedNote(_ note: String?) -> String? {
+        switch note {
+        case "Wrong password": return String(localized: "Wrong password")
+        case "Not accepted — try again": return String(localized: "Not accepted — try again")
+        default: return note
+        }
     }
 
     private var placeholder: String {
         switch prompt.step {
-        case .username: return "Username"
-        case .password: return "Password"
-        case .challenge(_, let secure): return secure ? "Answer (hidden)" : "Answer"
+        case .username: return String(localized: "Username")
+        case .password: return String(localized: "Password")
+        case .challenge(_, let secure):
+            return secure ? String(localized: "Answer (hidden)") : String(localized: "Answer")
         case .hostKey: return ""
         }
     }
@@ -679,12 +696,12 @@ private struct HostKeyPage: View {
             // the main action (Trust & Connect). Trust is green and takes a
             // deliberate click — Return and Escape answer Cancel (the card's
             // keyDown) and no button takes the keyboard's focus.
-            CardButton("Connect Once", role: .caution,
-                       help: "Connect this time only — the key is not saved and the next connection asks again") { model.send(.answer(.trustOnce)) }
+            CardButton(String(localized: "Connect Once"), role: .caution,
+                       help: String(localized: "Connect this time only — the key is not saved and the next connection asks again")) { model.send(.answer(.trustOnce)) }
             Spacer(minLength: 16)
-            CardButton("Cancel", role: .neutral,
-                       help: "Don't trust this key — the connection is cancelled and nothing is saved (Return / Esc)") { model.send(.answer(.cancel)) }
-            CardButton("Trust & Connect", role: .green, help: "Save this key to known_hosts and connect") { model.send(.answer(.trust)) }
+            CardButton(String(localized: "Cancel"), role: .neutral,
+                       help: String(localized: "Don't trust this key — the connection is cancelled and nothing is saved (Return / Esc)")) { model.send(.answer(.cancel)) }
+            CardButton(String(localized: "Trust & Connect"), role: .green, help: String(localized: "Save this key to known_hosts and connect")) { model.send(.answer(.trust)) }
         })
     }
 }
@@ -717,15 +734,15 @@ private struct CertificatePage: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.14), lineWidth: 1))
             }
         }, buttons: {
-            CardButton("Connect Once", role: .caution,
-                       help: "Open this time only — nothing is saved and the next visit asks again") { model.send(.answer(.trustOnce)) }
+            CardButton(String(localized: "Connect Once"), role: .caution,
+                       help: String(localized: "Open this time only — nothing is saved and the next visit asks again")) { model.send(.answer(.trustOnce)) }
             Spacer(minLength: 16)
-            CardButton("Cancel", role: .neutral,
-                       help: "Don't trust this certificate — nothing is loaded or saved (Return / Esc)") { model.send(.answer(.cancel)) }
+            CardButton(String(localized: "Cancel"), role: .neutral,
+                       help: String(localized: "Don't trust this certificate — nothing is loaded or saved (Return / Esc)")) { model.send(.answer(.cancel)) }
             if question.canTrust {
-                CardButton("Trust & Connect", role: .green,
-                           help: question.changed ? "Replace the trusted certificate with this one and open the page"
-                                                  : "Remember this certificate for this host and open the page") { model.send(.answer(.trust)) }
+                CardButton(String(localized: "Trust & Connect"), role: .green,
+                           help: question.changed ? String(localized: "Replace the trusted certificate with this one and open the page")
+                                                  : String(localized: "Remember this certificate for this host and open the page")) { model.send(.answer(.trust)) }
             }
         })
     }
@@ -776,9 +793,9 @@ struct StageTrack: View {
         let symbol: String
     }
     /// A web tab's track: Connect · Certificate · Page.
-    static let webNodes = [Node(label: "Connect", symbol: ConnectionStage.connect.symbol),
-                           Node(label: "Certificate", symbol: "key.fill"),
-                           Node(label: "Page", symbol: "globe")]
+    static let webNodes = [Node(label: String(localized: "Connect"), symbol: ConnectionStage.connect.symbol),
+                           Node(label: String(localized: "Certificate"), symbol: "key.fill"),
+                           Node(label: String(localized: "Page"), symbol: "globe")]
 
     let nodes: [Node]
     let current: Int
@@ -789,7 +806,7 @@ struct StageTrack: View {
     private static let frost = Color(red: 0.36, green: 0.53, blue: 0.69)
 
     init(current: ConnectionStage, failed: Bool) {
-        nodes = ConnectionStage.allCases.map { Node(label: $0.label, symbol: $0.symbol) }
+        nodes = ConnectionStage.allCases.map { Node(label: $0.localizedLabel, symbol: $0.symbol) }
         self.current = current.rawValue
         self.failed = failed
     }
@@ -939,6 +956,21 @@ final class ConnectionOverlayView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         onGeometryChange?()
+    }
+}
+
+/// The stage track's labels, from the string catalog: `ConnectionCardPlan.swift`
+/// is shared with the Windows build (root `Package.swift`) and keeps its
+/// English `label` for the harness, so the localized spelling lives here.
+extension ConnectionStage {
+    var localizedLabel: String {
+        switch self {
+        case .connect: return String(localized: "Connect")
+        case .hostKey: return String(localized: "Host key")
+        case .user: return String(localized: "User")
+        case .password: return String(localized: "Password")
+        case .terminal: return String(localized: "Terminal")
+        }
     }
 }
 

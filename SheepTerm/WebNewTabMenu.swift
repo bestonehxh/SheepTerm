@@ -10,7 +10,7 @@ import AppKit
 /// a tab instead of loading in place.
 @MainActor final class WebNewTabMenu {
     static let itemID = "WKMenuItemIdentifierOpenLinkInNewWindow"
-    static let title = "Open Link in New Tab"
+    static let title = String(localized: "Open Link in New Tab")
     private var observers: [NSObjectProtocol] = []
 
     /// Retitles the item in `menu` (if there is one) and calls `onPick` when

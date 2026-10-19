@@ -170,7 +170,7 @@ struct HostEditSheet: View {
                     FormPopup(selection: $baud, items: baudChoices.map { .option(String($0), $0) })
                         .formRow("Baud rate")
                 }
-                FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.label, $0) })
+                FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                     .formRow("Device family")
                     .help("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
                 Toggle("Don't log this session", isOn: $noLog)

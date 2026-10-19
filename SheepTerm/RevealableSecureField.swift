@@ -18,7 +18,7 @@ extension View {
 
 /// Password field with an eye button to reveal/hide what's typed.
 struct RevealableSecureField: View {
-    let title: String
+    let title: LocalizedStringKey
     @Binding var text: String
     @State private var revealed = false
     /// Same reason as AuthPromptView: SecureField and TextField are two

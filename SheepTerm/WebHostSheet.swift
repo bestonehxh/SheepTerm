@@ -49,8 +49,8 @@ struct WebHostSheet: View {
 
     private var title: String {
         switch mode {
-        case .add: return "Add Host"
-        case .edit: return "Edit Host"
+        case .add: return String(localized: "Add Host")
+        case .edit: return String(localized: "Edit Host")
         }
     }
 

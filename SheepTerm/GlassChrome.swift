@@ -143,7 +143,7 @@ extension View {
     /// One row of a host form: `label` in the form's label column, this
     /// control (its own label hidden) filling the field column at
     /// `SheetLayout.fieldWidth` — so every field and popup ends at one edge.
-    func formRow(_ label: String) -> some View {
+    func formRow(_ label: LocalizedStringKey) -> some View {
         LabeledContent {
             labelsHidden()
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -252,8 +252,8 @@ struct FormPopup<Value: Hashable>: NSViewRepresentable {
 
 /// A host form's label at the fixed label-column width, trailing.
 struct SheetLabel: View {
-    let text: String
-    init(_ text: String) { self.text = text }
+    let text: LocalizedStringKey
+    init(_ text: LocalizedStringKey) { self.text = text }
     var body: some View {
         Text(text).lineLimit(1).frame(width: SheetLayout.labelWidth, alignment: .trailing)
     }

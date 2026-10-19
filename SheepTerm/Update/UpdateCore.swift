@@ -125,11 +125,11 @@ nonisolated enum UpdateOfferAction: Equatable, Sendable {
 
     var title: String {
         switch self {
-        case .install: return "Install & Relaunch"
-        case .details: return "Details…"
-        case .later: return "Later"
-        case .skip: return "Skip This Version"
-        case .back: return "Back"
+        case .install: return String(localized: "Install & Relaunch")
+        case .details: return String(localized: "Details…")
+        case .later: return String(localized: "Later")
+        case .skip: return String(localized: "Skip This Version")
+        case .back: return String(localized: "Back")
         }
     }
 

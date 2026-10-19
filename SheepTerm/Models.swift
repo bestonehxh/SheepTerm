@@ -56,9 +56,9 @@ enum CipherMode: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .auto: return "Auto (recommended)"
-        case .modern: return "Modern only"
-        case .legacy: return "Legacy allowed"
+        case .auto: return String(localized: "Auto (recommended)")
+        case .modern: return String(localized: "Modern only")
+        case .legacy: return String(localized: "Legacy allowed")
         }
     }
 }

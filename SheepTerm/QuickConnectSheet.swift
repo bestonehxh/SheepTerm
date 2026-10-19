@@ -87,7 +87,7 @@ struct QuickConnectSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(addOnly ? "Add Host" : kind == .ssh ? "New SSH Connection" : "New Serial Console")
+            Text(addOnly ? String(localized: "Add Host") : kind == .ssh ? String(localized: "New SSH Connection") : String(localized: "New Serial Console"))
                 .font(.headline)
             if let kindSwitch {
                 HostKindSwitch(kind: kindSwitch)
@@ -133,7 +133,7 @@ struct QuickConnectSheet: View {
                     FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
                         .formRow("Cipher mode")
 
-                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.label, $0) })
+                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                         .formRow("Device family")
 
                     Toggle("Forward SSH agent", isOn: $agentForward)
@@ -177,7 +177,7 @@ struct QuickConnectSheet: View {
                     }
                     FormPopup(selection: $baud, items: Self.baudRates.map { .option(String($0), $0) })
                         .formRow("Baud rate")
-                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.label, $0) })
+                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                         .formRow("Device family")
                 }
 
