@@ -23,6 +23,7 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 - **Real MAC / ARP on macOS 27** — in local tabs and View ▸ Network Info.
 - **Password retry** — a wrong password asks again on the same connection.
 - **Bundled terminal fonts** and easier-to-read themes.
+- **简体中文 (Simplified Chinese, `zh-Hans`)** — menus, settings and dialogs in Chinese, following your system language.
 
 ## Features
 
@@ -42,6 +43,15 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 </table>
 
 **Also:** split panes · jump host · serial with Send Break · session logs + Search Logs · Snippets & Broadcast · safe multi-line paste · Share Link · Add Hosts from CSV · per-host command history · legacy ciphers for old gear · signed in-app updates.
+
+## Languages
+
+- **English** (`en`) — the source language.
+- **简体中文 (Simplified Chinese, `zh-Hans`)** — the interface, menus included.
+
+The interface follows your Mac's system language. If the system language is not supported, SheepTerm falls back to English. To switch manually, open **Settings → General → Language → App Language**, choose a language, then quit and reopen SheepTerm.
+
+All translations live in one Xcode String Catalog (`SheepTerm/Localization/Localizable.xcstrings`), so changing or adding a language is a single-file change. See [LOCALIZATION.md](LOCALIZATION.md) for details.
 
 ## Install
 
