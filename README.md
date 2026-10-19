@@ -7,6 +7,8 @@
 <p align="center"><b>The terminal built for network engineers.</b><br>
 SSH, serial and local shell with highlighting that knows your vendor — plus device web UIs and an AI that reads the output with you.</p>
 
+<p align="center">本应用支持 <b>简体中文（zh-Hans）</b>，界面跟随系统语言。</p>
+
 <p align="center">
   <a href="https://github.com/bestonehxh/SheepTerm/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_5.0_%2833%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
   <a href="https://github.com/bestonehxh/SheepTerm-Windows/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download SheepTerm for Windows"></a>
