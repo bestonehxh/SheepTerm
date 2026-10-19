@@ -16,8 +16,8 @@ enum ChromeStyle: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .glass: return "Liquid Glass"
-        case .classic: return "Solid Color"
+        case .glass: return String(localized: "Liquid Glass")
+        case .classic: return String(localized: "Solid Color")
         }
     }
 

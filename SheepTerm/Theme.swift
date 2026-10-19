@@ -62,10 +62,10 @@ enum Theme {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .regular: return "Regular"
-            case .medium: return "Medium"
-            case .semibold: return "Semibold"
-            case .bold: return "Bold"
+            case .regular: return String(localized: "Regular")
+            case .medium: return String(localized: "Medium")
+            case .semibold: return String(localized: "Semibold")
+            case .bold: return String(localized: "Bold")
             }
         }
         /// NSFontManager's weight scale (what `availableMembers` reports).
@@ -271,10 +271,10 @@ enum Theme {
         // every open tab) can swap the menu out from under an open one.
         guard terminalView.menu == nil else { return }
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Copy", action: NSSelectorFromString("copy:"), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Paste", action: NSSelectorFromString("paste:"), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: String(localized: "Copy"), action: NSSelectorFromString("copy:"), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: String(localized: "Paste"), action: NSSelectorFromString("paste:"), keyEquivalent: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Select All", action: NSSelectorFromString("selectAll:"), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: String(localized: "Select All"), action: NSSelectorFromString("selectAll:"), keyEquivalent: ""))
         terminalView.menu = menu
     }
 

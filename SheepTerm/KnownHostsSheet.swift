@@ -267,8 +267,8 @@ struct KnownHostsSheet: View {
         }
         info += " A copy of the file is kept as known_hosts\(SSHWorker.knownHostsBackupSuffix)."
         alert.informativeText = info
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Remove"))
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         delete(entries)
     }
@@ -286,9 +286,9 @@ struct KnownHostsSheet: View {
             if case .failed(let why) = result {
                 let alert = SheepAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "Could not remove the host key"
+                alert.messageText = String(localized: "Could not remove the host key")
                 alert.informativeText = why
-                alert.addButton(withTitle: "OK")
+                alert.addButton(withTitle: String(localized: "OK"))
                 _ = alert.runModal()
             }
         }

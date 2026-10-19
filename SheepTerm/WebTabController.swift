@@ -410,7 +410,7 @@ final class WebTabController: NSObject {
                 item.representedObject = login.id
                 sub.addItem(item)
             }
-            let holder = NSMenuItem(title: "Other Logins", action: nil, keyEquivalent: "")
+            let holder = NSMenuItem(title: String(localized: "Other Logins"), action: nil, keyEquivalent: "")
             holder.submenu = sub
             menu.addItem(holder)
         }
@@ -950,15 +950,15 @@ extension WebTabController: WKUIDelegate {
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async {
         let alert = pageAlert(message, frame: frame)
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         _ = await presentDialog(alert)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async -> Bool {
         let alert = pageAlert(message, frame: frame)
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "OK"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         return await presentDialog(alert) == .alertFirstButtonReturn
     }
 
@@ -968,8 +968,8 @@ extension WebTabController: WKUIDelegate {
         let field = NSTextField(string: defaultText ?? "")
         field.frame = NSRect(x: 0, y: 0, width: SheepAlert.contentWidth, height: 22)
         alert.accessoryView = field
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "OK"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         return await presentDialog(alert) == .alertFirstButtonReturn ? field.stringValue : nil
     }
 

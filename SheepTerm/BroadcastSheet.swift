@@ -151,8 +151,8 @@ struct BroadcastSheet: View {
         alert.alertStyle = .warning
         alert.messageText = "Send to \(tabs) tab\(tabs == 1 ? "" : "s")?"
         alert.informativeText = line
-        alert.addButton(withTitle: "Cancel")   // default: Return cancels
-        alert.addButton(withTitle: "Send").hasDestructiveAction = true
+        alert.addButton(withTitle: String(localized: "Cancel"))   // default: Return cancels
+        alert.addButton(withTitle: String(localized: "Send")).hasDestructiveAction = true
         return alert.sheepStyled().runModal() == .alertSecondButtonReturn ? true : nil
     }
 

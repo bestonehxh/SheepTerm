@@ -645,7 +645,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
         if parent.showRecents && parent.searchText.isEmpty && !parent.store.recents.isEmpty {
             let recent = item(id: "section-recent", kind: .section)
-            recent.title = "Recent"
+            recent.title = String(localized: "Recent")
             let shown = min(max(parent.recentsShown, 1), HostStore.maxRecents)
             recent.children = parent.store.recents.prefix(shown).map { host in
                 let row = item(id: "recent-\(host.id.uuidString)", kind: .staticRow)
@@ -1255,7 +1255,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// exist yet was the one action that let a host invent a row in its group.
     private func sectionSubmenu(for hosts: [Host]) -> NSMenuItem {
         let ids = Set(hosts.map(\.id))
-        let item = NSMenuItem(title: "Section", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: String(localized: "Section"), action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         // ONE pass in the store, not a group search plus a linear dedupe per
         // selected host: ⌘A then right-click over 2,000 hosts and 800 headings
@@ -1321,11 +1321,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         case .hostSection:
             guard let group = node.group else { return nil }
             let label = node.title
-            add(menu, "Rename Section…") { [weak self] in
+            add(menu, String(localized: "Rename Section…")) { [weak self] in
                 self?.parent.onRenameHostSection(group, label)
             }
             menu.addItem(.separator())
-            add(menu, "Remove Section") { [weak self] in
+            add(menu, String(localized: "Remove Section")) { [weak self] in
                 guard let self else { return }
                 // From the store, not from the row: a heading row built
                 // during a search holds only the hosts that matched.
@@ -1335,8 +1335,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 alert.alertStyle = .warning
                 alert.messageText = "Remove the heading “\(label)”?"
                 alert.informativeText = "\(count) host\(count == 1 ? "" : "s") stay in “\(group.name)”."
-                alert.addButton(withTitle: "Cancel")   // default, so Return cancels
-                alert.addButton(withTitle: "Remove Section")
+                alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
+                alert.addButton(withTitle: String(localized: "Remove Section"))
                 // An EMPTY heading is removed without asking: there is
                 // nothing to lose track of, and a confirmation for "take away
                 // a row with nothing in it" is noise.
@@ -1358,44 +1358,44 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             let order = parent.store.sections(in: group.id)
             let at = order.firstIndex { $0 == label || HostStore.sameHeading($0, label) }
             menu.autoenablesItems = false
-            add(menu, "Move Up") { [weak self] in
+            add(menu, String(localized: "Move Up")) { [weak self] in
                 self?.parent.store.moveSection(in: group.id, label, direction: .up)
             }
             menu.items.last?.isEnabled = (at ?? 0) > 0
-            add(menu, "Move Down") { [weak self] in
+            add(menu, String(localized: "Move Down")) { [weak self] in
                 self?.parent.store.moveSection(in: group.id, label, direction: .down)
             }
             menu.items.last?.isEnabled = at.map { $0 < order.count - 1 } ?? false
         case .group:
             guard let group = node.group else { return nil }
-            add(menu, "Export Group…") { [weak self] in self?.parent.onExportGroup(group) }
-            add(menu, "Share Link…") { [weak self] in self?.parent.onShareGroup(group) }
-            add(menu, "Add Host…") { [weak self] in self?.parent.onAddHost(group) }
-            add(menu, "Add Hosts…") { [weak self] in self?.parent.onAddHosts(group) }
+            add(menu, String(localized: "Export Group…")) { [weak self] in self?.parent.onExportGroup(group) }
+            add(menu, String(localized: "Share Link…")) { [weak self] in self?.parent.onShareGroup(group) }
+            add(menu, String(localized: "Add Host…")) { [weak self] in self?.parent.onAddHost(group) }
+            add(menu, String(localized: "Add Hosts…")) { [weak self] in self?.parent.onAddHosts(group) }
             // Not while a search is on: `buildRoots` hides a heading with no
             // matching hosts, so a heading created mid-search would never
             // appear — a menu item that silently does nothing. (Same reason
             // Move Up / Move Down are left out then.)
             if parent.searchText.isEmpty {
-                add(menu, "New Section…") { [weak self] in self?.parent.onNewGroupSection(group) }
+                add(menu, String(localized: "New Section…")) { [weak self] in self?.parent.onNewGroupSection(group) }
             }
-            add(menu, "Set Credential for Group…") { [weak self] in self?.parent.onSetGroupCredential(group) }
+            add(menu, String(localized: "Set Credential for Group…")) { [weak self] in self?.parent.onSetGroupCredential(group) }
             menu.addItem(.separator())
-            add(menu, "Rename Group…") { [weak self] in self?.parent.onRenameGroup(group) }
-            add(menu, "Reorder Groups…") { [weak self] in self?.parent.onReorderGroups() }
+            add(menu, String(localized: "Rename Group…")) { [weak self] in self?.parent.onRenameGroup(group) }
+            add(menu, String(localized: "Reorder Groups…")) { [weak self] in self?.parent.onReorderGroups() }
             menu.addItem(.separator())
-            add(menu, "Delete Group") { [weak self] in self?.parent.onDeleteGroup(group) }
+            add(menu, String(localized: "Delete Group")) { [weak self] in self?.parent.onDeleteGroup(group) }
         case .host:
             guard let host = node.host, let group = node.group else { return nil }
-            add(menu, "Connect") { [weak self] in
+            add(menu, String(localized: "Connect")) { [weak self] in
                 self?.parent.model.open(host: host)
                 self?.parent.model.collapseSidebar()
             }
-            add(menu, "Open in Split") { [weak self] in
+            add(menu, String(localized: "Open in Split")) { [weak self] in
                 self?.parent.model.openInSplit(host: host)
                 self?.parent.model.collapseSidebar()
             }
-            add(menu, "Edit Host…") { [weak self] in self?.parent.onEditHost(host) }
+            add(menu, String(localized: "Edit Host…")) { [weak self] in self?.parent.onEditHost(host) }
             menu.addItem(.separator())
             menu.addItem(sectionSubmenu(for: [host]))
             // With only one group there is nowhere to move to; the item and
@@ -1403,7 +1403,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             let others = parent.store.groups.filter { $0.id != group.id }
             if !others.isEmpty {
                 menu.addItem(.separator())
-                let moveItem = NSMenuItem(title: "Move to Group", action: nil, keyEquivalent: "")
+                let moveItem = NSMenuItem(title: String(localized: "Move to Group"), action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
                 for other in others {
                     // By id, not by name: `move(host:toGroupNamed:)` CREATES a
@@ -1419,20 +1419,20 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 menu.addItem(moveItem)
             }
             menu.addItem(.separator())
-            add(menu, "Remove Host") { [weak self] in
+            add(menu, String(localized: "Remove Host")) { [weak self] in
                 guard let self else { return }
                 let alert = SheepAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "Remove “\(host.name)”?"
-                alert.informativeText = "This cannot be undone."
-                alert.addButton(withTitle: "Cancel")   // default, so Return cancels
-                alert.addButton(withTitle: "Remove")
+                alert.informativeText = String(localized: "This cannot be undone.")
+                alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
+                alert.addButton(withTitle: String(localized: "Remove"))
                 guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
                 self.parent.store.removeHost(host)
             }
         case .staticRow:
             guard let host = node.host else { return nil }
-            add(menu, "Connect") { [weak self] in
+            add(menu, String(localized: "Connect")) { [weak self] in
                 self?.parent.model.open(host: host)
                 self?.parent.model.collapseSidebar()
             }
@@ -1440,10 +1440,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 // Not for a recent of a host that is already saved (no second copy).
                 if host.kind == .ssh || host.kind == .web,
                    !RecentSave.isSaved(host, in: parent.store.groups.flatMap(\.hosts)) {
-                    add(menu, "Save as Host…") { [weak self] in self?.parent.model.saveRecentAsHost(host) }
+                    add(menu, String(localized: "Save as Host…")) { [weak self] in self?.parent.model.saveRecentAsHost(host) }
                 }
                 menu.addItem(.separator())
-                add(menu, "Remove from Recent") { [weak self] in self?.parent.store.removeRecent(host) }
+                add(menu, String(localized: "Remove from Recent")) { [weak self] in self?.parent.store.removeRecent(host) }
             }
         }
         return menu.items.isEmpty ? nil : menu
@@ -1455,7 +1455,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// would go with them.
     private func multiGroupMenu(_ groups: [HostGroup]) -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Reorder Groups…") { [weak self] in self?.parent.onReorderGroups() }
+        add(menu, String(localized: "Reorder Groups…")) { [weak self] in self?.parent.onReorderGroups() }
         menu.addItem(.separator())
         // From the STORE, by id: during a search the rows carry FILTERED
         // copies of their groups, and counting those promised "2 hosts go
@@ -1469,8 +1469,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             alert.messageText = "Delete \(groups.count) groups?"
             alert.informativeText = "\(hostCount) host\(hostCount == 1 ? "" : "s") go with them. "
                 + "This cannot be undone."
-            alert.addButton(withTitle: "Cancel")   // default, so Return cancels
-            alert.addButton(withTitle: "Delete")
+            alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
+            alert.addButton(withTitle: String(localized: "Delete"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
             // Asked once, for all of them — and ONE write, with their hosts
             // cleaned out of Recent.
@@ -1488,7 +1488,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // is left out, because moving them there does nothing visible.
         let groups = parent.store.moveTargets(forHostIDs: Set(ids))
         if !groups.isEmpty {
-            let moveItem = NSMenuItem(title: "Move to Group", action: nil, keyEquivalent: "")
+            let moveItem = NSMenuItem(title: String(localized: "Move to Group"), action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for group in groups {
                 // Int.max is clamped to the group's host count = append, and
@@ -1527,8 +1527,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             let named = hosts.prefix(2).map(\.name).joined(separator: ", ")
             let more = hosts.count > 2 ? " and \(hosts.count - 2) more" : ""
             alert.informativeText = "\(named)\(more). This cannot be undone."
-            alert.addButton(withTitle: "Cancel")   // default, so Return cancels
-            alert.addButton(withTitle: "Remove")
+            alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
+            alert.addButton(withTitle: String(localized: "Remove"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
             // ONE write for one confirmed action.
             self.parent.store.removeHosts(withIDs: hosts.map(\.id))
@@ -1546,10 +1546,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = message
-        alert.informativeText = "This cannot be undone."
-        alert.addButton(withTitle: "Cancel")   // default, so Return cancels
+        alert.informativeText = String(localized: "This cannot be undone.")
+        alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
         // Unfiling many hosts cannot be undone: red like Delete/Remove.
-        alert.addButton(withTitle: "Continue").hasDestructiveAction = true
+        alert.addButton(withTitle: String(localized: "Continue")).hasDestructiveAction = true
         return alert.sheepStyled().runModal() == .alertSecondButtonReturn
     }
 

@@ -757,15 +757,15 @@ final class SSHTerminalController: NSObject {
         switch conflict {
         case .changed:
             alert.messageText = "The host key for \(target) has changed"
-            alert.informativeText = "The connection was refused — this can mean a man-in-the-middle. "
+            alert.informativeText = String(localized: "The connection was refused — this can mean a man-in-the-middle. ")
                 + "Only if you know the device was reinstalled or its key replaced, remove the old key in Known Hosts and connect again."
         case .revoked:
             alert.messageText = "The host key for \(target) is revoked"
-            alert.informativeText = "known_hosts marks this key @revoked, so the connection was refused. "
+            alert.informativeText = String(localized: "known_hosts marks this key @revoked, so the connection was refused. ")
                 + "Known Hosts shows the entry."
         }
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Open Known Hosts…")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Open Known Hosts…"))
         let handle: (NSApplication.ModalResponse) -> Void = { response in
             if response == .alertSecondButtonReturn {
                 AppModel.shared.openKnownHosts(search: target)

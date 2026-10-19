@@ -185,6 +185,18 @@ private func readBack(_ atlas: GlyphAtlas) -> [UInt8] {
         #expect(FontSet.glyph(scalar, in: f) != 0)
     }
 
+    @Test func fallbackCoversSimplifiedAndTraditionalChineseInEveryFace() {
+        let set = FontSet(font: monoFont(13), scale: 2)
+        for scalar in "中文设备繁體，。".unicodeScalars {
+            for bold in [false, true] {
+                for italic in [false, true] {
+                    let font = set.font(for: scalar, bold: bold, italic: italic)
+                    #expect(FontSet.glyph(scalar, in: font) != 0)
+                }
+            }
+        }
+    }
+
     @Test func fallbackFindsAFontForEmoji() {
         let set = FontSet(font: monoFont(13), scale: 2)
         let scalar: Unicode.Scalar = "\u{1F600}"    // 😀

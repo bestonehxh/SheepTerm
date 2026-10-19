@@ -140,18 +140,18 @@ final class SnippetStore: ObservableObject {
     private static func reportCorruptLoad(_ warning: String) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Saved snippets could not be read"
+        alert.messageText = String(localized: "Saved snippets could not be read")
         alert.informativeText = warning
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 
     private static func reportSaveFailure(_ error: Error) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Snippets not saved"
+        alert.messageText = String(localized: "Snippets not saved")
         alert.informativeText = "SheepTerm could not write snippets.json (\(error.localizedDescription)). The change you just made is not saved."
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 }

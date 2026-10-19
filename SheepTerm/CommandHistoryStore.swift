@@ -67,7 +67,7 @@ final class CommandHistoryStore: ObservableObject {
         alert.alertStyle = .warning
         alert.messageText = title
         alert.informativeText = text
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 }

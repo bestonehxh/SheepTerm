@@ -1292,3 +1292,58 @@ private func privateBoard(_ name: String) -> NSPasteboard {
         }
     }
 }
+
+/// Chinese input uses the system IME independently of the app's UI language.
+/// Exercise Pinyin preedit, candidate conversion, UTF-8 commit and kitty text
+/// reporting without changing the user's active keyboard input source.
+@MainActor
+@Suite("Chinese IME") struct ChineseIMETests {
+    @Test func pinyinCommitsOnlyTheSelectedChineseCandidate() {
+        for flags in [0, 1, 3, 9, 31] {
+            let view = makeView()
+            let spy = RecordingDelegate()
+            view.delegate = spy
+            view.feed("\u{1b}[>\(flags)u")
+            for preedit in ["ni'hao", "你好"] {
+                view.setMarkedText(NSAttributedString(string: preedit),
+                                   selectedRange: NSRange(location: (preedit as NSString).length, length: 0),
+                                   replacementRange: NSRange(location: NSNotFound, length: 0))
+                #expect(view.hasMarkedText())
+                #expect(spy.sent.isEmpty, "Preedit must never reach the host")
+            }
+            view.insertText("你好", replacementRange: NSRange(location: NSNotFound, length: 0))
+            let expected = flags == 31 ? "\u{1b}[0;;20320:22909u" : "你好"
+            #expect(spy.sentBytes == Array(expected.utf8), "flags \(flags)")
+            #expect(!view.hasMarkedText())
+            #expect(view.markedRange().location == NSNotFound)
+        }
+    }
+
+    @Test func rareChineseCharactersUseUTF16RangesAndCommitLosslessly() {
+        let view = makeView()
+        let spy = RecordingDelegate()
+        view.delegate = spy
+        let candidate = "𠮷中文，。"
+        let length = (candidate as NSString).length
+        view.setMarkedText(candidate, selectedRange: NSRange(location: length, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.markedRange().length == length)
+        #expect(view.selectedRange().location == length)
+        #expect(spy.sent.isEmpty)
+        view.insertText(NSAttributedString(string: candidate),
+                        replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(spy.sentBytes == Array(candidate.utf8))
+        #expect(!view.hasMarkedText())
+    }
+
+    @Test func cancellingPinyinDoesNotSendLatinLettersToTheHost() {
+        let view = makeView()
+        let spy = RecordingDelegate()
+        view.delegate = spy
+        view.setMarkedText("zhong'wen", selectedRange: NSRange(location: 10, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        #expect(!view.hasMarkedText())
+        #expect(spy.sent.isEmpty)
+    }
+}

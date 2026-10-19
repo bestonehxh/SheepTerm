@@ -894,8 +894,8 @@ final class SessionTerminalHost {
         alert.alertStyle = .warning
         alert.messageText = title
         alert.informativeText = command
-        alert.addButton(withTitle: "Cancel")   // default: Return cancels
-        alert.addButton(withTitle: "Send").hasDestructiveAction = true
+        alert.addButton(withTitle: String(localized: "Cancel"))   // default: Return cancels
+        alert.addButton(withTitle: String(localized: "Send")).hasDestructiveAction = true
         let generation = guardGeneration
         if let window = terminalView.window, window.attachedSheet == nil {
             guardSheet = alert.window
@@ -947,13 +947,13 @@ final class SessionTerminalHost {
         // A working dialog, landscape and one fixed size (the accessory's
         // 620 × 330), no icon — the user's call, 2026-10-09.
         alert.showsIcon = false
-        alert.messageText = "Safe Multi-line Paste"
+        alert.messageText = String(localized: "Safe Multi-line Paste")
         let target = sessionLabel.map { " to \($0)" } ?? ""
         alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending\(target)."
             + CommandGuard.reviewNote(dangerous.count)
-        alert.addButton(withTitle: "Send Line by Line")
-        if allowImmediate { alert.markCaution(alert.addButton(withTitle: "Paste Immediately")) }
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "Send Line by Line"))
+        if allowImmediate { alert.markCaution(alert.addButton(withTitle: String(localized: "Paste Immediately"))) }
+        alert.addButton(withTitle: String(localized: "Cancel"))
 
         let reviewLabel = NSTextField(labelWithString: "Commands to send:")
         reviewLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
@@ -1072,10 +1072,10 @@ final class SessionTerminalHost {
     private func presentPlantedPasteConfirmation(_ text: String) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Paste text a session put on the clipboard?"
-        alert.informativeText = "Set by a device or program (OSC 52), not by a copy."
-        alert.addButton(withTitle: "Cancel")   // default, so Return cancels
-        alert.addButton(withTitle: "Paste")
+        alert.messageText = String(localized: "Paste text a session put on the clipboard?")
+        alert.informativeText = String(localized: "Set by a device or program (OSC 52), not by a copy.")
+        alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
+        alert.addButton(withTitle: String(localized: "Paste"))
 
         let preview = NSTextField(wrappingLabelWithString: PlantedClipboard.preview(text))
         preview.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -1158,7 +1158,7 @@ final class SessionTerminalHost {
     private func reportPasteInterrupted(sent: Int, total: Int, reason: SafePastePacer.EndReason) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Paste stopped part-way"
+        alert.messageText = String(localized: "Paste stopped part-way")
         let cause = reason == .inputDiscarded
             ? "The session stopped accepting input"
             : "The session ended or the tab was switched away"
@@ -1167,7 +1167,7 @@ final class SessionTerminalHost {
             so the rest was not sent. Check what actually reached the device \
             before pasting the remainder.
             """
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         if let window = terminalView.window, window.attachedSheet == nil {
             alert.beginSheetModal(for: window)
         } else {
@@ -1186,9 +1186,9 @@ final class SessionTerminalHost {
     private func showPasteLimitAlert(_ detail: String) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Safe Paste Limit"
+        alert.messageText = String(localized: "Safe Paste Limit")
         alert.informativeText = detail + " Split it into smaller sections before sending."
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         if let window = terminalView.window, window.attachedSheet == nil {
             alert.beginSheetModal(for: window)
         } else {

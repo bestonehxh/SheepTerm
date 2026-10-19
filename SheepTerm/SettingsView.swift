@@ -33,6 +33,8 @@ struct SettingsView: View {
 
 /// General settings: appearance, terminal look, auto-reconnect, backup, libraries.
 struct GeneralSettingsView: View {
+    @State private var appLanguage = AppLanguage.current()
+    private let originalLanguage = AppLanguage.launchLanguage
     @ObservedObject private var model = AppModel.shared
     @AppStorage("showRecents") private var showRecents = true
     @AppStorage("recentsShown") private var recentsShown = 5
@@ -43,6 +45,22 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Language") {
+                Picker("App Language", selection: $appLanguage) {
+                    Text("System Default").tag(AppLanguage.system)
+                    Text(verbatim: "English").tag(AppLanguage.english)
+                    Text(verbatim: "简体中文").tag(AppLanguage.simplifiedChinese)
+                }
+                .onChange(of: appLanguage) { _, language in
+                    language.apply()
+                }
+                if appLanguage != originalLanguage {
+                    Text("Restart SheepTerm to apply the language. Active sessions stay open until you quit.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Appearance") {
                 Picker("Chrome", selection: $chromeStyle) {
                     ForEach(ChromeStyle.allCases) { style in

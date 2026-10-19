@@ -166,21 +166,21 @@ final class CredentialStore: ObservableObject {
     private static func reportCorruptLoad(_ warning: String) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Saved credentials could not be read"
+        alert.messageText = String(localized: "Saved credentials could not be read")
         alert.informativeText = warning
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 
     private static func reportSaveFailure(_ error: Error) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Credentials not saved"
+        alert.messageText = String(localized: "Credentials not saved")
         alert.informativeText = """
             SheepTerm could not write credentials.json (\(error.localizedDescription)). \
             The change you just made to the credential list is not saved.
             """
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 
@@ -237,13 +237,13 @@ final class CredentialStore: ObservableObject {
     private static func reportKeychainFailure(for credential: Credential) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Password not saved to the Keychain"
+        alert.messageText = String(localized: "Password not saved to the Keychain")
         alert.informativeText = """
             “\(credential.name)” was saved, but macOS refused to store its \
             password. SheepTerm will ask for it on every connection until \
             the credential is added again with the Keychain unlocked.
             """
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 
@@ -324,14 +324,14 @@ final class CredentialStore: ObservableObject {
     private static func reportKeychainDeleteFailure(for credential: Credential) {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Password not removed from the Keychain"
+        alert.messageText = String(localized: "Password not removed from the Keychain")
         alert.informativeText = """
             “\(credential.name)” was removed from SheepTerm, but macOS refused \
             to delete its stored password. It is still in your login keychain \
             under “Bestchaan.SheepTerm” and SheepTerm can no longer reach it — \
             remove it in Keychain Access if you want it gone.
             """
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 }

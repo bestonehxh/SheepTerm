@@ -146,8 +146,8 @@ final class ShareLinks: ObservableObject {
         guard let link = SharedLink.parse(url.absoluteString) else {
             let alert = SheepAlert()
             alert.alertStyle = .warning
-            alert.messageText = "That is not a SheepTerm share link"
-            alert.addButton(withTitle: "OK")
+            alert.messageText = String(localized: "That is not a SheepTerm share link")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
             return
         }

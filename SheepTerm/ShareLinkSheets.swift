@@ -400,8 +400,8 @@ struct SharedLinksSheet: View {
             alert.alertStyle = .warning
             alert.messageText = "Revoke the link to \u{201C}\(record.groupName)\u{201D}?"
             alert.informativeText = "The recipients lose access right away. Hosts and credentials they have already imported stay on their Macs \u{2014} revoking cannot take those back."
-            let revoke = alert.addButton(withTitle: "Revoke")
-            let cancel = alert.addButton(withTitle: "Cancel")
+            let revoke = alert.addButton(withTitle: String(localized: "Revoke"))
+            let cancel = alert.addButton(withTitle: String(localized: "Cancel"))
             revoke.hasDestructiveAction = true
             revoke.keyEquivalent = ""
             cancel.keyEquivalent = "\r"

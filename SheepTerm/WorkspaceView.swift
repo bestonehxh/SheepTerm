@@ -689,7 +689,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     override func menu(for event: NSEvent) -> NSMenu? {
         guard isWeb else { return nil }
         let menu = NSMenu()
-        let item = NSMenuItem(title: "Save as Host…", action: #selector(saveAsHost), keyEquivalent: "")
+        let item = NSMenuItem(title: String(localized: "Save as Host…"), action: #selector(saveAsHost), keyEquivalent: "")
         item.target = self
         menu.addItem(item)
         return menu

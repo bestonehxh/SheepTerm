@@ -173,8 +173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let names = live.prefix(8).map { "• \($0.title)" }.joined(separator: "\n")
         let more = live.count > 8 ? "\n• and \(live.count - 8) more" : ""
         alert.informativeText = "Quitting closes \(live.count == 1 ? "it" : "them") right away.\n\n\(names)\(more)"
-        let quit = alert.addButton(withTitle: "Quit")
-        let cancel = alert.addButton(withTitle: "Cancel")
+        let quit = alert.addButton(withTitle: String(localized: "Quit"))
+        let cancel = alert.addButton(withTitle: String(localized: "Cancel"))
         // Cancel is the default: Return must never be the key that drops a
         // live session, and Escape maps to it as well.
         quit.keyEquivalent = ""

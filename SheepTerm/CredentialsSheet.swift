@@ -176,8 +176,8 @@ struct CredentialsSheet: View {
         alert.informativeText = count == 0
             ? "It is not used by any saved host."
             : "\(count) saved host\(count == 1 ? "" : "s") use\(count == 1 ? "s" : "") it — \(count == 1 ? "that host" : "those hosts") will ask for the password when connecting."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Delete"))
         if alert.runModal() == .alertSecondButtonReturn {
             // The credential goes FIRST: it is the step that can fail, and
             // the two below cannot be rolled back with it.

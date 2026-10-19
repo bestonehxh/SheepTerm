@@ -57,8 +57,8 @@ struct SidebarView: View {
         alert.alertStyle = .warning
         alert.messageText = message
         alert.informativeText = detail
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Delete"))
         return alert.sheepStyled().runModal() == .alertSecondButtonReturn
     }
 
@@ -72,7 +72,7 @@ struct SidebarView: View {
             alert.alertStyle = .warning
             alert.messageText = title
             alert.informativeText = detail
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
     }
@@ -158,7 +158,7 @@ struct SidebarView: View {
                 ? "Two headings here cannot share a name."
                 : "Two groups cannot share a name."
             alert.informativeText = title == nil ? clash : "“\(name)” is already used here."
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
     }

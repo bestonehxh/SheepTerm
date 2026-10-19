@@ -332,7 +332,7 @@ enum BackupManager {
         stamp.dateStyle = .medium
         stamp.timeStyle = .short
         let alert = SheepAlert()
-        alert.messageText = "Restore this backup?"
+        alert.messageText = String(localized: "Restore this backup?")
         alert.informativeText = """
             \(payload.app) · \(payload.device) · \(stamp.string(from: payload.created))
             \(payload.groupCount) groups, \(payload.hostCount) hosts.
@@ -345,8 +345,8 @@ enum BackupManager {
             until you re-enter it in Settings.\(hygiene.summary.map { "\n\n\($0)" } ?? "")
             """
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Restore")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "Restore"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
 
         // Nothing is touched until every current file is safely copied aside:
@@ -390,8 +390,8 @@ enum BackupManager {
         // gone by now and this is the sheet the user is left looking at when
         // they go hunting for the baud rate they used to have.
         done.informativeText = snapshotNote + (hygiene.summary.map { "\n\n\($0)" } ?? "")
-        done.addButton(withTitle: "OK")
-        if safety != nil { done.addButton(withTitle: "Show Backup Folder") }
+        done.addButton(withTitle: String(localized: "OK"))
+        if safety != nil { done.addButton(withTitle: String(localized: "Show Backup Folder")) }
         if done.sheepStyled().runModal() == .alertSecondButtonReturn, let safety {
             NSWorkspace.shared.activateFileViewerSelecting([safety])
         }
@@ -673,7 +673,7 @@ enum BackupManager {
         alert.messageText = title
         alert.informativeText = detail
         alert.alertStyle = style
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 }

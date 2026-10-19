@@ -442,9 +442,9 @@ final class AppModel: ObservableObject {
             .sink { warning in
                 let alert = SheepAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "Saved hosts could not be read"
+                alert.messageText = String(localized: "Saved hosts could not be read")
                 alert.informativeText = warning
-                alert.addButton(withTitle: "OK")
+                alert.addButton(withTitle: String(localized: "OK"))
                 alert.sheepStyled().runModal()
             }
             .store(in: &dataWarningSubscriptions)
@@ -568,9 +568,9 @@ final class AppModel: ObservableObject {
             // file and no word — the panel closed as if it had worked.
             let alert = SheepAlert()
             alert.alertStyle = .warning
-            alert.messageText = "The group could not be exported"
+            alert.messageText = String(localized: "The group could not be exported")
             alert.informativeText = "\(url.lastPathComponent): \(error.localizedDescription)"
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
     }
@@ -611,7 +611,7 @@ final class AppModel: ObservableObject {
             alert.alertStyle = .warning
             alert.messageText = "Could not import \(url.lastPathComponent)"
             alert.informativeText = error.localizedDescription
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
             return nil
         }
@@ -718,7 +718,7 @@ final class AppModel: ObservableObject {
 
             \(listed)\(more)
             """
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         // …but not when the Mac is logging out, restarting or shutting down.
         // This alert asks nothing — it reports. A modal that reports during a
         // restart does not inform anybody: nobody is looking at the screen,
@@ -828,8 +828,8 @@ final class AppModel: ObservableObject {
                 ? "Import “\(group.name)” (\(sections) section\(sections == 1 ? "" : "s"))?"
                 : "Import “\(group.name)” (\(group.hosts.count) hosts)?"
             alert.informativeText = "From \(sender). Passwords are not included.\(corrections)"
-            alert.addButton(withTitle: "Import")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: String(localized: "Import"))
+            alert.addButton(withTitle: String(localized: "Cancel"))
             if alert.sheepStyled().runModal() == .alertFirstButtonReturn {
                 _ = store.applyImport(group, action: .createNew, replace: [:])
             }
@@ -852,9 +852,9 @@ final class AppModel: ObservableObject {
             : "\(group.hosts.count)"
         alert.informativeText = "Yours: \(existing.hosts.count) hosts. "
             + "The file from \(sender): \(theirs).\(corrections)"
-        alert.addButton(withTitle: "Merge into Existing")
-        alert.addButton(withTitle: "Create New Group")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "Merge into Existing"))
+        alert.addButton(withTitle: String(localized: "Create New Group"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         switch alert.sheepStyled().runModal() {
         case .alertFirstButtonReturn:
             resolveImportConflicts(group, into: existing)
@@ -884,9 +884,9 @@ final class AppModel: ObservableObject {
             alert.messageText = "Host “\(Self.sanitizedForDialog(pair.incoming.name))” exists in both"
             alert.informativeText = Self.importDiffDescription(incoming: pair.incoming, existing: pair.existing)
                 + "\n\nReplace uses the file's version — your saved password reference is kept. Keep leaves your version untouched."
-            alert.addButton(withTitle: "Replace")
-            alert.addButton(withTitle: "Keep")
-            alert.addButton(withTitle: "Cancel Import")
+            alert.addButton(withTitle: String(localized: "Replace"))
+            alert.addButton(withTitle: String(localized: "Keep"))
+            alert.addButton(withTitle: String(localized: "Cancel Import"))
             let remaining = conflicts.count - index - 1
             let checkbox = NSButton(
                 checkboxWithTitle: "Apply to the remaining \(remaining) conflicting host(s)",
@@ -1045,10 +1045,10 @@ final class AppModel: ObservableObject {
     func clearWebsiteData() {
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Clear website data?"
-        alert.informativeText = "Cookies, logins and caches of every web tab are removed. Open pages may sign you out."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Clear")
+        alert.messageText = String(localized: "Clear website data?")
+        alert.informativeText = String(localized: "Cookies, logins and caches of every web tab are removed. Open pages may sign you out.")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Clear"))
         guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
         let store = WKWebsiteDataStore.default()
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
@@ -1128,7 +1128,7 @@ final class AppModel: ObservableObject {
         let alert = SheepAlert()
         alert.messageText = "“\(Self.sanitizedForDialog(host.name))” can’t be opened here"
         alert.informativeText = "It was made by a newer SheepTerm (kind “\(Self.sanitizedForDialog(host.unknownKind ?? "?"))”). It is kept as it is."
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
 
@@ -1195,8 +1195,8 @@ final class AppModel: ObservableObject {
             : "\(count) saved command\(count == 1 ? "" : "s") for this host will be removed. Other hosts are not touched."
         // Cancel first, so Return cannot remove the history by accident (the
         // rule every other delete alert here follows).
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Remove History")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Remove History"))
         guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
         historyStore.clear(key)
     }
@@ -1670,8 +1670,8 @@ final class AppModel: ObservableObject {
                 DispatchQueue.main.async {
                     let alert = SheepAlert()
                     alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”"
-                    alert.informativeText = "Nothing was added — the saved host already has these settings."
-                    alert.addButton(withTitle: "OK")
+                    alert.informativeText = String(localized: "Nothing was added — the saved host already has these settings.")
+                    alert.addButton(withTitle: String(localized: "OK"))
                     alert.sheepStyled().runModal()
                 }
             }
@@ -1689,8 +1689,8 @@ final class AppModel: ObservableObject {
                 + changes.joined(separator: "\n")
                 + (addOnly ? "\n\nUpdate rewrites the saved host with what you entered; Keep leaves it as it is and adds nothing."
                            : "\n\nUpdate rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered.")
-            alert.addButton(withTitle: "Update Saved Host")
-            alert.addButton(withTitle: "Keep Saved Host")
+            alert.addButton(withTitle: String(localized: "Update Saved Host"))
+            alert.addButton(withTitle: String(localized: "Keep Saved Host"))
             guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
             var updated = updated
             if let makeCredential { updated.credentialID = makeCredential() }

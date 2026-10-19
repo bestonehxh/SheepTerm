@@ -867,9 +867,9 @@ struct AddHostsSheet: View {
         DispatchQueue.main.async {
             let alert = SheepAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Header not recognised"
+            alert.messageText = String(localized: "Header not recognised")
             alert.informativeText = informative
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
     }
@@ -1229,9 +1229,9 @@ struct AddHostsSheet: View {
                 DispatchQueue.main.async {
                     let alert = SheepAlert()
                     alert.alertStyle = .warning
-                    alert.messageText = "That group no longer exists."
-                    alert.informativeText = "Nothing was added."
-                    alert.addButton(withTitle: "OK")
+                    alert.messageText = String(localized: "That group no longer exists.")
+                    alert.informativeText = String(localized: "Nothing was added.")
+                    alert.addButton(withTitle: String(localized: "OK"))
                     alert.sheepStyled().runModal()
                 }
                 return
@@ -1311,7 +1311,7 @@ struct AddHostsSheet: View {
             alert.alertStyle = .informational
             alert.messageText = message
             alert.informativeText = informative
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
     }

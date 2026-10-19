@@ -187,8 +187,8 @@ struct GroupCredentialSheet: View {
             let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = message
-            alert.informativeText = "Nothing was changed."
-            alert.addButton(withTitle: "OK")
+            alert.informativeText = String(localized: "Nothing was changed.")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
     }

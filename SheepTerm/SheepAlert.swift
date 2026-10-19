@@ -215,7 +215,7 @@ final class SheepAlert: NSObject {
 
     private func build() -> Panel {
         if let panel { return panel }
-        if buttons.isEmpty { addButton(withTitle: "OK") }
+        if buttons.isEmpty { addButton(withTitle: String(localized: "OK")) }
         // The column is the popup's 288 — or as wide as an accessory that
         // asks for more (Safe Paste's command preview: configs run long to
         // the right, so the dialog is landscape and one fixed size).
