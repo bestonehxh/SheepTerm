@@ -10,7 +10,7 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 <p align="center">本应用支持 <b>简体中文（zh-Hans）</b>，界面跟随系统语言。</p>
 
 <p align="center">
-  <a href="https://github.com/bestonehxh/SheepTerm/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_5.0_%2834%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
+  <a href="https://github.com/bestonehxh/SheepTerm/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_5.0_%2835%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
   <a href="https://github.com/bestonehxh/SheepTerm-Windows/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download SheepTerm for Windows"></a>
 </p>
 
@@ -57,7 +57,7 @@ All translations live in one Xcode String Catalog (`SheepTerm/Localization/Local
 
 ## Install
 
-1. Download `SheepTerm-5.0-34.zip`, unzip, drag **SheepTerm.app** into `Applications`.
+1. Download `SheepTerm-5.0-35.zip`, unzip, drag **SheepTerm.app** into `Applications`.
 2. Not notarized: right-click → **Open** the first time, or run `xattr -dr com.apple.quarantine /Applications/SheepTerm.app`.
 3. Updates are built in and verified with an Ed25519 signature.
 
