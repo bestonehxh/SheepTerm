@@ -24,9 +24,9 @@ enum ShareLinkPlan {
         case noGroup, passwordNotKept
         var errorDescription: String? {
             switch self {
-            case .noGroup: return "The shared group could not be read."
+            case .noGroup: return String(localized: "The shared group could not be read.")
             // Same words as SheepTerm for Windows (SheepTermSync/ShareLinkPlan.swift).
-            case .passwordNotKept: return "A shared password could not be saved in the Keychain, so nothing was imported."
+            case .passwordNotKept: return String(localized: "A shared password could not be saved in the Keychain, so nothing was imported.")
             }
         }
     }

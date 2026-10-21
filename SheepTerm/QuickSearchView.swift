@@ -112,8 +112,8 @@ struct QuickSearchView: View {
                     badge: target.kind.badge,
                     badgeColor: Theme.kindColor(target.kind),
                     symbol: target.kind == .web ? "globe" : nil,
-                    name: target.kind == .web ? "Open \(target.address)" : target.name,
-                    detail: target.kind == .web ? "web tab · press ↩" : "port \(target.port) · press ↩"
+                    name: target.kind == .web ? String(localized: "Open \(target.address)") : target.name,
+                    detail: target.kind == .web ? String(localized: "web tab · press ↩") : String(localized: "port \(String(target.port)) · press ↩")
                 ) {
                     connect(target)
                 }

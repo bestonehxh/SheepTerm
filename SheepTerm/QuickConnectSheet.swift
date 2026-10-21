@@ -112,7 +112,7 @@ struct QuickConnectSheet: View {
                     }
 
                     FormPopup(selection: $credentialSelection,
-                              items: [.option("Enter manually", nil)] + model.credentialStore.credentials.map {
+                              items: [.option(String(localized: "Enter manually"), nil)] + model.credentialStore.credentials.map {
                                   .option("\($0.name) (\($0.username))", $0.id)
                               })
                     .formRow("Credential")
@@ -189,7 +189,7 @@ struct QuickConnectSheet: View {
                     }
                     if saveSession || addOnly {
                         FormPopup(selection: $groupSelection,
-                                  items: groupNames.map { .option($0, $0) } + [.separator, .option("New group…", Self.newGroupTag)])
+                                  items: groupNames.map { .option($0, $0) } + [.separator, .option(String(localized: "New group…"), Self.newGroupTag)])
                             .formRow("Group")
                         if groupSelection == Self.newGroupTag {
                             TextField("Group name", text: $newGroupName, prompt: Text("Branch — BKK"))
@@ -331,18 +331,18 @@ struct QuickConnectSheet: View {
         // Kept ahead of the parser's own verdict: `admin@` is a specific
         // mistake with a specific answer, and letting it fall through to the
         // general "not a valid address" made the message worse than it was.
-        if trimmedAddress.hasSuffix("@") { return "Host is missing after the “@”" }
-        if targetHost.isEmpty { return "Host is missing after the “@”" }
-        if targetHost.contains(where: { $0.isWhitespace }) { return "Host must not contain spaces" }
+        if trimmedAddress.hasSuffix("@") { return String(localized: "Host is missing after the “@”") }
+        if targetHost.isEmpty { return String(localized: "Host is missing after the “@”") }
+        if targetHost.contains(where: { $0.isWhitespace }) { return String(localized: "Host must not contain spaces") }
         // Everything ConnectParser refuses, refused here with a name. The test
         // is the parser itself, not a list of characters copied out of it —
         // that list was missing ":" and let a malformed port through.
         guard splitTarget != nil else {
-            return trimmedAddress.contains(":") ? "Port after “:” must be 1-65535"
-                                                : "Host is not a valid address"
+            return trimmedAddress.contains(":") ? String(localized: "Port after “:” must be 1-65535")
+                                                : String(localized: "Host is not a valid address")
         }
         if targetHost.contains("@") || targetHost.contains("[") || targetHost.contains("]") {
-            return "Host is not a valid address"
+            return String(localized: "Host is not a valid address")
         }
         return nil
     }
@@ -369,7 +369,7 @@ struct QuickConnectSheet: View {
 
     private var portError: String? {
         guard kind == .ssh, parsedPort == nil else { return nil }
-        return "Port must be 1-65535"
+        return String(localized: "Port must be 1-65535")
     }
 
     private var isValid: Bool {

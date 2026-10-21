@@ -196,7 +196,7 @@ final class SessionTerminalHost {
                                          dangerous: dangerous)
             return false
         case .refused(let error):
-            showPasteLimitAlert(error == .tooManyLines ? "The block contains more than 10,000 lines." : "The block is larger than 5 MB.")
+            showPasteLimitAlert(error == .tooManyLines ? String(localized: "The block contains more than 10,000 lines.") : String(localized: "The block is larger than 5 MB."))
             return false
         }
     }
@@ -567,10 +567,10 @@ final class SessionTerminalHost {
         } catch _ where !reviewAll {
             return true
         } catch SafePastePlan.ParseError.tooManyBytes {
-            showPasteLimitAlert("The clipboard is larger than 5 MB.")
+            showPasteLimitAlert(String(localized: "The clipboard is larger than 5 MB."))
             return false
         } catch SafePastePlan.ParseError.tooManyLines {
-            showPasteLimitAlert("The clipboard contains more than 10,000 lines.")
+            showPasteLimitAlert(String(localized: "The clipboard contains more than 10,000 lines."))
             return false
         } catch {
             NSSound.beep()
@@ -862,7 +862,7 @@ final class SessionTerminalHost {
             return
         }
         closeGuardQuestion()
-        let title = sessionLabel ?? "this session"
+        let title = sessionLabel ?? String(localized: "this session")
         let card = CommandGuardCardView(title: title, command: command)
         let size = card.fittingCardSize
         let bounds = terminalView.bounds.size
@@ -948,14 +948,20 @@ final class SessionTerminalHost {
         // 620 × 330), no icon — the user's call, 2026-10-09.
         alert.showsIcon = false
         alert.messageText = String(localized: "Safe Multi-line Paste")
-        let target = sessionLabel.map { " to \($0)" } ?? ""
-        alert.informativeText = "Review all \(plan.lines.count) lines (\(Self.byteCountText(plan.sourceByteCount))) before sending\(target)."
-            + CommandGuard.reviewNote(dangerous.count)
+        let size = Self.byteCountText(plan.sourceByteCount)
+        alert.informativeText = (sessionLabel.map {
+            String(localized: "Review all \(plan.lines.count) lines (\(size)) before sending to \($0).")
+        } ?? String(localized: "Review all \(plan.lines.count) lines (\(size)) before sending."))
+            // `CommandGuard.reviewNote`, in words (that one is shared with
+            // the Windows build and compared by the harness).
+            + (dangerous.isEmpty ? "" : " " + (dangerous.count == 1
+                ? String(localized: "One of them can restart or erase the device.")
+                : String(localized: "\(dangerous.count) of them can restart or erase the device.")))
         alert.addButton(withTitle: String(localized: "Send Line by Line"))
         if allowImmediate { alert.markCaution(alert.addButton(withTitle: String(localized: "Paste Immediately"))) }
         alert.addButton(withTitle: String(localized: "Cancel"))
 
-        let reviewLabel = NSTextField(labelWithString: "Commands to send:")
+        let reviewLabel = NSTextField(labelWithString: String(localized: "Commands to send:"))
         reviewLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
 
         let previewScrollView = NSScrollView(frame: .zero)
@@ -999,7 +1005,7 @@ final class SessionTerminalHost {
         previewTextView.textContainer?.widthTracksTextView = false
         previewScrollView.documentView = previewTextView
 
-        let delayLabel = NSTextField(labelWithString: "Delay between lines:")
+        let delayLabel = NSTextField(labelWithString: String(localized: "Delay between lines:"))
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         for milliseconds in Self.pasteDelayChoices {
             popup.addItem(withTitle: Self.delayTitle(milliseconds))
@@ -1010,7 +1016,7 @@ final class SessionTerminalHost {
         if let index = Self.pasteDelayChoices.firstIndex(of: selected) {
             popup.selectItem(at: index)
         }
-        popup.toolTip = "Time allowed for the device CLI to process each command"
+        popup.toolTip = String(localized: "Time allowed for the device CLI to process each command")
 
         let delayControls = NSStackView(views: [delayLabel, popup])
         delayControls.orientation = .horizontal
@@ -1160,13 +1166,10 @@ final class SessionTerminalHost {
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Paste stopped part-way")
         let cause = reason == .inputDiscarded
-            ? "The session stopped accepting input"
-            : "The session ended or the tab was switched away"
-        alert.informativeText = """
-            \(cause) after \(sent) of \(total) lines, \
-            so the rest was not sent. Check what actually reached the device \
-            before pasting the remainder.
-            """
+            ? String(localized: "The session stopped accepting input after \(sent) of \(total) lines, so the rest was not sent.")
+            : String(localized: "The session ended or the tab was switched away after \(sent) of \(total) lines, so the rest was not sent.")
+        alert.informativeText = cause + " "
+            + String(localized: "Check what actually reached the device before pasting the remainder.")
         alert.addButton(withTitle: String(localized: "OK"))
         if let window = terminalView.window, window.attachedSheet == nil {
             alert.beginSheetModal(for: window)
@@ -1187,7 +1190,7 @@ final class SessionTerminalHost {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Safe Paste Limit")
-        alert.informativeText = detail + " Split it into smaller sections before sending."
+        alert.informativeText = detail + " " + String(localized: "Split it into smaller sections before sending.")
         alert.addButton(withTitle: String(localized: "OK"))
         if let window = terminalView.window, window.attachedSheet == nil {
             alert.beginSheetModal(for: window)
@@ -1197,8 +1200,8 @@ final class SessionTerminalHost {
     }
 
     private func showPasteHUD(sent: Int, total: Int, delayMilliseconds: Int) {
-        showStatusHUD("Safe Paste \(sent)/\(total) · \(Self.delayTitle(delayMilliseconds))",
-                      stopHelp: "Stop before sending the next line") { [weak self] in
+        showStatusHUD(String(localized: "Safe Paste \(sent)/\(total) · \(Self.delayTitle(delayMilliseconds))"),
+                      stopHelp: String(localized: "Stop before sending the next line")) { [weak self] in
             self?.cancelSafePaste(reason: .stopped)
         }
         hudIsPaste = true
@@ -1225,7 +1228,7 @@ final class SessionTerminalHost {
             label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             pasteProgressLabel = label
 
-            let stop = NSButton(title: "Stop", target: self, action: #selector(stopSafePasteFromHUD))
+            let stop = NSButton(title: String(localized: "Stop"), target: self, action: #selector(stopSafePasteFromHUD))
             stop.bezelStyle = .rounded
             stop.controlSize = .small
             pasteStopButton = stop
@@ -1275,7 +1278,7 @@ final class SessionTerminalHost {
     }
 
     private static func byteCountText(_ count: Int) -> String {
-        if count < 1_024 { return "\(count) bytes" }
+        if count < 1_024 { return String(localized: "\(count) bytes") }
         return String(format: "%.1f KB", Double(count) / 1_024)
     }
 }

@@ -42,20 +42,12 @@ enum BackupManager {
         var errorDescription: String? {
             switch self {
             case .unreadableFile(let name, let reason):
-                return """
-                    \(name) is in SheepTerm's Application Support folder but could not be read \
-                    (\(reason)).
-
-                    A backup that leaves a file out means “this configuration has no such file”, \
-                    so restoring one would DELETE that file. SheepTerm will not write a backup \
-                    that is missing part of your configuration — nothing was written.
-                    """
+                return String(localized: "\(name) is in SheepTerm's Application Support folder but could not be read (\(reason)).")
+                    + "\n\n"
+                    + String(localized: "A backup that leaves a file out means “this configuration has no such file”, so restoring one would DELETE that file. SheepTerm will not write a backup that is missing part of your configuration — nothing was written.")
             case .invalidFile(let name, let reason):
-                return """
-                    The \(name) inside this backup is not usable: \(reason)
-
-                    Nothing was changed.
-                    """
+                return String(localized: "The \(name) inside this backup is not usable: \(reason)")
+                    + "\n\n" + String(localized: "Nothing was changed.")
             }
         }
     }
@@ -74,7 +66,7 @@ enum BackupManager {
         // is `SessionTerminalHost.clipboardWriteKey`.
         "allowOSC52ClipboardWrite",
         "showStatusBar", "sidebarWidth", "statusShowClock", "statusShowHints",
-        "statusShowIP", "statusShowSession", "terminalTheme",
+        "statusShowIP", "statusShowSession", "statusShowSheep", "terminalTheme",
         // The terminal's own look and its scrollback depth: restoring onto a
         // fresh Mac without these gives back the hosts but not the terminal
         // the user had (3.0 (26)).
@@ -250,7 +242,7 @@ enum BackupManager {
         do {
             payload = try makePayload()
         } catch {
-            report("Nothing was backed up", error.localizedDescription, style: .warning)
+            report(String(localized: "Nothing was backed up"), error.localizedDescription, style: .warning)
             return
         }
 
@@ -259,7 +251,7 @@ enum BackupManager {
             panel.allowedContentTypes = [type]
         }
         panel.nameFieldStringValue = "SheepTerm-\(fileStamp("yyyy-MM-dd")).\(fileExtension)"
-        panel.message = "Groups, hosts and settings. Passwords stay in your Keychain and are not included."
+        panel.message = String(localized: "Groups, hosts and settings. Passwords stay in your Keychain and are not included.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         let encoder = JSONEncoder()
@@ -269,7 +261,7 @@ enum BackupManager {
             let data = try encoder.encode(payload)
             try data.write(to: url, options: .atomic)
         } catch {
-            report("Could not write the backup", error.localizedDescription, style: .warning)
+            report(String(localized: "Could not write the backup"), error.localizedDescription, style: .warning)
         }
     }
 
@@ -282,23 +274,23 @@ enum BackupManager {
         if let type = UTType(filenameExtension: fileExtension) { types.insert(type, at: 0) }
         panel.allowedContentTypes = types
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a SheepTerm backup to restore"
+        panel.message = String(localized: "Choose a SheepTerm backup to restore")
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let data = try? Data(contentsOf: url),
               let raw = try? decoder.decode(Payload.self, from: data) else {
-            report("That file is not a SheepTerm backup",
-                   "It could not be read as one. Nothing was changed.", style: .warning)
+            report(String(localized: "That file is not a SheepTerm backup"),
+                   String(localized: "It could not be read as one. Nothing was changed."), style: .warning)
             return
         }
         // `>= 1` as well: format 0 is a number this app has never written, so a
         // file claiming it was not made here and should not be trusted to
         // decode into anything meaningful.
         guard raw.format >= 1, raw.format <= currentFormat else {
-            report("This backup is from a newer SheepTerm",
-                   "Update SheepTerm and try again. Nothing was changed.", style: .warning)
+            report(String(localized: "This backup is from a newer SheepTerm"),
+                   String(localized: "Update SheepTerm and try again. Nothing was changed."), style: .warning)
             return
         }
         // Checked AND cleaned before the confirmation, not after: there is no
@@ -319,7 +311,7 @@ enum BackupManager {
             // dialog can say what a Restore will change.
             hygiene = try sanitize(&payload)
         } catch {
-            report("That backup cannot be restored", error.localizedDescription, style: .warning)
+            report(String(localized: "That backup cannot be restored"), error.localizedDescription, style: .warning)
             return
         }
 
@@ -333,17 +325,10 @@ enum BackupManager {
         stamp.timeStyle = .short
         let alert = SheepAlert()
         alert.messageText = String(localized: "Restore this backup?")
-        alert.informativeText = """
-            \(payload.app) · \(payload.device) · \(stamp.string(from: payload.created))
-            \(payload.groupCount) groups, \(payload.hostCount) hosts.
-
-            This replaces every group, host and setting in SheepTerm. Your current \
-            hosts, credentials list and settings are copied aside \
-            first, so nothing is lost for good. Passwords are not part of a backup — \
-            they stay in the Keychain of the Mac they were saved on, so a credential \
-            restored from another Mac will ask for its password on every connection \
-            until you re-enter it in Settings.\(hygiene.summary.map { "\n\n\($0)" } ?? "")
-            """
+        alert.informativeText = "\(payload.app) · \(payload.device) · \(stamp.string(from: payload.created))\n"
+            + String(localized: "\(payload.groupCount) groups, \(payload.hostCount) hosts.") + "\n\n"
+            + String(localized: "This replaces every group, host and setting in SheepTerm. Your current hosts, credentials list and settings are copied aside first, so nothing is lost for good. Passwords are not part of a backup — they stay in the Keychain of the Mac they were saved on, so a credential restored from another Mac will ask for its password on every connection until you re-enter it in Settings.")
+            + (hygiene.summary.map { "\n\n\($0)" } ?? "")
         alert.alertStyle = .warning
         alert.addButton(withTitle: String(localized: "Restore"))
         alert.addButton(withTitle: String(localized: "Cancel"))
@@ -356,8 +341,8 @@ enum BackupManager {
         do {
             safety = try snapshotCurrent()
         } catch {
-            report("Could not set your current configuration aside",
-                   "\(error.localizedDescription)\n\nNothing was changed.", style: .warning)
+            report(String(localized: "Could not set your current configuration aside"),
+                   "\(error.localizedDescription)\n\n" + String(localized: "Nothing was changed."), style: .warning)
             return
         }
         do {
@@ -366,14 +351,11 @@ enum BackupManager {
             // Put back what the snapshot holds, so a failed restore leaves the
             // configuration it started from rather than a mixture.
             let rolledBack = safety.map { rollBack(from: $0) } ?? false
-            report("The restore failed part-way",
-                   """
-                   \(error.localizedDescription)
-
-                   \(rolledBack
-                     ? "Your previous configuration was put back."
-                     : "Your previous configuration is in \(safety?.lastPathComponent ?? "the pre-restore folder") inside SheepTerm's Application Support folder; restore it from there.")
-                   """,
+            report(String(localized: "The restore failed part-way"),
+                   "\(error.localizedDescription)\n\n"
+                   + (rolledBack
+                     ? String(localized: "Your previous configuration was put back.")
+                     : String(localized: "Your previous configuration is in \(safety?.lastPathComponent ?? String(localized: "the pre-restore folder")) inside SheepTerm's Application Support folder; restore it from there.")),
                    style: .critical)
             AppModel.shared.reloadAfterRestore()
             return
@@ -381,11 +363,10 @@ enum BackupManager {
         AppModel.shared.reloadAfterRestore()
 
         let done = SheepAlert()
-        done.messageText = "Configuration restored"
+        done.messageText = String(localized: "Configuration restored")
         let snapshotNote = safety.map {
-            "Your previous configuration is in \($0.lastPathComponent) inside SheepTerm's Application Support "
-                + "folder. To go back to it, use Restore and choose \(snapshotBackupName) from that folder."
-        } ?? "Your previous configuration was empty, so nothing was set aside."
+            String(localized: "Your previous configuration is in \($0.lastPathComponent) inside SheepTerm's Application Support folder. To go back to it, use Restore and choose \(snapshotBackupName) from that folder.")
+        } ?? String(localized: "Your previous configuration was empty, so nothing was set aside.")
         // Repeated after the fact, not only before it: the confirmation is
         // gone by now and this is the sheet the user is left looking at when
         // they go hunting for the baud rate they used to have.
@@ -568,18 +549,14 @@ enum BackupManager {
     private static func checkCredentialsCarryNoSecrets(_ data: Data) throws {
         guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw BackupError.invalidFile(name: "credentials.json",
-                                          reason: "it is not a list of credentials.")
+                                          reason: String(localized: "it is not a list of credentials."))
         }
         for entry in entries {
             let unexpected = Set(entry.keys).subtracting(credentialKeys).sorted()
             guard unexpected.isEmpty else {
                 throw BackupError.invalidFile(
                     name: "credentials.json",
-                    reason: """
-                        it carries fields SheepTerm never writes (\(unexpected.joined(separator: ", "))). \
-                        A credential is a name and a username only — the password belongs in the \
-                        Keychain, and SheepTerm will not copy one onto this Mac's disk.
-                        """)
+                    reason: String(localized: "it carries fields SheepTerm never writes (\(unexpected.joined(separator: ", "))). A credential is a name and a username only — the password belongs in the Keychain, and SheepTerm will not copy one onto this Mac's disk."))
             }
         }
     }

@@ -21,7 +21,7 @@ extension Host {
     /// File / ＋ → New Web Tab: an empty tab (no URL yet). Not saved, not a
     /// recent until a page loads (`adoptingTypedURL` gives it one).
     static func emptyWebTab() -> Host {
-        Host(name: "New Tab", kind: .web, address: "", port: 443)
+        Host(name: String(localized: "New Tab"), kind: .web, address: "", port: 443)
     }
 
     /// An UNSAVED web tab (New Web Tab, a Quick Search URL) follows what the

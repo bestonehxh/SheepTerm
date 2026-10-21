@@ -129,7 +129,7 @@ enum ConnectionCardAction {
 final class ConnectionCardModel: ObservableObject {
     @Published var header: ConnectionCardHeader
     @Published var stage: ConnectionStage = .connect
-    @Published var page: ConnectionCardPage = .progress("Connecting…")
+    @Published var page: ConnectionCardPage = .progress(String(localized: "Connecting…"))
     /// Bumped by every `show`: the page's own state (what was typed) is
     /// discarded with the page.
     @Published var pageID = 0
@@ -413,7 +413,7 @@ struct ConnectionCardContent: View {
         case .question(let prompt):
             switch prompt.step {
             case .username: return .init(symbol: "person.fill")
-            case .hostKey: return .init(symbol: "key.fill")
+            case .hostKey(let question): return .init(symbol: "key.fill", danger: question.conflict != nil)
             case .password, .challenge: return .init(symbol: "lock.fill")
             }
         case .failure(_, _, let problem, _):
@@ -436,17 +436,29 @@ struct ConnectionCardContent: View {
                 secondary(text)
             case .question(let prompt):
                 let name = prompt.viaJump ? prompt.host : model.header.title
-                let endpoint = prompt.viaJump ? "jump host for \(prompt.tabHost)" : model.header.subtitle
+                let endpoint = prompt.viaJump ? String(localized: "jump host for \(prompt.tabHost)") : model.header.subtitle
                 switch prompt.step {
                 case .hostKey(let question):
                     title(prompt.viaJump ? question.target : name)
                     secondary(endpoint)
                     // One line at the card's width — a wrapped second line
                     // centred under the first read badly (the user, 2026-10-09).
-                    Text("First connection — compare the fingerprint before you trust it.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                        .lineLimit(1).minimumScaleFactor(0.9)
-                        .padding(.top, 2)
+                    Group {
+                        switch question.conflict {
+                        case .changed?:
+                            Text("The host key has CHANGED since you trusted it.")
+                                .foregroundStyle(Color(nsColor: SheepAlert.destructiveRed))
+                        case .typeChanged?:
+                            Text("The host key TYPE has changed since you trusted it.")
+                                .foregroundStyle(Color(nsColor: SheepAlert.destructiveRed))
+                        case nil:
+                            Text("First connection — compare the fingerprint before you trust it.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.system(size: 12))
+                    .lineLimit(1).minimumScaleFactor(0.9)
+                    .padding(.top, 2)
                 case .password(let account):
                     title(ConnectionCardPlan.passwordTitle(account: account, name: name))
                     secondary(endpoint)
@@ -503,7 +515,11 @@ struct ConnectionCardContent: View {
                      buttons: { CardButton(String(localized: "Cancel"), role: .neutral, help: String(localized: "Cancel the connection (Esc)")) { model.escape() } })
         case .question(let prompt):
             if case .hostKey(let question) = prompt.step {
-                HostKeyPage(model: model, question: question)
+                if question.conflict != nil {
+                    ChangedHostKeyPage(model: model, question: question)
+                } else {
+                    HostKeyPage(model: model, question: question)
+                }
             } else {
                 EntryPage(model: model, prompt: prompt)
             }
@@ -631,7 +647,7 @@ private struct EntryPage: View {
             .id(model.pageID)
         }, buttons: {
             CardButton(String(localized: "Cancel"), role: .neutral, help: String(localized: "Cancel the connection (Esc)")) { model.escape() }
-            CardButton(submitTitle, role: .green, help: "Return", busy: model.entry.busy, action: submit)
+            CardButton(submitTitle, role: .green, help: String(localized: "Return"), busy: model.entry.busy, action: submit)
         })
         .onChange(of: model.pageID) { _, _ in text = "" }
 #if DEBUG
@@ -702,6 +718,46 @@ private struct HostKeyPage: View {
             CardButton(String(localized: "Cancel"), role: .neutral,
                        help: String(localized: "Don't trust this key — the connection is cancelled and nothing is saved (Return / Esc)")) { model.send(.answer(.cancel)) }
             CardButton(String(localized: "Trust & Connect"), role: .green, help: String(localized: "Save this key to known_hosts and connect")) { model.send(.answer(.trust)) }
+        })
+    }
+}
+
+/// A host key that does not match the pin in the user's known_hosts (an HA
+/// pair's other box, a reinstalled device — or a man-in-the-middle). Cancel
+/// is the safe answer and what Return / Esc give (the card's keyDown); "Trust
+/// This Key Too" takes a click AND a second, explicit confirmation, and adds
+/// the key BESIDE the old one (both boxes of an HA pair then connect quietly).
+private struct ChangedHostKeyPage: View {
+    @ObservedObject var model: ConnectionCardModel
+    let question: SSHWorker.HostKeyQuestion
+    @State private var confirming = false
+
+    var body: some View {
+        let base64 = question.fingerprint.hasPrefix("SHA256:") ? String(question.fingerprint.dropFirst(7)) : question.fingerprint
+        CardPage(content: {
+            if confirming {
+                Text("Only if this host is an HA pair or you know its key was replaced. Both keys will be trusted for \(question.target).")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(nsColor: SheepAlert.destructiveRed))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                FingerprintBlock(keyType: HostKeyPromptView.keyTypeLabel(question.keyType), fingerprint: base64, oneLine: true)
+            }
+        }, buttons: {
+            if confirming {
+                CardButton(String(localized: "Back"), role: .neutral,
+                           help: String(localized: "Back to the key")) { confirming = false }
+                CardButton(String(localized: "Trust Both Keys"), role: .caution,
+                           help: String(localized: "Add this key to known_hosts beside the one already pinned, and connect")) { model.send(.answer(.trust)) }
+            } else {
+                CardButton(String(localized: "Trust This Key Too…"), role: .caution,
+                           help: String(localized: "For an HA pair or a replaced key: keep the pinned key and add this one")) { confirming = true }
+                Spacer(minLength: 16)
+                CardButton(String(localized: "Cancel"), role: .neutral,
+                           help: String(localized: "Don't trust this key — the connection is cancelled and nothing is saved (Return / Esc)")) { model.send(.answer(.cancel)) }
+            }
         })
     }
 }

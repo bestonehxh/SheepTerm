@@ -351,13 +351,13 @@ final class SerialTerminalController: NSObject {
         guard worker.isTransferring else { return }
         let text: String
         if done == 0 {
-            text = "\(label) · waiting for the device"
+            text = String(localized: "\(label) · waiting for the device")
         } else {
             let percent = total > 0 ? done * 100 / total : 100
             let rate = Double(done) / max(Date().timeIntervalSince(started), 0.001)
             text = "\(label) \(percent)% · \(Self.sizeText(Int(rate)))/s"
         }
-        terminalHost.showStatusHUD(text, stopHelp: "Stop the transfer (the device gets the abort)") { [weak self] in
+        terminalHost.showStatusHUD(text, stopHelp: String(localized: "Stop the transfer (the device gets the abort)")) { [weak self] in
             self?.worker.cancelTransfer()
         }
     }

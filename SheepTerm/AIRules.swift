@@ -56,16 +56,19 @@ public nonisolated struct AIMessage: Identifiable, Equatable, Sendable {
     public var text: String
     public var provider: AIProvider
     public var attachments: [AIAttachment] = []
+    /// Pasted images sent with this turn (chips under the user's message).
+    public var images: [AIImageAttachment] = []
     /// Short error line under an assistant turn.
     public var failure: String?
     public var stopped = false
 
     public init(role: Role, text: String, provider: AIProvider, attachments: [AIAttachment] = [],
-                failure: String? = nil, stopped: Bool = false) {
+                images: [AIImageAttachment] = [], failure: String? = nil, stopped: Bool = false) {
         self.role = role
         self.text = text
         self.provider = provider
         self.attachments = attachments
+        self.images = images
         self.failure = failure
         self.stopped = stopped
     }
@@ -77,11 +80,15 @@ public nonisolated struct AIConversation: Equatable, Sendable {
     public var provider: AIProvider
     public var messages: [AIMessage] = []
     public var pending: [AIAttachment] = []
+    /// Pasted images waiting with the next turn (chips above the composer).
+    public var pendingImages: [AIImageAttachment] = []
     public var draft = ""
     public var running = false
     public var claudeSession = UUID()
     public var claudeStarted = false
     public var codexThread: String?
+    /// The session id Gemini reported in its `init` event, resumed next turn.
+    public var geminiSession: String?
     /// The send whose run may still start or fail (a newer send or a New
     /// Chat replaces it): anything from an older turn is dropped.
     public var turn = UUID()
@@ -104,6 +111,7 @@ public nonisolated struct AIConversation: Equatable, Sendable {
         var fresh = AIConversation(provider: provider)
         fresh.draft = draft
         fresh.pending = pending
+        fresh.pendingImages = pendingImages
         fresh.epoch = epoch
         fresh.attachMark = attachMark
         return fresh
@@ -113,6 +121,14 @@ public nonisolated struct AIConversation: Equatable, Sendable {
     public mutating func land(_ attachment: AIAttachment, epoch: UUID) -> Bool {
         guard self.epoch == epoch else { return false }
         pending.append(attachment)
+        return true
+    }
+
+    /// A pasted image for this chat (its bytes are already in memory, so
+    /// there is nothing to mask — but the epoch rule still applies).
+    public mutating func landImage(_ image: AIImageAttachment, epoch: UUID) -> Bool {
+        guard self.epoch == epoch else { return false }
+        pendingImages.append(image)
         return true
     }
 }
@@ -201,6 +217,14 @@ public nonisolated enum AIAttachBook {
         conversations[session] = c
         return true
     }
+
+    /// The same for a pasted image chip.
+    @discardableResult
+    public static func landImage(_ image: AIImageAttachment, session: UUID, epoch: UUID, in conversations: inout [UUID: AIConversation]) -> Bool {
+        guard var c = conversations[session], c.landImage(image, epoch: epoch) else { return false }
+        conversations[session] = c
+        return true
+    }
 }
 
 /// Short, actionable lines for what the CLIs print when something is wrong.
@@ -228,12 +252,25 @@ public nonisolated enum AIRunMessages {
         let lower = raw.lowercased()
         if lower.contains("not logged in") || lower.contains("please run /login") || lower.contains("login required")
             || lower.contains("not signed in") || lower.contains("unauthorized") || lower.contains("401")
-            || lower.contains("invalid api key") || lower.contains("authentication") {
+            || lower.contains("invalid api key") || lower.contains("authentication")
+            || lower.contains("credentials") || lower.contains("api key not valid")
+            || lower.contains("permission_denied") || lower.contains("403") {
             return notSignedIn(provider)
         }
-        if lower.contains("usage limit") || lower.contains("rate limit") || lower.contains("429") {
+        if lower.contains("usage limit") || lower.contains("rate limit") || lower.contains("429")
+            || lower.contains("resource_exhausted") || lower.contains("quota") {
             return "\(provider.label): usage limit reached — try again later"
         }
         return "\(provider.label): \(raw)"
+    }
+}
+
+/// The panel closes itself when the last tab goes: every chat belongs to a
+/// tab and is dropped with it, so an open panel would show nothing. Only the
+/// step from some tabs to none hides it — a panel the user opens on an empty
+/// window stays open.
+public nonisolated enum AIPanelAutoClose {
+    public static func shouldHide(tabsBefore: Int, tabsAfter: Int, shown: Bool) -> Bool {
+        shown && tabsBefore > 0 && tabsAfter == 0
     }
 }

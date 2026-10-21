@@ -5,8 +5,8 @@ enum NetworkInfo {
     /// "This Mac: 192.168.1.45 · en0" — prefers en0, falls back to the first
     /// non-loopback IPv4 interface that is up.
     static func summary() -> String {
-        guard let (ip, interface) = primaryIPv4() else { return "This Mac: no IPv4" }
-        return "This Mac: \(ip) · \(interface)"
+        guard let (ip, interface) = primaryIPv4() else { return String(localized: "This Mac: no IPv4") }
+        return String(localized: "This Mac: \(ip) · \(interface)")
     }
 
     static func primaryIPv4() -> (ip: String, interface: String)? {

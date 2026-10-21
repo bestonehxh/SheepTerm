@@ -470,7 +470,7 @@ struct TabItemView: View {
         // of unrelated labels rather than one selectable tab.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
-        .accessibilityValue(tab.statusInfo ?? "")
+        .accessibilityValue(StatusInfoDisplay.text(tab.statusInfo) ?? "")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityHint("Switches to this session")
         // children: .ignore above also swallows the × button, so VoiceOver had

@@ -48,10 +48,15 @@ final class AIPanelModel: ObservableObject {
     static let widthKey = "aiPanelWidth"
     static let providerKey = "aiDefaultProvider"
     static let claudeModelKey = "aiClaudeModel"
+    static let chatGPTModelKey = "aiChatGPTModel"
+    static let geminiModelKey = "aiGeminiModel"
     static let widthRange: ClosedRange<CGFloat> = 280...640
 
     @Published private(set) var conversations: [UUID: AIConversation] = [:]
     @Published private(set) var status: [AIProvider: AIAccountStatus] = [:]
+    /// The chosen model per provider (persisted; the header menu and Settings
+    /// observe this so both stay in step).
+    @Published private(set) var models: [AIProvider: String] = [:]
     @Published private(set) var checking = false
 
     private var runs = AIRunBook<AIProcessRun>()
@@ -61,12 +66,26 @@ final class AIPanelModel: ObservableObject {
     private var verified: Set<AIProvider> = []
     private var binaries: [AIProvider: AIBinary] = [:]
     private var cancellables: Set<AnyCancellable> = []
+    /// For `AIPanelAutoClose`: how many tabs the last `$tabs` value had.
+    private var tabCount = 0
 
     private init() {
         AppModel.shared.$tabs
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] tabs in self?.prune(keeping: Set(tabs.map(\.id))) }
+            .sink { [weak self] tabs in
+                guard let self else { return }
+                self.prune(keeping: Set(tabs.map(\.id)))
+                let chrome = AIPanelChrome.shared
+                if AIPanelAutoClose.shouldHide(tabsBefore: self.tabCount, tabsAfter: tabs.count, shown: chrome.shown) {
+                    withAnimation(AppModel.sidebarAnimation) { chrome.shown = false }
+                }
+                self.tabCount = tabs.count
+            }
             .store(in: &cancellables)
+        for provider in AIProvider.allCases {
+            let stored = UserDefaults.standard.string(forKey: Self.modelKey(for: provider)) ?? AICLI.defaultModel(for: provider)
+            models[provider] = AICLI.model(stored, for: provider)
+        }
         #if DEBUG
         AIPanelDemo.runIfRequested(self)
         #endif
@@ -76,8 +95,24 @@ final class AIPanelModel: ObservableObject {
         UserDefaults.standard.string(forKey: Self.providerKey).flatMap(AIProvider.init(rawValue:)) ?? .claude
     }
 
-    var claudeModel: String {
-        UserDefaults.standard.string(forKey: Self.claudeModelKey) ?? AICLI.defaultClaudeModel
+    /// The provider's chosen model (persisted; never an unknown value).
+    func model(for provider: AIProvider) -> String {
+        models[provider] ?? AICLI.defaultModel(for: provider)
+    }
+
+    func setModel(_ model: String, for provider: AIProvider) {
+        let value = AICLI.model(model, for: provider)
+        guard models[provider] != value else { return }
+        models[provider] = value
+        UserDefaults.standard.set(value, forKey: Self.modelKey(for: provider))
+    }
+
+    static func modelKey(for provider: AIProvider) -> String {
+        switch provider {
+        case .claude: return claudeModelKey
+        case .chatgpt: return chatGPTModelKey
+        case .gemini: return geminiModelKey
+        }
     }
 
     func toggle() { AIPanelChrome.shared.toggle() }
@@ -144,7 +179,7 @@ final class AIPanelModel: ObservableObject {
         case .empty:
             NSSound.beep()
         case .nothingNew:
-            showNotice("No new output since the last attach", for: session)
+            showNotice(String(localized: "No new output since the last attach"), for: session)
         case .recent(let lines, let mark):
             update(session) { $0.attachMark = mark; $0.notice = nil }
             attach(lines.joined(separator: "\n"), title: "Last \(lines.count) lines", to: session)
@@ -184,6 +219,31 @@ final class AIPanelModel: ObservableObject {
         update(session) { $0.pending.removeAll { $0.id == id } }
     }
 
+    /// A pasted image joins the composer as a chip. The bytes stay in memory;
+    /// the run's own folder is where they land on disk, for the length of the
+    /// run (see `AIRunPlanner`).
+    func attachImage(_ pngData: Data, for session: UUID) {
+        guard !pngData.isEmpty else { NSSound.beep(); return }
+        guard AppModel.shared.tabs.contains(where: { $0.id == session }) else { return }
+        let name = "pasted-\(UUID().uuidString.prefix(8).lowercased()).png"
+        let image = AIImageAttachment(pngData: pngData, name: name)
+        let epoch = AIAttachBook.begin(&conversations, session: session, defaultProvider: defaultProvider)
+        _ = AIAttachBook.landImage(image, session: session, epoch: epoch, in: &conversations)
+    }
+
+    /// The tab's terminal exactly as it is on screen, as an image chip. Unlike
+    /// a text attach this cannot be masked — what is on screen is sent.
+    func captureTerminal(for session: UUID) {
+        guard let png = AppModel.shared.terminalHost(ofSession: session)?.terminalView.snapshotPNG() else {
+            showNotice(String(localized: "Nothing on screen to capture"), for: session); return
+        }
+        attachImage(png, for: session)
+    }
+
+    func removeImage(_ id: UUID, from session: UUID) {
+        update(session) { $0.pendingImages.removeAll { $0.id == id } }
+    }
+
     /// The saved credential's password for this session, if the vault is
     /// already open (never a Keychain prompt for this).
     private func knownSecrets(for session: UUID) -> [String] {
@@ -215,7 +275,8 @@ final class AIPanelModel: ObservableObject {
 
     func canSend(_ session: UUID) -> Bool {
         let c = conversation(for: session)
-        return !c.running && (!c.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !c.pending.isEmpty)
+        return !c.running && (!c.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || !c.pending.isEmpty || !c.pendingImages.isEmpty)
     }
 
     func send(for session: UUID) {
@@ -224,23 +285,28 @@ final class AIPanelModel: ObservableObject {
         let provider = c.provider
         let question = c.draft
         let attachments = c.pending
+        let images = c.pendingImages
         let context = context(for: session)
         let system = AIPromptBuilder.systemPrompt(family: context.family, sessionKind: context.kind)
-        let user = AIPromptBuilder.userPrompt(question: question, attachments: attachments)
+        let user = AIPromptBuilder.userPrompt(question: question, attachments: attachments,
+                                              imageNames: images.map(\.name))
         let turn = UUID()
         update(session) {
             $0.turn = turn
             $0.messages.append(AIMessage(role: .user, text: question.trimmingCharacters(in: .whitespacesAndNewlines),
-                                         provider: provider, attachments: attachments))
+                                         provider: provider, attachments: attachments, images: images))
             $0.messages.append(AIMessage(role: .assistant, text: "", provider: provider))
             $0.pending = []
+            $0.pendingImages = []
             $0.draft = ""
             $0.running = true
         }
         let claudeSession = c.claudeSession.uuidString.lowercased()
         let claudeResume = c.claudeStarted
         let codexThread = c.codexThread
-        let model = claudeModel
+        let geminiSession = c.geminiSession
+        let geminiResume = geminiSession != nil
+        let model = model(for: provider)
         let needsCheck = !verified.contains(provider)
         let known = binaries[provider]
 
@@ -250,14 +316,19 @@ final class AIPanelModel: ObservableObject {
             var planner = AIRunPlanner(root: AIRunPlanner.defaultRoot(), baseEnvironment: env,
                                        loginPath: AIBinaryLocator.loginPath(environment: env))
             planner.sandboxCodex = true
+            planner.sandboxGemini = true
             let outcome = AIRunPrep.prepare(provider, binary: binary, needsCheck: needsCheck, planner: planner) { planner, binary in
                 switch provider {
                 case .claude:
                     return try planner.claudeSpec(binary: binary, system: system, prompt: user, model: model,
-                                                  sessionID: claudeSession, resume: claudeResume)
+                                                  sessionID: claudeSession, resume: claudeResume, images: images)
                 case .chatgpt:
                     let prompt = codexThread == nil ? AIPromptBuilder.combined(system: system, user: user) : user
-                    return try planner.codexSpec(binary: binary, prompt: prompt, threadID: codexThread)
+                    return try planner.codexSpec(binary: binary, prompt: prompt, threadID: codexThread,
+                                                 model: model, images: images)
+                case .gemini:
+                    return try planner.geminiSpec(binary: binary, system: system, prompt: user, model: model,
+                                                  sessionID: geminiSession, resume: geminiResume, images: images)
                 }
             }
             await self.prepared(outcome, provider: provider, session: session, turn: turn)
@@ -305,7 +376,7 @@ final class AIPanelModel: ObservableObject {
             try run.start()
         } catch {
             runs.remove(session)
-            finish(session, .failed("\(provider.label) couldn't start — Settings ▸ AI"), status: nil)
+            finish(session, .failed(String(localized: "\(provider.label) couldn't start — Settings ▸ AI")), status: nil)
         }
     }
 
@@ -336,7 +407,7 @@ final class AIPanelModel: ObservableObject {
                 c.messages[last].text += text
                 if c.provider == .claude { c.claudeStarted = true }
             case .session(let id):
-                c.codexThread = id
+                if c.provider == .gemini { c.geminiSession = id } else { c.codexThread = id }
             default:
                 break
             }

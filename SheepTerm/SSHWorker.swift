@@ -1332,12 +1332,37 @@ nonisolated final class SSHWorker: Sendable {
         let keyType: String
         /// OpenSSH's form: "SHA256:" + unpadded base64 of SHA-256(key blob).
         let fingerprint: String
+        /// nil = first connection. Set = the user's known_hosts pins a
+        /// different key for this host; the card offers "Trust This Key
+        /// Too" (pinned BESIDE the old one — an HA pair's second box).
+        var conflict: HostKeyConflict? = nil
 
         /// "host" on port 22, "host:port" otherwise ("[v6]:port" for an
         /// IPv6 literal, so the port cannot read as part of the address).
         var target: String {
             if port == 22 { return host }
             return host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
+        }
+    }
+
+    /// What a key that does not match the pin is (`addableConflict`).
+    nonisolated enum HostKeyConflict: Sendable, Equatable {
+        /// Same type, different key.
+        case changed
+        /// Only keys of other types are pinned.
+        case typeChanged
+    }
+
+    /// A refusal the user may override by pinning this key BESIDE the old
+    /// one: only a conflict in the user's OWN file (CHANGED / TYPE CHANGED).
+    /// Never @revoked, never a pin in the system file (an administrator's),
+    /// never an unreadable file — those stay plain refusals.
+    static func addableConflict(user: KnownHosts.Result, global: KnownHosts.Result) -> HostKeyConflict? {
+        guard case .notFound = global else { return nil }
+        switch user {
+        case .changed: return .changed
+        case .otherType: return .typeChanged
+        default: return nil
         }
     }
 
@@ -1437,6 +1462,31 @@ nonisolated final class SSHWorker: Sendable {
         }
     }
 
+    /// "Trust This Key Too" — the whole decision for a key that conflicts with
+    /// the user's pin, minus the UI (the harness drives it). `refusal` is the
+    /// CHANGED / TYPE CHANGED message the connection ends with when the user
+    /// does not add the key. Only `.trust` writes, and `pinFirstUse` checks
+    /// AGAIN under the file lock that the conflict is still the one the user
+    /// was shown before appending (the old lines stay).
+    static func trustBesidePin(key: SSHPublicKey, host: String, port: Int, global: KnownHosts.Result,
+                               conflict: HostKeyConflict, refusal: String, path: String,
+                               ask: (HostKeyQuestion) -> HostKeyAnswer) -> FirstUseOutcome {
+        var question = hostKeyQuestion(key: key, host: host, port: port)
+        question.conflict = conflict
+        switch ask(question) {
+        case .stopped: return .stopped
+        case .cancel, .trustOnce: return .refused(refusal)
+        case .trust: break
+        }
+        let (verdict, saveError) = pinFirstUse(key: key, host: host, port: port, global: global, path: path,
+                                               besidePin: conflict)
+        switch verdict {
+        case .trusted: return .alreadyTrusted
+        case .refused(let why): return .refused(why)
+        case .firstSeen: return saveError.map { .notSaved($0) } ?? .saved
+        }
+    }
+
     /// The close message for a declined first-seen key. Starts with
     /// "connection cancelled" on purpose: the controller turns that into
     /// "disconnected — cancelled", which auto-reconnect leaves alone (it
@@ -1462,9 +1512,33 @@ nonisolated final class SSHWorker: Sendable {
         // overwrite the stored key.
         guard let user = files.user else { return .hostKey(Self.unreadableKnownHostsRefusal) }
         let global = files.global?.lookup(host: host, port: port, key: key) ?? KnownHosts.Result.notFound
-        switch Self.hostKeyVerdict(user: user.lookup(host: host, port: port, key: key), global: global) {
+        let userResult = user.lookup(host: host, port: port, key: key)
+        switch Self.hostKeyVerdict(user: userResult, global: global) {
         case .trusted: return nil
-        case .refused(let why): return .hostKey(why)
+        case .refused(let why):
+            guard let conflict = Self.addableConflict(user: userResult, global: global), let prompt = hostKeyPrompt,
+                  isRunning else { return .hostKey(why) }
+            let outcome = Self.trustBesidePin(key: key, host: host, port: port, global: global, conflict: conflict,
+                                              refusal: why, path: Self.sshDirectory + "/known_hosts") { q in
+                let clock = ContinuousClock()
+                let asked = clock.now
+                defer { waited(asked.duration(to: clock.now)) }
+                let answer = prompt(q) { [weak self] in !(self?.isRunning ?? false) }
+                return isRunning ? answer : .stopped
+            }
+            let id = "\(key.keyType) \(Self.fingerprint(of: key))"
+            switch outcome {
+            case .alreadyTrusted: return nil
+            case .saved:
+                notice("host key \(id) did not match the pinned key — trusted by you and ADDED to known_hosts beside it")
+                return nil
+            case .notSaved(let why):
+                notice("host key \(id) did not match the pinned key — trusted by you for this session but could NOT be added to known_hosts: \(why)")
+                return nil
+            case .refused(let why): return .hostKey(why)
+            case .stopped: return .stopped
+            case .trustedOnce, .declined: return .hostKey(why)
+            }
         case .firstSeen: break
         }
         guard isRunning else { return .stopped }
@@ -1516,8 +1590,11 @@ nonisolated final class SSHWorker: Sendable {
     /// device at once can therefore not each pin a different key (the
     /// second, possibly a MITM's, would then be trusted forever).
     /// Creates the directory (0700) and the file (0600) when missing.
+    /// `besidePin` set = "Trust This Key Too": append only while the file
+    /// still shows exactly that conflict (the old lines stay); a file that
+    /// changed meanwhile is a refusal, never a silent pin.
     static func pinFirstUse(key: SSHPublicKey, host: String, port: Int, global: KnownHosts.Result,
-                            path: String) -> (verdict: HostKeyVerdict, saveError: String?) {
+                            path: String, besidePin: HostKeyConflict? = nil) -> (verdict: HostKeyVerdict, saveError: String?) {
         let directory = (path as NSString).deletingLastPathComponent
         // EEXIST: another tab (or program) made it a moment ago — fine.
         if !FileManager.default.fileExists(atPath: directory), mkdir(directory, 0o700) != 0, errno != EEXIST {
@@ -1560,8 +1637,17 @@ nonisolated final class SSHWorker: Sendable {
             // Decided on the file as it is now even when its lock could not
             // be had: a key another tab pinned meanwhile still wins.
             let current = KnownHosts(text: String(decoding: text, as: UTF8.self))
-            let verdict = hostKeyVerdict(user: current.lookup(host: host, port: port, key: key), global: global)
-            guard verdict == .firstSeen else { return (verdict, nil) }
+            let result = current.lookup(host: host, port: port, key: key)
+            let verdict = hostKeyVerdict(user: result, global: global)
+            if let besidePin {
+                if verdict == .trusted { return (.trusted, nil) }
+                guard addableConflict(user: result, global: global) == besidePin else {
+                    if case .refused = verdict { return (verdict, nil) }
+                    return (.refused(hostKeyRefusedPrefix + "the pinned key for this host changed in known_hosts while the question was open — nothing was added. Reconnect to decide again."), nil)
+                }
+            } else {
+                guard verdict == .firstSeen else { return (verdict, nil) }
+            }
             guard writable else { return (.firstSeen, "the file is read-only") }
             // Nothing is written without the lock.
             guard !lockTimedOut else { return (.firstSeen, "another program holds ~/.ssh/known_hosts locked") }

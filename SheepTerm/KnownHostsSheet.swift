@@ -145,7 +145,7 @@ struct KnownHostsSheet: View {
         }
     }
 
-    private func emptyText(_ text: String, warn: Bool = false) -> some View {
+    private func emptyText(_ text: LocalizedStringKey, warn: Bool = false) -> some View {
         Text(text)
             .font(.system(size: 12))
             .foregroundStyle(warn ? AnyShapeStyle(Theme.warn) : AnyShapeStyle(.secondary))
@@ -163,7 +163,7 @@ struct KnownHostsSheet: View {
                     Text(title(of: entry))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(entry.hashed ? "Hashed host name (\(entry.hostsField))" : entry.hostsField)
+                        .help(entry.hashed ? String(localized: "Hashed host name (\(entry.hostsField))") : entry.hostsField)
                     if let marker = entry.marker {
                         badge(marker)
                     }
@@ -217,7 +217,7 @@ struct KnownHostsSheet: View {
         if entry.hashed {
             // Shown rows matched the search, so a typed host IS this name.
             let typed = search.trimmingCharacters(in: .whitespacesAndNewlines)
-            return typed.isEmpty || typed.lowercased().hasPrefix("sha256:") ? "Hashed host name" : typed
+            return typed.isEmpty || typed.lowercased().hasPrefix("sha256:") ? String(localized: "Hashed host name") : typed
         }
         return entry.hosts.joined(separator: ", ")
     }
@@ -256,16 +256,16 @@ struct KnownHostsSheet: View {
         alert.alertStyle = .warning
         if entries.count == 1, let entry = entries.first {
             let shown = title(of: entry)
-            let name = entry.hashed && shown == "Hashed host name" ? "this hashed entry" : shown
-            alert.messageText = "Remove the host key for \(name)?"
+            let name = entry.hashed && shown == String(localized: "Hashed host name") ? String(localized: "this hashed entry") : shown
+            alert.messageText = String(localized: "Remove the host key for \(name)?")
         } else {
-            alert.messageText = "Remove \(entries.count) host keys?"
+            alert.messageText = String(localized: "Remove \(entries.count) host keys?")
         }
-        var info = "The next connection will ask you to trust its key again."
+        var info = String(localized: "The next connection will ask you to trust its key again.")
         if entries.contains(where: { $0.marker == .revoked }) {
-            info += " Removing a @revoked line lets that key be trusted again."
+            info += " " + String(localized: "Removing a @revoked line lets that key be trusted again.")
         }
-        info += " A copy of the file is kept as known_hosts\(SSHWorker.knownHostsBackupSuffix)."
+        info += " " + String(localized: "A copy of the file is kept as known_hosts\(SSHWorker.knownHostsBackupSuffix).")
         alert.informativeText = info
         alert.addButton(withTitle: String(localized: "Cancel"))
         alert.addButton(withTitle: String(localized: "Remove"))

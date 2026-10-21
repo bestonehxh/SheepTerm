@@ -168,11 +168,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = live.count == 1
-            ? "Quit SheepTerm? One session is still open."
-            : "Quit SheepTerm? \(live.count) sessions are still open."
+            ? String(localized: "Quit SheepTerm? One session is still open.")
+            : String(localized: "Quit SheepTerm? \(live.count) sessions are still open.")
         let names = live.prefix(8).map { "• \($0.title)" }.joined(separator: "\n")
-        let more = live.count > 8 ? "\n• and \(live.count - 8) more" : ""
-        alert.informativeText = "Quitting closes \(live.count == 1 ? "it" : "them") right away.\n\n\(names)\(more)"
+        let more = live.count > 8 ? "\n• " + String(localized: "and \(live.count - 8) more") : ""
+        alert.informativeText = (live.count == 1 ? String(localized: "Quitting closes it right away.")
+                                                 : String(localized: "Quitting closes them right away."))
+            + "\n\n\(names)\(more)"
         let quit = alert.addButton(withTitle: String(localized: "Quit"))
         let cancel = alert.addButton(withTitle: String(localized: "Cancel"))
         // Cancel is the default: Return must never be the key that drops a
@@ -209,6 +211,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct SheepTermApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel.shared
+
+    init() {
+        AppLanguage.applySystemFallback()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -560,6 +566,7 @@ struct SheepTermCommands: Commands {
                 Label("Show Bottom Bar", systemImage: "rectangle.bottomthird.inset.filled")
             }
             Menu {
+                Toggle("Sheep", isOn: $model.statusShowSheep)
                 Toggle("Session Info", isOn: $model.statusShowSession)
                 Toggle("Shortcut Hints", isOn: $model.statusShowHints)
                 Toggle("This Mac IP", isOn: $model.statusShowIP)

@@ -603,11 +603,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             return nil
         case .ssh(let controller):
             let address = controller.host.address
-            if address.isEmpty { return status }
-            if address == title { return down ? "disconnected" : nil }
-            return down ? "\(address) · disconnected" : address
+            if address.isEmpty { return StatusInfoDisplay.text(status) }
+            if address == title { return down ? String(localized: "disconnected") : nil }
+            return down ? String(localized: "\(address) · disconnected") : address
         case .serial:
-            return status
+            return StatusInfoDisplay.text(status)
         case .web(let controller):
             let host = WebAddress.displayHost(of: controller.currentURL)
             return host == title ? nil : host
@@ -636,7 +636,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         self.detail = detail.flatMap { $0.isEmpty ? nil : $0 }
         self.dot = dot
         applyColors()
-        closeButton.setAccessibilityLabel("Close \(title)")
+        closeButton.setAccessibilityLabel(String(localized: "Close \(title)"))
     }
 
     private func applyColors() {

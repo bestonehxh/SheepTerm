@@ -66,7 +66,7 @@ struct SidebarView: View {
     /// `reportNameTaken`, and for the same reason: the prompt sheet is still
     /// on screen when its commit closure runs.
     private func reportRenameProblem(_ detail: String,
-                                     title: String = "The section was not renamed.") {
+                                     title: String = String(localized: "The section was not renamed.")) {
         DispatchQueue.main.async {
             let alert = SheepAlert()
             alert.alertStyle = .warning
@@ -94,7 +94,7 @@ struct SidebarView: View {
         // message have to talk about the same spelling the file gets.
         let others = store.sections(in: group.id).filter { $0 != prompt.name }
         guard let written = HostStore.normalizedHeading(name, existing: others) else {
-            reportRenameProblem("The name has no usable characters.")
+            reportRenameProblem(String(localized: "The name has no usable characters."))
             return
         }
         guard store.renameSection(in: group.id, from: prompt.name, to: name) else {
@@ -104,7 +104,7 @@ struct SidebarView: View {
                 reportNameTaken(written, noun: "section")
             } else if !store.sections(in: group.id).contains(prompt.name) {
                 // It was removed or renamed in the meantime.
-                reportRenameProblem("That heading is no longer in “\(group.name)”.")
+                reportRenameProblem(String(localized: "That heading is no longer in “\(group.name)”."))
             }
             return
         }
@@ -124,8 +124,8 @@ struct SidebarView: View {
         guard let group else { return }
         let existing = store.sections(in: group.id)
         guard let written = HostStore.normalizedHeading(name, existing: existing) else {
-            reportRenameProblem("The name has no usable characters.",
-                                title: "The section was not created.")
+            reportRenameProblem(String(localized: "The name has no usable characters."),
+                                title: String(localized: "The section was not created."))
             return
         }
         // A name that READS like a heading already there is a refusal, exactly
@@ -135,12 +135,12 @@ struct SidebarView: View {
             // Create wording, not the rename's: "The name is already used"
             // over a New Section sheet left it unclear whether anything was
             // created at all.
-            reportNameTaken(written, noun: "section", title: "The section was not created.")
+            reportNameTaken(written, noun: "section", title: String(localized: "The section was not created."))
             return
         }
         guard store.declareSection(name, inGroup: group.id) != nil else {
-            reportRenameProblem("That group is no longer there.",
-                                title: "The section was not created.")
+            reportRenameProblem(String(localized: "That group is no longer there."),
+                                title: String(localized: "The section was not created."))
             return
         }
     }
@@ -153,11 +153,11 @@ struct SidebarView: View {
             // The default says what is wrong with the NAME; a caller that
             // knows what failed can say that instead and put the name in the
             // line below, which is how every other refusal here reads.
-            alert.messageText = title ?? "The name “\(name)” is already used."
+            alert.messageText = title ?? String(localized: "The name “\(name)” is already used.")
             let clash = noun == "section"
-                ? "Two headings here cannot share a name."
-                : "Two groups cannot share a name."
-            alert.informativeText = title == nil ? clash : "“\(name)” is already used here."
+                ? String(localized: "Two headings here cannot share a name.")
+                : String(localized: "Two groups cannot share a name.")
+            alert.informativeText = title == nil ? clash : String(localized: "“\(name)” is already used here.")
             alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
@@ -257,10 +257,12 @@ struct SidebarView: View {
                     // largest single loss the sidebar can cause and it had no
                     // confirmation at all, while deleting one credential did.
                     guard confirmDelete(
-                        message: "Delete “\(original.name)”?",
+                        message: String(localized: "Delete “\(original.name)”?"),
                         detail: original.hosts.isEmpty
-                            ? "The group is empty."
-                            : "\(original.hosts.count) host\(original.hosts.count == 1 ? "" : "s") go with it. This cannot be undone."
+                            ? String(localized: "The group is empty.")
+                            : original.hosts.count == 1
+                            ? String(localized: "1 host goes with it. This cannot be undone.")
+                            : String(localized: "\(original.hosts.count) hosts go with it. This cannot be undone.")
                     ) else { return }
                     // Forget its collapsed state too — a stale id would
                     // linger in UserDefaults forever.
@@ -347,8 +349,8 @@ struct SidebarView: View {
                 // and the sheet simply closed with nothing created.
                 let name = HostStore.cleanGroupName(rawName)
                 guard !name.isEmpty else {
-                    reportRenameProblem("The name has no usable characters.",
-                                        title: "The group was not created.")
+                    reportRenameProblem(String(localized: "The name has no usable characters."),
+                                        title: String(localized: "The group was not created."))
                     return
                 }
                 guard !store.groups.contains(where: { $0.name == name }) else {
@@ -366,8 +368,8 @@ struct SidebarView: View {
                 // A false result also means "the group is gone" (deleted in
                 // another window), which is not worth a word.
                 if name.isEmpty {
-                    reportRenameProblem("The name has no usable characters.",
-                                        title: "The group was not renamed.")
+                    reportRenameProblem(String(localized: "The name has no usable characters."),
+                                        title: String(localized: "The group was not renamed."))
                 } else if store.groups.contains(where: { $0.id != group.id && $0.name == name }) {
                     reportNameTaken(name)
                 }

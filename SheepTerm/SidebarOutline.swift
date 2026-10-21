@@ -438,7 +438,7 @@ final class SidebarLabelCell: NSView, SidebarRowHighlight {
         // "Lab 13" — a row of a list, or thirteen of something? Said out loud
         // once, here, for group rows and heading rows alike.
         if let number {
-            setAccessibilityLabel("\(text), \(number) host\(number == 1 ? "" : "s")")
+            setAccessibilityLabel(number == 1 ? String(localized: "\(text), 1 host") : String(localized: "\(text), \(number) hosts"))
         } else {
             setAccessibilityLabel(text)
         }
@@ -941,9 +941,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 cell.configure(
                     badge: host.kind.badge,
                     color: NSColor(Theme.kindColor(host.kind)),
-                    name: isConnectTarget && host.kind == .web ? "Open \(host.address)" : host.name,
+                    name: isConnectTarget && host.kind == .web ? String(localized: "Open \(host.address)") : host.name,
                     detail: isConnectTarget
-                        ? (host.kind == .web ? "web tab · press ↩ to open" : "port \(host.port) · press ↩ to connect")
+                        ? (host.kind == .web ? String(localized: "web tab · press ↩ to open") : String(localized: "port \(String(host.port)) · press ↩ to connect"))
                         : (host.address.isEmpty ? nil : host.kind == .web ? WebAddress.shortLabel(host.address) : host.address),
                     symbol: host.kind == .web ? "globe" : nil
                 )
@@ -1288,7 +1288,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // The same words as Move to Group above, from the one place that
             // copy lives — and the count is HOSTS, not headings.
             guard self.confirmUnfiling(count: filed,
-                                       message: HostStore.unfileQuestion(count: filed))
+                                       message: SidebarOutlineCoordinator.unfileQuestion(filed))
             else { return }
             self.parent.store.setSection(nil, forHostIDs: ids)
         }
@@ -1506,7 +1506,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                                                                 toGroupID: group.id)
                     guard self.confirmUnfiling(
                         count: losing,
-                        message: HostStore.unfileQuestion(count: losing)
+                        message: SidebarOutlineCoordinator.unfileQuestion(losing)
                     ) else { return }
                     // `keepHeadingWhenStaying`: a selection spanning groups is
                     // about the hosts that CHANGE group — the ones already in
@@ -1545,6 +1545,12 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// user can put back by hand, a dozen is not, and nothing undoes it.
     /// Same shape as "Delete N Hosts": Cancel is the default button, so
     /// Return cancels.
+    /// `HostStore.unfileQuestion` (shared with Windows, compared by the
+    /// harness), in words.
+    static func unfileQuestion(_ count: Int) -> String {
+        count == 1 ? String(localized: "Unfile 1 host?") : String(localized: "Unfile \(count) hosts?")
+    }
+
     private func confirmUnfiling(count: Int, message: String) -> Bool {
         guard count > 1 else { return true }
         let alert = SheepAlert()

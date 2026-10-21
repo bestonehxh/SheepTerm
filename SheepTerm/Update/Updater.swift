@@ -158,7 +158,7 @@ final class Updater {
         let (data, response): (Data, URLResponse)
         do { (data, response) = try await capped(request, maxBytes: UpdateCore.maxReleaseJSONBytes) }
         catch let error as UpdateError { throw error }
-        catch { throw UpdateError.notInstallable("Could not reach GitHub. Check the internet connection.\n\n\(error.localizedDescription)") }
+        catch { throw UpdateError.notInstallable(String(localized: "Could not reach GitHub. Check the internet connection.") + "\n\n\(error.localizedDescription)") }
         if let http = response as? HTTPURLResponse, let error = UpdateCore.statusError(http.statusCode) {
             throw error
         }
@@ -176,18 +176,18 @@ final class Updater {
         let release: GitHubRelease
         switch result {
         case .failure(let error):
-            if manual { showError("Could Not Check for Updates", error, page: nil) }
+            if manual { showError(String(localized: "Could Not Check for Updates"), error, page: nil) }
             return
         case .success(let value): release = value
         }
         guard let current = currentVersion else {
-            if manual { showError("Could Not Check for Updates", .notInstallable("This copy's own version cannot be read."), page: nil) }
+            if manual { showError(String(localized: "Could Not Check for Updates"), .notInstallable(String(localized: "This copy's own version cannot be read.")), page: nil) }
             return
         }
         let latest: UpdateVersion
         do { latest = try UpdateCore.version(of: release, config: config) }
         catch {
-            if manual { showError("Could Not Check for Updates", error, page: config.releasesPage) }
+            if manual { showError(String(localized: "Could Not Check for Updates"), error, page: config.releasesPage) }
             return
         }
         let skipped = UserDefaults.standard.string(forKey: UpdateCore.skippedTagKey)
@@ -198,9 +198,9 @@ final class Updater {
         case .upToDate:
             if manual {
                 _ = hooks.presenter.present(
-                    title: "You're up to date",
-                    message: "\(config.appName) \(current) is the latest version.",
-                    accessory: nil, buttons: [UpdateAlertButton(title: "OK", role: .primary)])
+                    title: String(localized: "You're up to date"),
+                    message: String(localized: "\(config.appName) \(current.description) is the latest version."),
+                    accessory: nil, buttons: [UpdateAlertButton(title: String(localized: "OK"), role: .primary)])
             }
         case .offer:
             do {
@@ -224,8 +224,8 @@ final class Updater {
         let page = UpdateOfferAction.offerPage(hasNotes: !offer.notes.isEmpty)
         while true {
             let answer = hooks.presenter.present(
-                title: "\(config.appName) \(offer.version) is available",
-                message: "You have \(current).",
+                title: String(localized: "\(config.appName) \(offer.version.description) is available"),
+                message: String(localized: "You have \(current.description)."),
                 accessory: nil,
                 buttons: Self.buttons(page))
             switch UpdateOfferAction.answer(answer, on: page) {
@@ -235,8 +235,8 @@ final class Updater {
             case .details:
                 let details = UpdateOfferAction.detailsPage
                 let choice = hooks.presenter.present(
-                    title: "What's new in \(config.appName) \(offer.version)",
-                    message: "You have \(current).",
+                    title: String(localized: "What's new in \(config.appName) \(offer.version.description)"),
+                    message: String(localized: "You have \(current.description)."),
                     accessory: Self.notesView(offer.notes),
                     buttons: Self.buttons(details))
                 if UpdateOfferAction.answer(choice, on: details) == .install {
@@ -257,12 +257,12 @@ final class Updater {
     private func presentUnverifiable(release: GitHubRelease, latest: UpdateVersion,
                                      current: UpdateVersion, error: UpdateError) {
         let answer = hooks.presenter.present(
-            title: "\(config.appName) \(latest) is available",
-            message: "You have \(current). It cannot be installed from here: \(error.message)",
+            title: String(localized: "\(config.appName) \(latest.description) is available"),
+            message: String(localized: "You have \(current.description). It cannot be installed from here: \(error.message)"),
             accessory: nil,
-            buttons: [UpdateAlertButton(title: "Open Release Page", role: .primary),
-                      UpdateAlertButton(title: "Later"),
-                      UpdateAlertButton(title: "Skip This Version")])
+            buttons: [UpdateAlertButton(title: String(localized: "Open Release Page"), role: .primary),
+                      UpdateAlertButton(title: String(localized: "Later")),
+                      UpdateAlertButton(title: String(localized: "Skip This Version"))])
         switch answer {
         case 0: NSWorkspace.shared.open(UpdateCore.releasePage(release.htmlURL, config: config))
         case 2: UserDefaults.standard.set(release.tagName, forKey: UpdateCore.skippedTagKey)
@@ -274,12 +274,12 @@ final class Updater {
         if let page {
             let answer = hooks.presenter.present(
                 title: title, message: error.message, accessory: nil,
-                buttons: [UpdateAlertButton(title: "Open Release Page", role: .primary),
-                          UpdateAlertButton(title: "Close")])
+                buttons: [UpdateAlertButton(title: String(localized: "Open Release Page"), role: .primary),
+                          UpdateAlertButton(title: String(localized: "Close"))])
             if answer == 0 { NSWorkspace.shared.open(page) }
         } else {
             _ = hooks.presenter.present(title: title, message: error.message, accessory: nil,
-                                        buttons: [UpdateAlertButton(title: "OK", role: .primary)])
+                                        buttons: [UpdateAlertButton(title: String(localized: "OK"), role: .primary)])
         }
     }
 
@@ -343,7 +343,7 @@ final class Updater {
     private func install(_ offer: UpdateOffer, current: UpdateVersion) {
         guard !installing else { return }
         installing = true
-        let progress = UpdateProgressPanel(title: "Downloading \(config.appName) \(offer.version)…")
+        let progress = UpdateProgressPanel(title: String(localized: "Downloading \(config.appName) \(offer.version.description)…"))
         let task = Task { () -> Void in
             defer { installing = false; progress.close() }
             let work = FileManager.default.temporaryDirectory
@@ -358,8 +358,8 @@ final class Updater {
             } catch {
                 try? FileManager.default.removeItem(at: work)
                 progress.close()
-                let failure = error as? UpdateError ?? .notInstallable("The download failed: \(error.localizedDescription)")
-                showError("The update was not installed", failure, page: offer.page)
+                let failure = error as? UpdateError ?? .notInstallable(String(localized: "The download failed: \(error.localizedDescription)"))
+                showError(String(localized: "The update was not installed"), failure, page: offer.page)
             }
         }
         progress.onCancel = { task.cancel() }
@@ -388,9 +388,9 @@ final class Updater {
         try FileManager.default.moveItem(at: tmp, to: zipURL)
         let size = (try? FileManager.default.attributesOfItem(atPath: zipURL.path)[.size] as? Int) ?? -1
         guard size == offer.zipSize, size <= UpdateCore.maxZipBytes else {
-            throw UpdateError.badArchive("its size (\(size) bytes) is not the \(offer.zipSize) the release lists")
+            throw UpdateError.badArchive(String(localized: "its size (\(size) bytes) is not the \(offer.zipSize) the release lists"))
         }
-        progress.setStatus("Verifying…")
+        progress.setStatus(String(localized: "Verifying…"))
         // Verified BEFORE anything reads it as an archive.
         let zipData = try Data(contentsOf: zipURL, options: .mappedIfSafe)
         guard UpdateCore.verifySignature(of: zipData, signatureText: sigData,
@@ -400,14 +400,21 @@ final class Updater {
         let extracted = work.appendingPathComponent("extracted", isDirectory: true)
         try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: false)
         guard await Self.run("/usr/bin/ditto", ["-x", "-k", zipURL.path, extracted.path]) == 0 else {
-            throw UpdateError.badArchive("it could not be unpacked")
+            throw UpdateError.badArchive(String(localized: "it could not be unpacked"))
         }
         let app = try UpdateCore.inspectExtracted(at: extracted, config: config,
                                                   bundleIdentifier: Bundle.main.bundleIdentifier ?? "",
                                                   current: current, advertised: offer.version)
-        // Ad-hoc signed (no team ID) is expected; a broken seal is not.
-        guard await Self.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path]) == 0 else {
-            throw UpdateError.badArchive("its code signature does not verify")
+        // A Developer ID copy pins its own team and asks Gatekeeper (notarized); a self-signed / ad-hoc copy can
+        // only check the seal.
+        let team = CodeIdentity.ownTeamID
+        guard await Self.run("/usr/bin/codesign", UpdateCore.codesignArguments(appPath: app.path, teamID: team)) == 0 else {
+            throw UpdateError.badArchive(String(localized: "its code signature does not verify"))
+        }
+        if let gatekeeper = UpdateCore.gatekeeperArguments(appPath: app.path, teamID: team) {
+            guard await Self.run("/usr/sbin/spctl", gatekeeper) == 0 else {
+                throw UpdateError.badArchive(String(localized: "Gatekeeper does not accept it (not notarized)"))
+            }
         }
         try Task.checkCancellation()
         return app
@@ -483,8 +490,8 @@ final class Updater {
             try process.run()
         } catch {
             try? FileManager.default.removeItem(at: work)
-            showError("The update was not installed",
-                      .notInstallable("The installer could not be started: \(error.localizedDescription)"),
+            showError(String(localized: "The update was not installed"),
+                      .notInstallable(String(localized: "The installer could not be started: \(error.localizedDescription)")),
                       page: offer.page)
             return
         }
@@ -510,9 +517,9 @@ final class Updater {
         }
         if destination != zip { try? FileManager.default.removeItem(at: work) }
         _ = hooks.presenter.present(
-            title: "Update downloaded",
-            message: "\(config.appName) can only replace itself when it runs from the Applications folder and that folder is writable. The verified \(offer.zipName) is in Finder: unzip it and move \(config.appName).app into Applications.",
-            accessory: nil, buttons: [UpdateAlertButton(title: "Show in Finder", role: .primary)])
+            title: String(localized: "Update downloaded"),
+            message: String(localized: "\(config.appName) can only replace itself when it runs from the Applications folder and that folder is writable. The verified \(offer.zipName) is in Finder: unzip it and move \(config.appName).app into Applications."),
+            accessory: nil, buttons: [UpdateAlertButton(title: String(localized: "Show in Finder"), role: .primary)])
         NSWorkspace.shared.activateFileViewerSelecting([destination])
     }
 }
@@ -544,7 +551,7 @@ final class UpdateProgressPanel: NSObject {
         bar.style = .bar
         bar.isIndeterminate = true
         bar.startAnimation(nil)
-        let cancel = NSButton(title: "Cancel", target: nil, action: nil)
+        let cancel = NSButton(title: String(localized: "Cancel"), target: nil, action: nil)
         cancel.keyEquivalent = "\u{1b}"
         let stack = NSStackView(views: [label, bar, cancel])
         stack.orientation = .vertical
@@ -584,7 +591,7 @@ final class UpdateProgressPanel: NSObject {
 
     func setStatus(_ text: String) {
         label.stringValue = text
-        if text == "Verifying…" { bar.isIndeterminate = true; bar.startAnimation(nil) }
+        if text == String(localized: "Verifying…") { bar.isIndeterminate = true; bar.startAnimation(nil) }
     }
 
     /// Determinate "x of y MB" once the download reports its size.
@@ -594,7 +601,7 @@ final class UpdateProgressPanel: NSObject {
             if bar.isIndeterminate { bar.stopAnimation(nil); bar.isIndeterminate = false; bar.minValue = 0; bar.maxValue = 1 }
             bar.doubleValue = min(1, Double(got) / Double(total))
         }
-        label.stringValue = "Downloading… " + UpdateCore.megabytes(got, of: total)
+        label.stringValue = String(localized: "Downloading… \(UpdateCore.megabytes(got, of: total))")
     }
 
     func close() {
@@ -665,13 +672,13 @@ final class UpdateDownloader: NSObject, URLSessionDownloadDelegate, @unchecked S
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         defer { session.finishTasksAndInvalidate(); continuation = nil }
         if tooBig {
-            continuation?.resume(throwing: UpdateError.tooLarge("the update"))
+            continuation?.resume(throwing: UpdateError.tooLarge(String(localized: "the update")))
         } else if let error {
             continuation?.resume(throwing: error)
         } else if let moved, let response = task.response {
             continuation?.resume(returning: (moved, response))
         } else {
-            continuation?.resume(throwing: UpdateError.notInstallable("The download could not be saved."))
+            continuation?.resume(throwing: UpdateError.notInstallable(String(localized: "The download could not be saved.")))
         }
     }
 }

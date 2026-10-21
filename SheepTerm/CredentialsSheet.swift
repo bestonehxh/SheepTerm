@@ -89,7 +89,7 @@ struct CredentialsSheet: View {
                         .truncationMode(.tail)
                 }
                 if revealedIDs.contains(credential.id) {
-                    Text(credentialStore.password(for: credential) ?? "(no password stored)")
+                    Text(credentialStore.password(for: credential) ?? String(localized: "(no password stored)"))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.warn)
                         .textSelection(.enabled)
@@ -124,7 +124,7 @@ struct CredentialsSheet: View {
         .padding(.vertical, 3)
     }
 
-    private func icon(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+    private func icon(_ symbol: String, help: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.system(size: 11)) }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -145,7 +145,7 @@ struct CredentialsSheet: View {
         }
         Task { @MainActor in
             let ok = (try? await context.evaluatePolicy(.deviceOwnerAuthentication,
-                                                         localizedReason: "show your saved passwords")) ?? false
+                                                         localizedReason: String(localized: "show your saved passwords"))) ?? false
             guard ok else { return }
             unlockedUntil = Date().addingTimeInterval(PasswordsPlan.unlockSeconds)
             then()
@@ -172,10 +172,12 @@ struct CredentialsSheet: View {
     private func confirmDelete(_ credential: Credential) {
         let count = model.store.hostCount(usingCredential: credential.id)
         let alert = SheepAlert()
-        alert.messageText = "Delete “\(credential.name)”?"
+        alert.messageText = String(localized: "Delete “\(credential.name)”?")
         alert.informativeText = count == 0
-            ? "It is not used by any saved host."
-            : "\(count) saved host\(count == 1 ? "" : "s") use\(count == 1 ? "s" : "") it — \(count == 1 ? "that host" : "those hosts") will ask for the password when connecting."
+            ? String(localized: "It is not used by any saved host.")
+            : count == 1
+            ? String(localized: "1 saved host uses it — that host will ask for the password when connecting.")
+            : String(localized: "\(count) saved hosts use it — those hosts will ask for the password when connecting.")
         alert.addButton(withTitle: String(localized: "Cancel"))
         alert.addButton(withTitle: String(localized: "Delete"))
         if alert.runModal() == .alertSecondButtonReturn {

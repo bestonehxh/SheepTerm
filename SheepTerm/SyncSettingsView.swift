@@ -203,7 +203,7 @@ struct SyncSettingsSection: View {
     }
 
     static func describe(_ error: Error) -> String {
-        if case VaultCryptoError.wrongPassphrase = error { return "That passphrase does not open this vault." }
+        if case VaultCryptoError.wrongPassphrase = error { return String(localized: "That passphrase does not open this vault.") }
         return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 }
@@ -268,15 +268,15 @@ struct SyncAccountButton: View {
 
     private var helpText: String {
         switch engine.phase {
-        case .notConfigured: return "Sync is not available in this build"
-        case .signedOut: return "Sign in with Google to sync hosts and passwords across your Macs"
-        case .signingIn: return "Signing in…"
-        case .checkingVault: return "Sync: checking Google Drive…"
-        case .needsNewPassphrase: return "Sync: choose a passphrase to turn it on"
-        case .needsPassphrase: return "Sync: enter your passphrase on this Mac"
+        case .notConfigured: return String(localized: "Sync is not available in this build")
+        case .signedOut: return String(localized: "Sign in with Google to sync hosts and passwords across your Macs")
+        case .signingIn: return String(localized: "Signing in…")
+        case .checkingVault: return String(localized: "Sync: checking Google Drive…")
+        case .needsNewPassphrase: return String(localized: "Sync: choose a passphrase to turn it on")
+        case .needsPassphrase: return String(localized: "Sync: enter your passphrase on this Mac")
         case .ready:
-            if !engine.isOnline { return "Offline — will sync when the Mac is back online" }
-            return "Synced as \(engine.account ?? "Google account")" + (engine.lastError.map { " — \($0)" } ?? "")
+            if !engine.isOnline { return String(localized: "Offline — will sync when the Mac is back online") }
+            return String(localized: "Synced as \(engine.account ?? String(localized: "Google account"))") + (engine.lastError.map { " — \($0)" } ?? "")
         }
     }
 }
@@ -459,7 +459,7 @@ struct SyncAccountPanel: View {
                     }
                     .buttonStyle(.plain)
                     .help("Change picture")
-                    Text(engine.account ?? "Google account")
+                    Text(engine.account ?? String(localized: "Google account"))
                         .font(.system(size: 13, weight: .semibold))
                     Text(status)
                         .font(.system(size: 11))
@@ -531,13 +531,13 @@ struct SyncAccountPanel: View {
     private var status: String {
         switch engine.phase {
         case .ready:
-            if !engine.isOnline { return "Offline — will sync when back online" }
-            if engine.isSyncing { return "Syncing…" }
-            guard let last = engine.lastSync else { return "Sync on" }
-            return "Synced " + last.formatted(.relative(presentation: .named))
-        case .needsPassphrase: return "Enter your sync passphrase on this Mac"
-        case .needsNewPassphrase: return "Choose a passphrase to turn on sync"
-        case .checkingVault: return "Checking Google Drive…"
+            if !engine.isOnline { return String(localized: "Offline — will sync when back online") }
+            if engine.isSyncing { return String(localized: "Syncing…") }
+            guard let last = engine.lastSync else { return String(localized: "Sync on") }
+            return String(localized: "Synced \(last.formatted(.relative(presentation: .named)))")
+        case .needsPassphrase: return String(localized: "Enter your sync passphrase on this Mac")
+        case .needsNewPassphrase: return String(localized: "Choose a passphrase to turn on sync")
+        case .checkingVault: return String(localized: "Checking Google Drive…")
         default: return ""
         }
     }
@@ -639,7 +639,7 @@ struct SyncAvatarPicker: View {
         VStack {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(30), spacing: 8), count: 8), spacing: 8) {
                 if engine.accountPicture != nil {
-                    cell(selected: avatar.choice == "google", help: "Google account photo") {
+                    cell(selected: avatar.choice == "google", help: String(localized: "Google account photo")) {
                         avatar.choose("google")
                     } content: {
                         if let photo = avatar.googlePhoto {
@@ -669,7 +669,7 @@ struct SyncAvatarPicker: View {
                         }
                     }
                 }
-                cell(selected: avatar.choice == "file", help: "Choose a picture…") {
+                cell(selected: avatar.choice == "file", help: String(localized: "Choose a picture…")) {
                     avatar.chooseFile()
                 } content: {
                     if let photo = avatar.customPhoto {

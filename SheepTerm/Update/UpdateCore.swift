@@ -70,27 +70,27 @@ nonisolated enum UpdateError: Error, Equatable, Sendable {
     var message: String {
         switch self {
         case .rateLimited:
-            return "GitHub is limiting update checks from this network for now. Try again in an hour."
+            return String(localized: "GitHub is limiting update checks from this network for now. Try again in an hour.")
         case .noRelease:
-            return "No release has been published yet."
+            return String(localized: "No release has been published yet.")
         case .badStatus(let code):
-            return "GitHub answered with status \(code)."
+            return String(localized: "GitHub answered with status \(code).")
         case .unreadableRelease:
-            return "The release information from GitHub could not be read."
+            return String(localized: "The release information from GitHub could not be read.")
         case .unrecognisedTag(let tag):
-            return "The latest release is tagged \"\(tag)\", which is not a version this app understands."
+            return String(localized: "The latest release is tagged \"\(tag)\", which is not a version this app understands.")
         case .missingAsset(let name):
-            return "The latest release has no \(name) to download."
+            return String(localized: "The latest release has no \(name) to download.")
         case .missingSignature(let name):
-            return "The latest release has no signature (\(name)), so it cannot be verified. Nothing was installed."
+            return String(localized: "The latest release has no signature (\(name)), so it cannot be verified. Nothing was installed.")
         case .untrustedURL(let url):
-            return "The release points somewhere this app does not download from (\(url)). Nothing was installed."
+            return String(localized: "The release points somewhere this app does not download from (\(url)). Nothing was installed.")
         case .tooLarge(let name):
-            return "\(name) is larger than an update can be. Nothing was installed."
+            return String(localized: "\(name) is larger than an update can be. Nothing was installed.")
         case .badSignature:
-            return "The download does not match its signature. It may have been damaged or tampered with, so it was not installed."
+            return String(localized: "The download does not match its signature. It may have been damaged or tampered with, so it was not installed.")
         case .badArchive(let why):
-            return "The downloaded update is not usable: \(why). Nothing was installed."
+            return String(localized: "The downloaded update is not usable: \(why). Nothing was installed.")
         case .notInstallable(let why):
             return why
         }
@@ -194,6 +194,24 @@ nonisolated enum UpdateCore {
 
     /// Whether a streamed body has passed its cap (checked WHILE it streams).
     static func exceedsCap(received: Int64, max: Int) -> Bool { received > Int64(max) }
+
+    /// `codesign` arguments for a downloaded app. A copy signed with a Developer ID team accepts only an update from
+    /// the SAME team (Apple-anchored); a self-signed / ad-hoc copy keeps the seal-only check (it has no team to pin).
+    static func codesignArguments(appPath: String, teamID: String?) -> [String] {
+        var args = ["--verify", "--deep", "--strict"]
+        if let teamID, !teamID.isEmpty {
+            args.append("-R=anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\"")
+        }
+        args.append(appPath)
+        return args
+    }
+
+    /// `spctl` (Gatekeeper: Developer ID + notarization ticket) runs only when this copy itself has a team — a
+    /// self-signed build would fail it and so could never update.
+    static func gatekeeperArguments(appPath: String, teamID: String?) -> [String]? {
+        guard let teamID, !teamID.isEmpty else { return nil }
+        return ["--assess", "--type", "execute", appPath]
+    }
 
     /// "3.2 of 9.8 MB" for the progress panel; "3.2 MB" when the total is unknown.
     static func megabytes(_ got: Int64, of total: Int64) -> String {

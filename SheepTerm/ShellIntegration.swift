@@ -10,8 +10,16 @@ enum ShellIntegration {
     static let defaultsKey = "localTabRealNetworkInfo"
 
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? true }
-    /// Only macOS 27 and later redact; earlier systems keep the plain shell.
-    static var isNeeded: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 }
+    /// Only macOS 27 and later redact, and only for an app without a Developer ID team: a Developer ID build (5.0 (36)
+    /// on) keeps the plain shell and hides the switch; a self-signed / ad-hoc build (a public clone, or after the
+    /// membership lapses) gets the launchd route back by itself.
+    static var isNeeded: Bool {
+        isNeeded(osMajor: ProcessInfo.processInfo.operatingSystemVersion.majorVersion, teamID: CodeIdentity.ownTeamID)
+    }
+
+    static func isNeeded(osMajor: Int, teamID: String?) -> Bool {
+        osMajor >= 27 && (teamID ?? "").isEmpty
+    }
 
     /// What a local shell's environment gains, or nil (feature off, not needed, not zsh, files missing).
     /// A user who keeps their dotfiles in their own ZDOTDIR gets it back through SHEEPTERM_USER_ZDOTDIR.

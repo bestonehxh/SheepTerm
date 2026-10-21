@@ -310,6 +310,11 @@ final class AppModel: ObservableObject {
     @Published var statusShowClock = true {
         didSet { UserDefaults.standard.set(statusShowClock, forKey: "statusShowClock") }
     }
+    /// The connection-state sheep at the bar's left edge (also the
+    /// highlight on/off button). Shown by default.
+    @Published var statusShowSheep = true {
+        didSet { UserDefaults.standard.set(statusShowSheep, forKey: "statusShowSheep") }
+    }
     @Published var terminalTheme = "sheepterm" {
         didSet {
             UserDefaults.standard.set(terminalTheme, forKey: "terminalTheme")
@@ -423,6 +428,7 @@ final class AppModel: ObservableObject {
         statusShowHints = UserDefaults.standard.object(forKey: "statusShowHints") as? Bool ?? false
         statusShowIP = UserDefaults.standard.object(forKey: "statusShowIP") as? Bool ?? false
         statusShowClock = UserDefaults.standard.object(forKey: "statusShowClock") as? Bool ?? true
+        statusShowSheep = UserDefaults.standard.object(forKey: "statusShowSheep") as? Bool ?? true
         // Launched from Finder the cwd is "/"; start shells at home like Terminal.app.
         FileManager.default.changeCurrentDirectoryPath(NSHomeDirectory())
         // hosts.json / recents.json unreadable at launch: the file is kept as
@@ -491,6 +497,7 @@ final class AppModel: ObservableObject {
         statusShowHints = defaults.object(forKey: "statusShowHints") as? Bool ?? false
         statusShowIP = defaults.object(forKey: "statusShowIP") as? Bool ?? false
         statusShowClock = defaults.object(forKey: "statusShowClock") as? Bool ?? true
+        statusShowSheep = defaults.object(forKey: "statusShowSheep") as? Bool ?? true
         let width = defaults.double(forKey: "sidebarWidth")
         sidebarWidth = width == 0 ? 232 : min(max(width, 200), 320)
         if files == nil || files!.contains("hosts.json") { store.reloadFromDisk() }
@@ -609,7 +616,7 @@ final class AppModel: ObservableObject {
         } catch {
             let alert = SheepAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Could not import \(url.lastPathComponent)"
+            alert.messageText = String(localized: "Could not import \(url.lastPathComponent)")
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
@@ -684,16 +691,16 @@ final class AppModel: ObservableObject {
         // wrong end of the file.
         func detail(_ flush: QuitLogFlush) -> String {
             if flush.writesWereRefused {
-                return "a write was refused earlier in the session, so the file has a hole"
+                return String(localized: "a write was refused earlier in the session, so the file has a hole")
             }
             if flush.droppedBytes > 0 {
                 // "up to": the count is an upper bound by at most one chunk
                 // (the one between being refused and being released is in
                 // both terms of the reading), and the alert must not present
                 // a bound as a measurement.
-                return "up to \(ByteCountFormatter.string(fromByteCount: Int64(flush.droppedBytes), countStyle: .file)) of output at the end not written"
+                return String(localized: "up to \(ByteCountFormatter.string(fromByteCount: Int64(flush.droppedBytes), countStyle: .file)) of output at the end not written")
             }
-            return "the last writes did not land in time"
+            return String(localized: "the last writes did not land in time")
         }
         // The post-mortem copy: an alert is dismissed and gone, and this is
         // the half that is still there tomorrow.
@@ -703,21 +710,19 @@ final class AppModel: ObservableObject {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = names.count == 1
-            ? "The end of one session log could not be written."
-            : "The end of \(names.count) session logs could not be written."
+            ? String(localized: "The end of one session log could not be written.")
+            : String(localized: "The end of \(names.count) session logs could not be written.")
         let listed = unflushed.prefix(8).map { flush in
             var line = "• \(flush.session)"
             if let name = flush.logName { line += " — \(name)" }
             return line + " (\(detail(flush)))"
         }.joined(separator: "\n")
-        let more = unflushed.count > 8 ? "\n• and \(unflushed.count - 8) more" : ""
-        alert.informativeText = """
-            \(names.count == 1 ? "This log does not match its session." : "These logs do not match their sessions.") \
-            SheepTerm waited up to \(Int(QuitLogFlush.budget)) seconds for the disk before quitting. \
-            What each one is missing:
-
-            \(listed)\(more)
-            """
+        let more = unflushed.count > 8 ? "\n• " + String(localized: "and \(unflushed.count - 8) more") : ""
+        let lead = names.count == 1
+            ? String(localized: "This log does not match its session.")
+            : String(localized: "These logs do not match their sessions.")
+        let waited = String(localized: "SheepTerm waited up to \(Int(QuitLogFlush.budget)) seconds for the disk before quitting. What each one is missing:")
+        alert.informativeText = "\(lead) \(waited)\n\n\(listed)\(more)"
         alert.addButton(withTitle: String(localized: "OK"))
         // …but not when the Mac is logging out, restarting or shutting down.
         // This alert asks nothing — it reports. A modal that reports during a
@@ -794,8 +799,9 @@ final class AppModel: ObservableObject {
             hygieneNote = ""
             // Short: one line per fact, read at a glance.
             if repeated[index] > 0 {
-                corrections += "\n\n\(repeated[index]) repeated "
-                    + "row\(repeated[index] == 1 ? "" : "s") collapsed."
+                corrections += "\n\n" + (repeated[index] == 1
+                    ? String(localized: "1 repeated row collapsed.")
+                    : String(localized: "\(repeated[index]) repeated rows collapsed."))
             }
             confirmImport(group: group, sender: payload.sender, corrections: corrections)
         }
@@ -825,9 +831,10 @@ final class AppModel: ObservableObject {
             // file, so the sections are named instead of left unsaid.
             let sections = group.displayedSections.count
             alert.messageText = group.hosts.isEmpty && sections > 0
-                ? "Import “\(group.name)” (\(sections) section\(sections == 1 ? "" : "s"))?"
-                : "Import “\(group.name)” (\(group.hosts.count) hosts)?"
-            alert.informativeText = "From \(sender). Passwords are not included.\(corrections)"
+                ? (sections == 1 ? String(localized: "Import “\(group.name)” (1 section)?")
+                                 : String(localized: "Import “\(group.name)” (\(sections) sections)?"))
+                : String(localized: "Import “\(group.name)” (\(group.hosts.count) hosts)?")
+            alert.informativeText = String(localized: "From \(sender). Passwords are not included.") + corrections
             alert.addButton(withTitle: String(localized: "Import"))
             alert.addButton(withTitle: String(localized: "Cancel"))
             if alert.sheepStyled().runModal() == .alertFirstButtonReturn {
@@ -840,7 +847,7 @@ final class AppModel: ObservableObject {
         let alert = SheepAlert()
         // Through `sanitizedForDialog` like the incoming side: a stored name
         // can still hold what the dialog should not print raw.
-        alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” already exists"
+        alert.messageText = String(localized: "“\(Self.sanitizedForDialog(existing.name))” already exists")
         // The three buttons say what the choices do; this line only has to
         // say what is on each side of it.
         // Same shape as the new-group dialog above: a headings-only file said
@@ -848,10 +855,10 @@ final class AppModel: ObservableObject {
         // the sections it is bringing.
         let incomingSections = group.displayedSections.count
         let theirs = group.hosts.isEmpty && incomingSections > 0
-            ? "\(incomingSections) section\(incomingSections == 1 ? "" : "s")"
+            ? (incomingSections == 1 ? String(localized: "1 section") : String(localized: "\(incomingSections) sections"))
             : "\(group.hosts.count)"
-        alert.informativeText = "Yours: \(existing.hosts.count) hosts. "
-            + "The file from \(sender): \(theirs).\(corrections)"
+        alert.informativeText = String(localized: "Yours: \(existing.hosts.count) hosts. The file from \(sender): \(theirs).")
+            + corrections
         alert.addButton(withTitle: String(localized: "Merge into Existing"))
         alert.addButton(withTitle: String(localized: "Create New Group"))
         alert.addButton(withTitle: String(localized: "Cancel"))
@@ -881,15 +888,15 @@ final class AppModel: ObservableObject {
                 continue
             }
             let alert = SheepAlert()
-            alert.messageText = "Host “\(Self.sanitizedForDialog(pair.incoming.name))” exists in both"
+            alert.messageText = String(localized: "Host “\(Self.sanitizedForDialog(pair.incoming.name))” exists in both")
             alert.informativeText = Self.importDiffDescription(incoming: pair.incoming, existing: pair.existing)
-                + "\n\nReplace uses the file's version — your saved password reference is kept. Keep leaves your version untouched."
+                + "\n\n" + String(localized: "Replace uses the file's version — your saved password reference is kept. Keep leaves your version untouched.")
             alert.addButton(withTitle: String(localized: "Replace"))
             alert.addButton(withTitle: String(localized: "Keep"))
             alert.addButton(withTitle: String(localized: "Cancel Import"))
             let remaining = conflicts.count - index - 1
             let checkbox = NSButton(
-                checkboxWithTitle: "Apply to the remaining \(remaining) conflicting host(s)",
+                checkboxWithTitle: String(localized: "Apply to the remaining \(remaining) conflicting host(s)"),
                 target: nil, action: nil
             )
             alert.accessoryView = checkbox
@@ -918,16 +925,16 @@ final class AppModel: ObservableObject {
         // raised by another field used to carry a "name: sw 1 → sw 1" line
         // too, for a stored name that still held a raw U+2028.
         if ConfigurationHygiene.cleanedName(incoming.name) != ConfigurationHygiene.cleanedName(existing.name) {
-            diffs.append("name: \(sanitizedForDialog(existing.name)) → \(sanitizedForDialog(incoming.name))")
+            diffs.append(String(localized: "name: \(sanitizedForDialog(existing.name)) → \(sanitizedForDialog(incoming.name))"))
         }
         if incoming.address != existing.address {
-            diffs.append("address: \(sanitizedForDialog(existing.address)) → \(sanitizedForDialog(incoming.address))")
+            diffs.append(String(localized: "address: \(sanitizedForDialog(existing.address)) → \(sanitizedForDialog(incoming.address))"))
         }
         if incoming.port != existing.port {
-            diffs.append("port: \(existing.port) → \(incoming.port)")
+            diffs.append(String(localized: "port: \(String(existing.port)) → \(String(incoming.port))"))
         }
         if incoming.username != existing.username {
-            diffs.append("username: \(sanitizedForDialog(existing.username)) → \(sanitizedForDialog(incoming.username))")
+            diffs.append(String(localized: "username: \(sanitizedForDialog(existing.username)) → \(sanitizedForDialog(incoming.username))"))
         }
         // No cipher / agent-forwarding lines: a Replace keeps ours (the file
         // cannot set either since 4.1 (37)), so naming them would describe a
@@ -936,22 +943,27 @@ final class AppModel: ObservableObject {
         // to be able to name it — a family-only difference used to read
         // "The two entries differ." and nothing else.
         if incoming.highlightVendor != existing.highlightVendor {
-            diffs.append("device family: \(existing.highlightVendor.label) → \(incoming.highlightVendor.label)")
+            diffs.append(String(localized: "device family: \(existing.highlightVendor.localizedLabel) → \(incoming.highlightVendor.localizedLabel)"))
         }
         if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
-            diffs.append("disable paging: \((existing.disablePaging ?? false) ? "on" : "off") → \((incoming.disablePaging ?? false) ? "on" : "off")")
+            diffs.append(String(localized: "disable paging: \(onOff(existing.disablePaging ?? false)) → \(onOff(incoming.disablePaging ?? false))"))
         }
         if incoming.skipsLog != existing.skipsLog {
-            diffs.append("don't log this session: \(existing.skipsLog ? "on" : "off") → \(incoming.skipsLog ? "on" : "off")")
+            diffs.append(String(localized: "don't log this session: \(onOff(existing.skipsLog)) → \(onOff(incoming.skipsLog))"))
         }
         // The saved-bastion id never travels (ShareCodec strips it, a Replace
         // keeps ours); a TYPED bastion does, and `sameForImport` compares it.
         if incoming.jumpSpecValue != existing.jumpSpecValue {
-            diffs.append("jump host: \(existing.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? "none") → \(incoming.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? "none")")
+            diffs.append(String(localized: "jump host: \(existing.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? String(localized: "none")) → \(incoming.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? String(localized: "none"))"))
         }
         return diffs.isEmpty
-            ? "The two entries differ."
-            : "Differences (yours → file):\n" + diffs.joined(separator: "\n")
+            ? String(localized: "The two entries differ.")
+            : String(localized: "Differences (yours → file):") + "\n" + diffs.joined(separator: "\n")
+    }
+
+    /// "on" / "off" in the change lists of the import and save dialogs.
+    private static func onOff(_ on: Bool) -> String {
+        on ? String(localized: "on") : String(localized: "off")
     }
 
     var selectedTab: SessionTab? {
@@ -1126,8 +1138,8 @@ final class AppModel: ObservableObject {
     /// .unsupported`): said once, nothing opened.
     func refuseUnsupported(_ host: Host) {
         let alert = SheepAlert()
-        alert.messageText = "“\(Self.sanitizedForDialog(host.name))” can’t be opened here"
-        alert.informativeText = "It was made by a newer SheepTerm (kind “\(Self.sanitizedForDialog(host.unknownKind ?? "?"))”). It is kept as it is."
+        alert.messageText = String(localized: "“\(Self.sanitizedForDialog(host.name))” can’t be opened here")
+        alert.informativeText = String(localized: "It was made by a newer SheepTerm (kind “\(Self.sanitizedForDialog(host.unknownKind ?? "?"))”). It is kept as it is.")
         alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
@@ -1190,9 +1202,10 @@ final class AppModel: ObservableObject {
         let count = historyStore.commands(for: key).count
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Remove command history for “\(tab.title)”?"
-        alert.informativeText = count == 0 ? "There is nothing saved for this host."
-            : "\(count) saved command\(count == 1 ? "" : "s") for this host will be removed. Other hosts are not touched."
+        alert.messageText = String(localized: "Remove command history for “\(tab.title)”?")
+        alert.informativeText = count == 0 ? String(localized: "There is nothing saved for this host.")
+            : count == 1 ? String(localized: "1 saved command for this host will be removed. Other hosts are not touched.")
+            : String(localized: "\(count) saved commands for this host will be removed. Other hosts are not touched.")
         // Cancel first, so Return cannot remove the history by accident (the
         // rule every other delete alert here follows).
         alert.addButton(withTitle: String(localized: "Cancel"))
@@ -1243,12 +1256,12 @@ final class AppModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Send"
+        panel.prompt = String(localized: "Send")
         let modes: [XModemSender.Mode] = [.xmodem, .xmodem1K, .ymodem]
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         for mode in modes { popup.addItem(withTitle: SerialTerminalController.modeLabel(mode)) }
         popup.selectItem(at: min(max(UserDefaults.standard.integer(forKey: "xmodemMode"), 0), modes.count - 1))
-        popup.toolTip = "XMODEM for ROMMON / BootROM; XMODEM-1K or YMODEM when the device offers it"
+        popup.toolTip = String(localized: "XMODEM for ROMMON / BootROM; XMODEM-1K or YMODEM when the device offers it")
         popup.sizeToFit()
         let accessory = NSView(frame: NSRect(x: 0, y: 0, width: popup.frame.width + 40, height: popup.frame.height + 16))
         popup.setFrameOrigin(NSPoint(x: 20, y: 8))
@@ -1297,7 +1310,7 @@ final class AppModel: ObservableObject {
         // is set to home once in init and nothing changes it any more.
         let controller = LocalTerminalController()
         let shellName = (LocalTerminalController.userShell() as NSString).lastPathComponent
-        let tab = SessionTab(content: .local(controller), title: "\(shellName) — This Mac")
+        let tab = SessionTab(content: .local(controller), title: String(localized: "\(shellName) — This Mac"))
         controller.onTitleChange = { [weak tab] title in
             guard let tab, !title.isEmpty else { return }
             // An OSC title can be as long as the parser's payload cap; the
@@ -1659,7 +1672,7 @@ final class AppModel: ObservableObject {
         if isGeneratedName(host) { updated.name = existing.name }
         var changes = Self.savedHostChanges(from: existing, to: updated)
         if makeCredential != nil {
-            changes.append("credential: \(existing.credentialID == nil ? "none" : "saved credential") → new saved credential")
+            changes.append(String(localized: "credential: \(existing.credentialID == nil ? String(localized: "none") : String(localized: "saved credential")) → new saved credential"))
         }
         // Nothing differs — the common "connect again to a host I already
         // saved" case. Silence is the right answer only HERE.
@@ -1669,7 +1682,7 @@ final class AppModel: ObservableObject {
             if addOnly {
                 DispatchQueue.main.async {
                     let alert = SheepAlert()
-                    alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”"
+                    alert.messageText = String(localized: "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”")
                     alert.informativeText = String(localized: "Nothing was added — the saved host already has these settings.")
                     alert.addButton(withTitle: String(localized: "OK"))
                     alert.sheepStyled().runModal()
@@ -1683,12 +1696,12 @@ final class AppModel: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let alert = SheepAlert()
-            alert.messageText = "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”"
-            alert.informativeText = (addOnly ? "A saved host already points at this target, with different settings.\n\n"
-                                             : "This session connects to the same target with different settings.\n\n")
-                + changes.joined(separator: "\n")
-                + (addOnly ? "\n\nUpdate rewrites the saved host with what you entered; Keep leaves it as it is and adds nothing."
-                           : "\n\nUpdate rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered.")
+            alert.messageText = String(localized: "“\(Self.sanitizedForDialog(existing.name))” is already saved in “\(Self.sanitizedForDialog(groupName))”")
+            alert.informativeText = (addOnly ? String(localized: "A saved host already points at this target, with different settings.")
+                                             : String(localized: "This session connects to the same target with different settings."))
+                + "\n\n" + changes.joined(separator: "\n") + "\n\n"
+                + (addOnly ? String(localized: "Update rewrites the saved host with what you entered; Keep leaves it as it is and adds nothing.")
+                           : String(localized: "Update rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered."))
             alert.addButton(withTitle: String(localized: "Update Saved Host"))
             alert.addButton(withTitle: String(localized: "Keep Saved Host"))
             guard alert.sheepStyled().runModal() == .alertFirstButtonReturn else { return }
@@ -1716,37 +1729,35 @@ final class AppModel: ObservableObject {
         var changes: [String] = []
         // Cleaned on both sides, for the same reason as `importDiffDescription`.
         if ConfigurationHygiene.cleanedName(incoming.name) != ConfigurationHygiene.cleanedName(existing.name) {
-            changes.append("name: \(sanitizedForDialog(existing.name)) → \(sanitizedForDialog(incoming.name))")
+            changes.append(String(localized: "name: \(sanitizedForDialog(existing.name)) → \(sanitizedForDialog(incoming.name))"))
         }
         if incoming.credentialID != existing.credentialID {
-            let label = { (id: UUID?) in id == nil ? "none" : "saved credential" }
-            changes.append("credential: \(label(existing.credentialID)) → \(label(incoming.credentialID))")
+            let label = { (id: UUID?) in id == nil ? String(localized: "none") : String(localized: "saved credential") }
+            changes.append(String(localized: "credential: \(label(existing.credentialID)) → \(label(incoming.credentialID))"))
         }
         if (incoming.cipherMode ?? .auto) != (existing.cipherMode ?? .auto) {
-            changes.append("cipher: \((existing.cipherMode ?? .auto).label) → \((incoming.cipherMode ?? .auto).label)")
+            changes.append(String(localized: "cipher: \((existing.cipherMode ?? .auto).label) → \((incoming.cipherMode ?? .auto).label)"))
         }
         if (incoming.agentForward ?? false) != (existing.agentForward ?? false) {
-            let label = { (on: Bool) in on ? "on" : "off" }
-            changes.append("agent forwarding: \(label(existing.agentForward ?? false)) → \(label(incoming.agentForward ?? false))")
+            changes.append(String(localized: "agent forwarding: \(onOff(existing.agentForward ?? false)) → \(onOff(incoming.agentForward ?? false))"))
         }
         if incoming.highlightVendor != existing.highlightVendor {
-            changes.append("device family: \(existing.highlightVendor.label) → \(incoming.highlightVendor.label)")
+            changes.append(String(localized: "device family: \(existing.highlightVendor.localizedLabel) → \(incoming.highlightVendor.localizedLabel)"))
         }
         if (incoming.disablePaging ?? false) != (existing.disablePaging ?? false) {
-            let label = { (on: Bool) in on ? "on" : "off" }
-            changes.append("disable paging: \(label(existing.disablePaging ?? false)) → \(label(incoming.disablePaging ?? false))")
+            changes.append(String(localized: "disable paging: \(onOff(existing.disablePaging ?? false)) → \(onOff(incoming.disablePaging ?? false))"))
         }
         if incoming.skipsLog != existing.skipsLog {
-            changes.append("don't log this session: \(existing.skipsLog ? "on" : "off") → \(incoming.skipsLog ? "on" : "off")")
+            changes.append(String(localized: "don't log this session: \(onOff(existing.skipsLog)) → \(onOff(incoming.skipsLog))"))
         }
         // The id and the typed spec are one answer ("which path"), described
         // as one line: the typed text is shown, a saved reference as "saved host".
         if incoming.jumpHostID != existing.jumpHostID || incoming.jumpSpecValue != existing.jumpSpecValue {
             let label = { (host: Host) -> String in
-                if host.jumpHostID != nil { return "saved host" }
-                return host.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? "none"
+                if host.jumpHostID != nil { return String(localized: "saved host") }
+                return host.jumpSpecValue.map { Self.sanitizedForDialog($0) } ?? String(localized: "none")
             }
-            changes.append("jump host: \(label(existing)) → \(label(incoming))")
+            changes.append(String(localized: "jump host: \(label(existing)) → \(label(incoming))"))
         }
         return changes
     }

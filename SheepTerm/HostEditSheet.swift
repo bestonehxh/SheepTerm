@@ -123,7 +123,7 @@ struct HostEditSheet: View {
                             .foregroundStyle(Theme.destructive)
                     }
                     FormPopup(selection: $credentialSelection,
-                              items: [.option("None (enter manually)", nil)] + model.credentialStore.credentials.map {
+                              items: [.option(String(localized: "None (enter manually)"), nil)] + model.credentialStore.credentials.map {
                                   .option("\($0.name) (\($0.username))", $0.id)
                               })
                         .formRow("Credential")
@@ -311,13 +311,13 @@ struct HostEditSheet: View {
 
     private var addressError: String? {
         guard original.kind == .ssh, !trimmedAddress.isEmpty else { return nil }
-        if trimmedAddress.contains(where: { $0.isWhitespace }) { return "Host must not contain spaces" }
+        if trimmedAddress.contains(where: { $0.isWhitespace }) { return String(localized: "Host must not contain spaces") }
         // Word for word what Quick Connect says. Two forms that accept the same
         // text should also refuse it the same way.
-        if trimmedAddress.hasSuffix("@") { return "Host is missing after the “@”" }
+        if trimmedAddress.hasSuffix("@") { return String(localized: "Host is missing after the “@”") }
         guard splitAddress != nil else {
-            return trimmedAddress.contains(":") ? "Port after “:” must be 1-65535"
-                                                : "Host is not a valid address"
+            return trimmedAddress.contains(":") ? String(localized: "Port after “:” must be 1-65535")
+                                                : String(localized: "Host is not a valid address")
         }
         return nil
     }
@@ -397,15 +397,15 @@ extension HostEditSheet {
     /// picked above — or why it types nothing.
     var disablePagingCaption: String {
         if let command = vendor.disablePagingCommand {
-            return "Sends “\(command)” once the shell is up, so long output is not paged. Shown in the session and the log like anything else typed."
+            return String(localized: "Sends “\(command)” once the shell is up, so long output is not paged. Shown in the session and the log like anything else typed.")
         }
         switch vendor {
         case .fortios:
-            return "FortiOS has no per-session switch (its only one is a config change), so nothing is sent — Auto-page in the View menu answers --More-- for you instead."
+            return String(localized: "FortiOS has no per-session switch (its only one is a config change), so nothing is sent — Auto-page in the View menu answers --More-- for you instead.")
         case .auto:
-            return "Pick a device family above to enable this: Auto does not know which command the device wants. Auto-page in the View menu works regardless."
+            return String(localized: "Pick a device family above to enable this: Auto does not know which command the device wants. Auto-page in the View menu works regardless.")
         default:
-            return "Nothing is sent for this family. Auto-page in the View menu answers --More-- for you instead."
+            return String(localized: "Nothing is sent for this family. Auto-page in the View menu answers --More-- for you instead.")
         }
     }
 }

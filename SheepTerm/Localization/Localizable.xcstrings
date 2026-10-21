@@ -4,6 +4,36 @@
     "" : {
 
     },
+    "%@ %@ and could not be moved aside (%@)." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@，且无法移到一旁（%3$@）。"
+          }
+        }
+      }
+    },
+    "%@ %@ is available" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 现已推出"
+          }
+        }
+      }
+    },
+    "%@ %@ is the latest version." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 是最新版本。"
+          }
+        }
+      }
+    },
     "%@ (%@)" : {
       "localizations" : {
         "en" : {
@@ -30,6 +60,176 @@
         }
       }
     },
+    "%@ can only replace itself when it runs from the Applications folder and that folder is writable. The verified %@ is in Finder: unzip it and move %@.app into Applications." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有从可写入的“应用程序”文件夹运行时，%1$@ 才能替换自身。已验证的 %2$@ 已在访达中显示：请解压并将 %3$@.app 移到“应用程序”文件夹。"
+          }
+        }
+      }
+    },
+    "%@ cannot be read. SheepTerm refuses every host key until it can." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %@。在能够读取之前，SheepTerm 会拒绝所有主机密钥。"
+          }
+        }
+      }
+    },
+    "%@ could not be read (%@) and could not be set aside. SheepTerm started with an empty list and will not overwrite the file." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %1$@（%2$@），也无法将其另存。SheepTerm 已以空白列表启动，不会覆盖该文件。"
+          }
+        }
+      }
+    },
+    "%@ could not be read (%@)." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %1$@（%2$@）。"
+          }
+        }
+      }
+    },
+    "%@ could not be read (%@). The credential list starts empty and the file will not be overwritten until you change something." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %1$@（%2$@）。凭据列表将以空白开始，在您做出更改之前不会覆盖该文件。"
+          }
+        }
+      }
+    },
+    "%@ could not be read (%@). The snippet list starts empty and the file will not be overwritten until you change something." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %1$@（%2$@）。代码片段列表将以空白开始，在您做出更改之前不会覆盖该文件。"
+          }
+        }
+      }
+    },
+    "%@ could not be read (%@); it was preserved as %@ and the list starts empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %1$@（%2$@）；已保留为 %3$@，列表将以空白开始。"
+          }
+        }
+      }
+    },
+    "%@ couldn't start — Settings ▸ AI" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 无法启动——设置 ▸ AI"
+          }
+        }
+      }
+    },
+    "%@ from %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@（来自 %2$@）"
+          }
+        }
+      }
+    },
+    "%@ in %lld of %lld logs" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，来自 %2$lld/%3$lld 个日志"
+          }
+        }
+      }
+    },
+    "%@ in %lld of 1 log" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，来自 %2$lld/1 个日志"
+          }
+        }
+      }
+    },
+    "%@ is in SheepTerm's Application Support folder but could not be read (%@)." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 位于 SheepTerm 的 Application Support 文件夹中，但无法读取（%2$@）。"
+          }
+        }
+      }
+    },
+    "%@ is larger than an update can be. Nothing was installed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 超过了更新允许的大小。未安装任何内容。"
+          }
+        }
+      }
+    },
+    "%@ is signed in with an API key — Settings ▸ AI ▸ Sign In with your account" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 使用 API 密钥登录——设置 ▸ AI ▸ 用您的账户登录"
+          }
+        }
+      }
+    },
+    "%@ is too large to be a host list." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 太大，不像是主机列表。"
+          }
+        }
+      }
+    },
+    "%@ isn't installed — Settings ▸ AI ▸ Install" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 未安装——设置 ▸ AI ▸ 安装"
+          }
+        }
+      }
+    },
+    "%@ isn't signed in — Settings ▸ AI ▸ Sign In" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 未登录——设置 ▸ AI ▸ 登录"
+          }
+        }
+      }
+    },
     "%@ key · SHA256" : {
       "localizations" : {
         "zh-Hans" : {
@@ -40,12 +240,252 @@
         }
       }
     },
+    "%@ model" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 模型"
+          }
+        }
+      }
+    },
+    "%@ reported an error." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 报告了错误。"
+          }
+        }
+      }
+    },
+    "%@ returned an error." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 返回了错误。"
+          }
+        }
+      }
+    },
+    "%@ was changed by something else and could not be read. It was preserved as %@;" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已被其他程序更改且无法读取。已保留为 %2$@；"
+          }
+        }
+      }
+    },
+    "%@ was changed by something else, could not be read, and could not be set aside either (%@)." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已被其他程序更改，无法读取，也无法另存（%2$@）。"
+          }
+        }
+      }
+    },
+    "%@ was unreadable; the original was preserved as %@ and the list starts empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 无法读取；原文件已保留为 %2$@，列表将以空白开始。"
+          }
+        }
+      }
+    },
+    "%@ · disconnected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 已断开连接"
+          }
+        }
+      }
+    },
+    "%@ · waiting for the device" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 正在等待设备"
+          }
+        }
+      }
+    },
+    "%@ — This Mac" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — 本机"
+          }
+        }
+      }
+    },
+    "%@, %lld hosts" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，%2$lld 台主机"
+          }
+        }
+      }
+    },
+    "%@, 1 host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，1 台主机"
+          }
+        }
+      }
+    },
+    "%@: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：%2$@"
+          }
+        }
+      }
+    },
     "%lld" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld"
+          }
+        }
+      }
+    },
+    "%lld address(es) or username(s) had control characters removed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个地址或用户名移除了控制字符。"
+          }
+        }
+      }
+    },
+    "%lld bytes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 字节"
+          }
+        }
+      }
+    },
+    "%lld cells cleared" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已清除 %lld 个单元格"
+          }
+        }
+      }
+    },
+    "%lld credentials" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个凭据"
+          }
+        }
+      }
+    },
+    "%lld empty section name(s) were dropped." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已丢弃 %lld 个空的分区名称。"
+          }
+        }
+      }
+    },
+    "%lld entr(ies) had no usable name left and were named after their address." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个条目没有可用的名称，已改用其地址命名。"
+          }
+        }
+      }
+    },
+    "%lld existed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台已存在"
+          }
+        }
+      }
+    },
+    "%lld filed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台已归入分区"
+          }
+        }
+      }
+    },
+    "%lld filed under %lld sections" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台已归入 %2$lld 个分区"
+          }
+        }
+      }
+    },
+    "%lld filed under 1 section" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台已归入 1 个分区"
+          }
+        }
+      }
+    },
+    "%lld groups, %lld hosts." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个分组，%2$lld 台主机。"
+          }
+        }
+      }
+    },
+    "%lld hits" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个结果"
           }
         }
       }
@@ -82,6 +522,56 @@
         }
       }
     },
+    "%lld hosts" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台主机"
+          }
+        }
+      }
+    },
+    "%lld hosts go with it. This cannot be undone." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其中的 %lld 台主机也会一并删除。此操作无法撤销。"
+          }
+        }
+      }
+    },
+    "%lld hosts use a jump host — it is not shared." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 台主机使用跳板机——跳板机不会共享。"
+          }
+        }
+      }
+    },
+    "%lld lines" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 行"
+          }
+        }
+      }
+    },
+    "%lld name(s) or section label(s) were shortened to %lld characters or had control characters removed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个名称或分区标签被缩短为 %2$lld 个字符或移除了控制字符。"
+          }
+        }
+      }
+    },
     "%lld of %lld selected" : {
       "localizations" : {
         "en" : {
@@ -98,12 +588,522 @@
         }
       }
     },
+    "%lld of them can restart or erase the device." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其中 %lld 行可能会重启或擦除设备。"
+          }
+        }
+      }
+    },
     "%lld pt" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 磅"
+          }
+        }
+      }
+    },
+    "%lld repeated" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台重复"
+          }
+        }
+      }
+    },
+    "%lld repeated rows collapsed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已合并 %lld 个重复行。"
+          }
+        }
+      }
+    },
+    "%lld saved commands for this host will be removed. Other hosts are not touched." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将移除此主机的 %lld 条已保存命令。其他主机不受影响。"
+          }
+        }
+      }
+    },
+    "%lld saved hosts use it — those hosts will ask for the password when connecting." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 台已保存的主机使用它——这些主机在连接时将要求输入密码。"
+          }
+        }
+      }
+    },
+    "%lld secrets removed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除 %lld 个机密"
+          }
+        }
+      }
+    },
+    "%lld sections" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个分区"
+          }
+        }
+      }
+    },
+    "%lld serial host(s) had a baud rate SheepTerm cannot use and were set to %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台串口主机的波特率 SheepTerm 无法使用，已设为 %2$@。"
+          }
+        }
+      }
+    },
+    "%lld skipped" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台已跳过"
+          }
+        }
+      }
+    },
+    "%lld SSH host(s) had a port outside %@–%@ and were set to %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台 SSH 主机的端口超出 %2$@–%3$@，已设为 %4$@。"
+          }
+        }
+      }
+    },
+    "%lld SSH hosts" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 台 SSH 主机"
+          }
+        }
+      }
+    },
+    "%lld unreadable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个无法读取"
+          }
+        }
+      }
+    },
+    "(no password stored)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（未存储密码）"
+          }
+        }
+      }
+    },
+    "1 cell cleared" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已清除 1 个单元格"
+          }
+        }
+      }
+    },
+    "1 credential" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个凭据"
+          }
+        }
+      }
+    },
+    "1 hit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个结果"
+          }
+        }
+      }
+    },
+    "1 host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 台主机"
+          }
+        }
+      }
+    },
+    "1 host goes with it. This cannot be undone." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其中的 1 台主机也会一并删除。此操作无法撤销。"
+          }
+        }
+      }
+    },
+    "1 host uses a jump host — it is not shared." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 1 台主机使用跳板机——跳板机不会共享。"
+          }
+        }
+      }
+    },
+    "1 line" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 行"
+          }
+        }
+      }
+    },
+    "1 repeated row collapsed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已合并 1 个重复行。"
+          }
+        }
+      }
+    },
+    "1 saved command for this host will be removed. Other hosts are not touched." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将移除此主机的 1 条已保存命令。其他主机不受影响。"
+          }
+        }
+      }
+    },
+    "1 saved host uses it — that host will ask for the password when connecting." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 1 台已保存的主机使用它——该主机在连接时将要求输入密码。"
+          }
+        }
+      }
+    },
+    "1 secret removed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除 1 个机密"
+          }
+        }
+      }
+    },
+    "1 section" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个分区"
+          }
+        }
+      }
+    },
+    "1 SSH host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 台 SSH 主机"
+          }
+        }
+      }
+    },
+    "10.0.0.1, admin@host:2222 — a port and a user may be written here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "10.0.0.1、admin@host:2222——此处可写入端口和用户。"
+          }
+        }
+      }
+    },
+    "A backup that leaves a file out means “this configuration has no such file”, so restoring one would DELETE that file. SheepTerm will not write a backup that is missing part of your configuration — nothing was written." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份中缺少某个文件即表示“此配置没有该文件”，恢复这样的备份会删除该文件。SheepTerm 不会写入缺少部分配置的备份——未写入任何内容。"
+          }
+        }
+      }
+    },
+    "A copy of the file is kept as known_hosts%@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件副本将保留为 known_hosts%@。"
+          }
+        }
+      }
+    },
+    "A saved host already points at this target, with different settings." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已有一台保存的主机指向此目标，但设置不同。"
+          }
+        }
+      }
+    },
+    "A shared password could not be saved in the Keychain, so nothing was imported." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共享的密码无法保存到钥匙串，因此未导入任何内容。"
+          }
+        }
+      }
+    },
+    "a write was refused earlier in the session, so the file has a hole" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话早些时候有一次写入被拒绝，文件中有缺口"
+          }
+        }
+      }
+    },
+    "Add %lld Hosts" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 %lld 台主机"
+          }
+        }
+      }
+    },
+    "Add 1 Host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 1 台主机"
+          }
+        }
+      }
+    },
+    "Add this key to known_hosts beside the one already pinned, and connect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将此密钥添加到 known_hosts（保留已固定的密钥）并连接"
+          }
+        }
+      }
+    },
+    "Added %lld hosts to “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将 %1$lld 台主机添加到“%2$@”。"
+          }
+        }
+      }
+    },
+    "Added 1 host to “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将 1 台主机添加到“%@”。"
+          }
+        }
+      }
+    },
+    "address: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "地址：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "agent forwarding: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代理转发：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Allow SheepTerm in your browser…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在浏览器中允许 SheepTerm…"
+          }
+        }
+      }
+    },
+    "API key — sign in with your account" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "API 密钥——请用您的账户登录"
+          }
+        }
+      }
+    },
+    "Applies to %@ in this group." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用到此分组中的 %@。"
+          }
+        }
+      }
+    },
+    "Applies to %@ in this group. Their username becomes “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用到此分组中的 %1$@。其用户名将变为“%2$@”。"
+          }
+        }
+      }
+    },
+    "Apply to the remaining %lld conflicting host(s)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用到其余 %lld 台冲突的主机"
+          }
+        }
+      }
+    },
+    "Attach New Output" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附加新输出"
+          }
+        }
+      }
+    },
+    "Attach Selection" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附加所选内容"
+          }
+        }
+      }
+    },
+    "Authenticating…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在认证…"
+          }
+        }
+      }
+    },
+    "auto-reconnect gave up" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动重新连接已放弃"
+          }
+        }
+      }
+    },
+    "auto-reconnect limit reached" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已达到自动重新连接上限"
+          }
+        }
+      }
+    },
+    "Back (⌘[)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后退（⌘[）"
+          }
+        }
+      }
+    },
+    "Back to the key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回密钥"
           }
         }
       }
@@ -118,12 +1118,132 @@
         }
       }
     },
+    "Broadcast" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "广播"
+          }
+        }
+      }
+    },
     "Cancel the connection (Esc)" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "取消连接（Esc）"
+          }
+        }
+      }
+    },
+    "cancelled" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消"
+          }
+        }
+      }
+    },
+    "cancelled — certificate not trusted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消——证书不受信任"
+          }
+        }
+      }
+    },
+    "Capture Terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捕获终端"
+          }
+        }
+      }
+    },
+    "Certificate not trusted — nothing loaded" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "证书不受信任——未载入任何内容"
+          }
+        }
+      }
+    },
+    "certificate — %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "证书——%@"
+          }
+        }
+      }
+    },
+    "Check what actually reached the device before pasting the remainder." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴剩余内容之前，请先检查设备实际收到的内容。"
+          }
+        }
+      }
+    },
+    "Checking Google Drive…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在检查 Google 云端硬盘…"
+          }
+        }
+      }
+    },
+    "Checking…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在检查…"
+          }
+        }
+      }
+    },
+    "Choose a passphrase to turn on sync" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择密码短语以开启同步"
+          }
+        }
+      }
+    },
+    "Choose a picture…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选取图片…"
+          }
+        }
+      }
+    },
+    "Choose a SheepTerm backup to restore" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择要恢复的 SheepTerm 备份"
           }
         }
       }
@@ -138,12 +1258,132 @@
         }
       }
     },
+    "cipher: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加密算法：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Claude is using an API key, not your Claude account — Settings ▸ AI ▸ Sign In." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 正在使用 API 密钥，而不是您的 Claude 账户——设置 ▸ AI ▸ 登录。"
+          }
+        }
+      }
+    },
+    "Claude started with MCP servers — stopped." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 启动时带有 MCP 服务器——已停止。"
+          }
+        }
+      }
+    },
+    "Claude started with tools enabled — stopped. Update Claude Code and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 启动时启用了工具——已停止。请更新 Claude Code 后再试。"
+          }
+        }
+      }
+    },
+    "Cleared %lld cells" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已清除 %lld 个单元格"
+          }
+        }
+      }
+    },
+    "Cleared 1 cell" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已清除 1 个单元格"
+          }
+        }
+      }
+    },
+    "Close %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭 %@"
+          }
+        }
+      }
+    },
     "Close this message" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭此消息"
+          }
+        }
+      }
+    },
+    "Command history could not be read" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取命令历史记录"
+          }
+        }
+      }
+    },
+    "Command history not saved" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令历史记录未保存"
+          }
+        }
+      }
+    },
+    "Command history starts empty and the file will not be overwritten until you clear history." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令历史记录将以空白开始，在您清除历史记录之前不会覆盖该文件。"
+          }
+        }
+      }
+    },
+    "Commands to send:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要发送的命令："
+          }
+        }
+      }
+    },
+    "Configuration restored" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置已恢复"
           }
         }
       }
@@ -178,12 +1418,232 @@
         }
       }
     },
+    "Connected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连接"
+          }
+        }
+      }
+    },
+    "connecting to %@…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在连接 %@…"
+          }
+        }
+      }
+    },
+    "Connecting…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在连接…"
+          }
+        }
+      }
+    },
+    "Connection failed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接失败"
+          }
+        }
+      }
+    },
+    "Copy password" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷贝密码"
+          }
+        }
+      }
+    },
+    "Copy username" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拷贝用户名"
+          }
+        }
+      }
+    },
+    "Could Not Check for Updates" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查更新"
+          }
+        }
+      }
+    },
+    "Could not fill this page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法填充此页面"
+          }
+        }
+      }
+    },
+    "Could not import %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法导入“%@”"
+          }
+        }
+      }
+    },
+    "Could not reach GitHub. Check the internet connection." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接 GitHub。请检查互联网连接。"
+          }
+        }
+      }
+    },
+    "Could not read %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %@"
+          }
+        }
+      }
+    },
+    "Could not set your current configuration aside" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法另存当前配置"
+          }
+        }
+      }
+    },
+    "Could not write the backup" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法写入备份"
+          }
+        }
+      }
+    },
+    "couldn't prepare the run" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法准备运行"
+          }
+        }
+      }
+    },
     "Create" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "创建"
+          }
+        }
+      }
+    },
+    "Creating the link…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在创建链接…"
+          }
+        }
+      }
+    },
+    "credential" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭据"
+          }
+        }
+      }
+    },
+    "Credential list" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭据列表"
+          }
+        }
+      }
+    },
+    "credential: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭据：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "credential: %@ → new saved credential" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭据：%@ → 新保存的凭据"
+          }
+        }
+      }
+    },
+    "credentials included" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "含凭据"
+          }
+        }
+      }
+    },
+    "credentials not included" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不含凭据"
+          }
+        }
+      }
+    },
+    "credentials.json was unreadable; the original was preserved as %@. Your saved passwords are still in the Keychain, but SheepTerm cannot see which is which until the file is restored or the credentials are re-added." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "credentials.json 无法读取；原文件已保留为 %@。您保存的密码仍在钥匙串中，但在恢复该文件或重新添加凭据之前，SheepTerm 无法分辨各密码对应哪个凭据。"
           }
         }
       }
@@ -198,12 +1658,122 @@
         }
       }
     },
+    "Delay between lines:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行间延迟："
+          }
+        }
+      }
+    },
+    "Delete “%@”?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要删除“%@”吗？"
+          }
+        }
+      }
+    },
     "Device family" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "设备系列"
+          }
+        }
+      }
+    },
+    "device family: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备系列：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "didn't answer" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无响应"
+          }
+        }
+      }
+    },
+    "Differences (yours → file):" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "差异（您的 → 文件）："
+          }
+        }
+      }
+    },
+    "disable paging: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停用分页：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Disconnected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已断开连接"
+          }
+        }
+      }
+    },
+    "disconnected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已断开连接"
+          }
+        }
+      }
+    },
+    "disconnected — %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已断开连接——%@"
+          }
+        }
+      }
+    },
+    "don't log this session: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不记录此会话：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Don't Save" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不存储"
           }
         }
       }
@@ -228,6 +1798,706 @@
         }
       }
     },
+    "Download failed — %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载失败——%@"
+          }
+        }
+      }
+    },
+    "Download finished" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载完成"
+          }
+        }
+      }
+    },
+    "Downloading %@ %@…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在下载 %1$@ %2$@…"
+          }
+        }
+      }
+    },
+    "Downloading… %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在下载… %@"
+          }
+        }
+      }
+    },
+    "Enter a URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 URL"
+          }
+        }
+      }
+    },
+    "Enter manually" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手动输入"
+          }
+        }
+      }
+    },
+    "Enter your sync passphrase on this Mac" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在此 Mac 上输入同步密码短语"
+          }
+        }
+      }
+    },
+    "exited with status %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已退出，状态码 %lld"
+          }
+        }
+      }
+    },
+    "expires %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "到期：%@"
+          }
+        }
+      }
+    },
+    "failed — %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败——%@"
+          }
+        }
+      }
+    },
+    "Find" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找"
+          }
+        }
+      }
+    },
+    "first %lld rows only (grid cap %@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅前 %1$lld 行（表格上限 %2$@）"
+          }
+        }
+      }
+    },
+    "first row only (grid cap %@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅第一行（表格上限 %@）"
+          }
+        }
+      }
+    },
+    "First row read as data — a header must use Name, Host / IP, Credential, Section." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第一行按数据读取——标题行必须使用 Name、Host / IP、Credential、Section。"
+          }
+        }
+      }
+    },
+    "For an HA pair or a replaced key: keep the pinned key and add this one" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适用于 HA 双机或已更换的密钥：保留已固定的密钥并添加此密钥"
+          }
+        }
+      }
+    },
+    "FortiOS has no per-session switch (its only one is a config change), so nothing is sent — Auto-page in the View menu answers --More-- for you instead." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FortiOS 没有按会话的开关（唯一的方式是更改配置），因此不会发送任何内容——可改用“显示”菜单中的“自动翻页”替您应答 --More--。"
+          }
+        }
+      }
+    },
+    "Forward (⌘])" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前进（⌘]）"
+          }
+        }
+      }
+    },
+    "From %@. Passwords are not included." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 %@。不包含密码。"
+          }
+        }
+      }
+    },
+    "Gatekeeper does not accept it (not notarized)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gatekeeper 不接受它（未经公证）"
+          }
+        }
+      }
+    },
+    "GitHub answered with status %lld." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub 返回了状态码 %lld。"
+          }
+        }
+      }
+    },
+    "GitHub is limiting update checks from this network for now. Try again in an hour." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub 目前正在限制来自此网络的更新检查。请一小时后再试。"
+          }
+        }
+      }
+    },
+    "Google account photo" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 账户照片"
+          }
+        }
+      }
+    },
+    "Google Drive failed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 云端硬盘出错。"
+          }
+        }
+      }
+    },
+    "grid is full (%@ rows)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表格已满（%@ 行）"
+          }
+        }
+      }
+    },
+    "Groups, hosts and settings. Passwords stay in your Keychain and are not included." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分组、主机和设置。密码保留在您的钥匙串中，不包含在内。"
+          }
+        }
+      }
+    },
+    "Hashed host name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "哈希主机名"
+          }
+        }
+      }
+    },
+    "Hashed host name (%@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "哈希主机名（%@）"
+          }
+        }
+      }
+    },
+    "Header not recognised — nothing was pasted. Use %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法识别标题行——未粘贴任何内容。请使用 %@。"
+          }
+        }
+      }
+    },
+    "history.json %@; the original was preserved as %@ and command history starts empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "history.json %1$@；原文件已保留为 %2$@，命令历史记录将以空白开始。"
+          }
+        }
+      }
+    },
+    "Host is missing after the “@”" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“@”后缺少主机"
+          }
+        }
+      }
+    },
+    "Host is not a valid address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机不是有效的地址"
+          }
+        }
+      }
+    },
+    "host key refused" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机密钥被拒绝"
+          }
+        }
+      }
+    },
+    "Host key refused" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机密钥被拒绝"
+          }
+        }
+      }
+    },
+    "Host must not contain spaces" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机不能包含空格"
+          }
+        }
+      }
+    },
+    "Host “%@” exists in both" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两边都有主机“%@”"
+          }
+        }
+      }
+    },
+    "Image" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图像"
+          }
+        }
+      }
+    },
+    "Import “%@” (%lld hosts)?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要导入“%1$@”（%2$lld 台主机）吗？"
+          }
+        }
+      }
+    },
+    "Import “%@” (%lld sections)?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要导入“%1$@”（%2$lld 个分区）吗？"
+          }
+        }
+      }
+    },
+    "Import “%@” (1 section)?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要导入“%@”（1 个分区）吗？"
+          }
+        }
+      }
+    },
+    "Imported %lld %@ values" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入 %1$lld 个“%2$@”值"
+          }
+        }
+      }
+    },
+    "Imported %lld rows" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入 %lld 行"
+          }
+        }
+      }
+    },
+    "Imported 1 %@ value" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入 1 个“%@”值"
+          }
+        }
+      }
+    },
+    "Imported 1 row" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入 1 行"
+          }
+        }
+      }
+    },
+    "Imported “%@” — %@, %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入“%1$@”——%2$@，%3$@。"
+          }
+        }
+      }
+    },
+    "Imported “%@” — %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入“%1$@”——%2$@。"
+          }
+        }
+      }
+    },
+    "Installed — signed out" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已安装——未登录"
+          }
+        }
+      }
+    },
+    "it carries fields SheepTerm never writes (%@). A credential is a name and a username only — the password belongs in the Keychain, and SheepTerm will not copy one onto this Mac's disk." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它包含 SheepTerm 从不写入的字段（%@）。凭据只包含名称和用户名——密码属于钥匙串，SheepTerm 不会将密码拷贝到此 Mac 的磁盘上。"
+          }
+        }
+      }
+    },
+    "It could not be read as one. Nothing was changed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法将其作为备份读取。未做任何更改。"
+          }
+        }
+      }
+    },
+    "it could not be unpacked" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法解压"
+          }
+        }
+      }
+    },
+    "it is not a list of credentials." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它不是凭据列表。"
+          }
+        }
+      }
+    },
+    "It is not used by any saved host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有已保存的主机使用它。"
+          }
+        }
+      }
+    },
+    "It was made by a newer SheepTerm (kind “%@”). It is kept as it is." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它由较新版本的 SheepTerm 创建（类型“%@”），将保持原样。"
+          }
+        }
+      }
+    },
+    "its code signature does not verify" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其代码签名无法验证"
+          }
+        }
+      }
+    },
+    "its size (%lld bytes) is not the %lld the release lists" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其大小（%1$lld 字节）与发布信息中的 %2$lld 不符"
+          }
+        }
+      }
+    },
+    "jump host for %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的跳板机"
+          }
+        }
+      }
+    },
+    "jump host missing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳板机不存在"
+          }
+        }
+      }
+    },
+    "Jump host missing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳板机不存在"
+          }
+        }
+      }
+    },
+    "Jump host must be user@host[:port]" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳板机格式必须为 user@host[:port]"
+          }
+        }
+      }
+    },
+    "Jump host must not contain spaces" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳板机不能包含空格"
+          }
+        }
+      }
+    },
+    "jump host: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳板机：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Known Hosts shows the entry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“已知主机”中会显示该条目。"
+          }
+        }
+      }
+    },
+    "Leave it empty to use the Default credential above. Type the name or the username of a saved credential to use that one. Any other text is this host's username on its own — no credential, so connecting asks for a password. A credential named here also wins over a user@ written in the Host / IP cell." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留空则使用上方的默认凭据。输入已保存凭据的名称或用户名即可使用该凭据。其他任何文本都作为此主机自己的用户名——不使用凭据，因此连接时会要求输入密码。此处指定的凭据也优先于“主机 / IP”单元格中写的 user@。"
+          }
+        }
+      }
+    },
+    "Links are shared from your Google account." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "链接从您的 Google 账户共享。"
+          }
+        }
+      }
+    },
+    "loading %@…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在载入 %@…"
+          }
+        }
+      }
+    },
+    "local · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地 · %@"
+          }
+        }
+      }
+    },
+    "Login saved" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录信息已保存"
+          }
+        }
+      }
+    },
+    "Model" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型"
+          }
+        }
+      }
+    },
+    "name: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "never expires" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "永不过期"
+          }
+        }
+      }
+    },
+    "New group…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建分组…"
+          }
+        }
+      }
+    },
     "New passphrase" : {
       "localizations" : {
         "zh-Hans" : {
@@ -243,7 +2513,417 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新建区段"
+            "value" : "新建分区"
+          }
+        }
+      }
+    },
+    "new tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新标签页"
+          }
+        }
+      }
+    },
+    "New Tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新标签页"
+          }
+        }
+      }
+    },
+    "No %@ yet — a host key you trust is saved there on first connection." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚无 %@——首次连接时，您信任的主机密钥会保存在那里。"
+          }
+        }
+      }
+    },
+    "No host key matches “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有与“%@”匹配的主机密钥。"
+          }
+        }
+      }
+    },
+    "No host keys in %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 中没有主机密钥。"
+          }
+        }
+      }
+    },
+    "No hosts were added." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未添加任何主机。"
+          }
+        }
+      }
+    },
+    "No line breaks in a value." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "值中不能包含换行。"
+          }
+        }
+      }
+    },
+    "No log line matches “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有与“%@”匹配的日志行。"
+          }
+        }
+      }
+    },
+    "No login form on this page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此页面上没有登录表单"
+          }
+        }
+      }
+    },
+    "No new output since the last attach" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自上次附加以来没有新的输出"
+          }
+        }
+      }
+    },
+    "No release has been published yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未发布任何版本。"
+          }
+        }
+      }
+    },
+    "No saved login for this host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机没有已保存的登录信息"
+          }
+        }
+      }
+    },
+    "none" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无"
+          }
+        }
+      }
+    },
+    "None" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无"
+          }
+        }
+      }
+    },
+    "None (enter manually)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无（手动输入）"
+          }
+        }
+      }
+    },
+    "Not a valid URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是有效的 URL"
+          }
+        }
+      }
+    },
+    "not an http(s) address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是 http(s) 地址"
+          }
+        }
+      }
+    },
+    "Not filled — this page is not the saved host’s address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未填充——此页面不是已保存主机的地址"
+          }
+        }
+      }
+    },
+    "Not found" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到"
+          }
+        }
+      }
+    },
+    "Not installed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安装"
+          }
+        }
+      }
+    },
+    "Not Now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以后"
+          }
+        }
+      }
+    },
+    "Nothing changed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有任何更改"
+          }
+        }
+      }
+    },
+    "Nothing in %@ looked like a row." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 中没有像是一行的数据。"
+          }
+        }
+      }
+    },
+    "Nothing in that paste looked like a row." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴的内容中没有像是一行的数据。"
+          }
+        }
+      }
+    },
+    "Nothing in the clipboard looked like a row." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板中没有像是一行的数据。"
+          }
+        }
+      }
+    },
+    "Nothing is sent for this family. Auto-page in the View menu answers --More-- for you instead." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此系列不会发送任何内容。可改用“显示”菜单中的“自动翻页”替您应答 --More--。"
+          }
+        }
+      }
+    },
+    "Nothing on screen to capture" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "屏幕上没有可捕获的内容"
+          }
+        }
+      }
+    },
+    "Nothing to fill yet" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无可填充的内容"
+          }
+        }
+      }
+    },
+    "Nothing was backed up" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未备份任何内容"
+          }
+        }
+      }
+    },
+    "Nothing was pasted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未粘贴任何内容"
+          }
+        }
+      }
+    },
+    "off" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关"
+          }
+        }
+      }
+    },
+    "Offline — will sync when back online" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线——恢复联网后将同步"
+          }
+        }
+      }
+    },
+    "Offline — will sync when the Mac is back online" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线——Mac 恢复联网后将同步"
+          }
+        }
+      }
+    },
+    "on" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开"
+          }
+        }
+      }
+    },
+    "One of them can restart or erase the device." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其中 1 行可能会重启或擦除设备。"
+          }
+        }
+      }
+    },
+    "Only http:// and https:// are supported" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅支持 http:// 和 https://"
+          }
+        }
+      }
+    },
+    "Only http:// and https:// open in a web tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网页标签页只能打开 http:// 和 https://"
+          }
+        }
+      }
+    },
+    "Only if this host is an HA pair or you know its key was replaced. Both keys will be trusted for %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅当此主机为 HA 双机或您确认其密钥已更换时才继续。%@ 的两个密钥都将被信任。"
+          }
+        }
+      }
+    },
+    "Only if you know the device was reinstalled or its key replaced, remove the old key in Known Hosts and connect again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有在您确认设备已重装或其密钥已更换时，才在“已知主机”中移除旧密钥并重新连接。"
+          }
+        }
+      }
+    },
+    "Open in Default Browser" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在默认浏览器中打开"
+          }
+        }
+      }
+    },
+    "Open Release Page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开发布页面"
           }
         }
       }
@@ -258,12 +2938,302 @@
         }
       }
     },
+    "opening %@…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在打开 %@…"
+          }
+        }
+      }
+    },
+    "Opening the link…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在打开链接…"
+          }
+        }
+      }
+    },
+    "Page dialogs blocked" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已阻止页面对话框"
+          }
+        }
+      }
+    },
+    "Page is still loading" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "页面仍在载入"
+          }
+        }
+      }
+    },
+    "Password updated" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码已更新"
+          }
+        }
+      }
+    },
+    "Paste into Tab (no Return)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴到标签页（不按 Return 键）"
+          }
+        }
+      }
+    },
+    "Pasted %lld %@ values" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已粘贴 %1$lld 个“%2$@”值"
+          }
+        }
+      }
+    },
+    "Pasted %lld rows" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已粘贴 %lld 行"
+          }
+        }
+      }
+    },
+    "Pasted 1 %@ value" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已粘贴 1 个“%@”值"
+          }
+        }
+      }
+    },
+    "Pasted 1 row" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已粘贴 1 行"
+          }
+        }
+      }
+    },
+    "Pick a device family above to enable this: Auto does not know which command the device wants. Auto-page in the View menu works regardless." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在上方选择设备系列以启用此项：“自动”无法知道设备需要哪条命令。“显示”菜单中的“自动翻页”在任何情况下都可用。"
+          }
+        }
+      }
+    },
+    "Pick a saved credential — it writes its name into the cell" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择已保存的凭据——会将其名称写入单元格"
+          }
+        }
+      }
+    },
+    "Pick a section you already have" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择已有的分区"
+          }
+        }
+      }
+    },
+    "port %@ · press ↩" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口 %@ · 按 ↩"
+          }
+        }
+      }
+    },
+    "port %@ · press ↩ to connect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口 %@ · 按 ↩ 连接"
+          }
+        }
+      }
+    },
+    "Port after “:” must be 1-65535" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“:”后的端口必须为 1-65535"
+          }
+        }
+      }
+    },
+    "port: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Put the password in a credential, not the URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请将密码放在凭据中，而不是 URL 中"
+          }
+        }
+      }
+    },
+    "Quit SheepTerm? %lld sessions are still open." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要退出 SheepTerm 吗？还有 %lld 个会话处于打开状态。"
+          }
+        }
+      }
+    },
+    "Quit SheepTerm? One session is still open." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要退出 SheepTerm 吗？还有 1 个会话处于打开状态。"
+          }
+        }
+      }
+    },
+    "Quitting closes it right away." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退出会立即关闭该会话。"
+          }
+        }
+      }
+    },
+    "Quitting closes them right away." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退出会立即关闭这些会话。"
+          }
+        }
+      }
+    },
+    "Reload (⌘R)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新载入（⌘R）"
+          }
+        }
+      }
+    },
     "Remember this certificate for this host and open the page" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "记住此主机的证书并打开页面"
+          }
+        }
+      }
+    },
+    "Remove %lld host keys?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除 %lld 个主机密钥吗？"
+          }
+        }
+      }
+    },
+    "Remove command history for “%@”?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除“%@”的命令历史记录吗？"
+          }
+        }
+      }
+    },
+    "Remove image" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除图像"
+          }
+        }
+      }
+    },
+    "Remove the host key for %@?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除 %@ 的主机密钥吗？"
+          }
+        }
+      }
+    },
+    "Removes the credential from %@ in this group; usernames are kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从此分组中的 %@ 移除凭据；保留用户名。"
+          }
+        }
+      }
+    },
+    "Removing a @revoked line lets that key be trusted again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除 @revoked 行后，该密钥可再次被信任。"
           }
         }
       }
@@ -283,7 +3253,17 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重命名区段"
+            "value" : "重命名分区"
+          }
+        }
+      }
+    },
+    "Repeated columns: %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重复的列：%@。"
           }
         }
       }
@@ -298,12 +3278,42 @@
         }
       }
     },
+    "Replace uses the file's version — your saved password reference is kept. Keep leaves your version untouched." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“替换”使用文件中的版本，但保留您已保存的密码关联。“保留”则不更改您的版本。"
+          }
+        }
+      }
+    },
     "Return" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "回车"
+            "value" : "Return 键"
+          }
+        }
+      }
+    },
+    "Review all %lld lines (%@) before sending to %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送到 %3$@ 之前，请检查全部 %1$lld 行（%2$@）。"
+          }
+        }
+      }
+    },
+    "Review all %lld lines (%@) before sending." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送之前，请检查全部 %1$lld 行（%2$@）。"
           }
         }
       }
@@ -318,12 +3328,212 @@
         }
       }
     },
+    "Revoke the link to “%@”?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要撤销“%@”的链接吗？"
+          }
+        }
+      }
+    },
+    "Revoking…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撤销…"
+          }
+        }
+      }
+    },
+    "Runs `%@` in a new terminal tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在新的终端标签页中运行 `%@`"
+          }
+        }
+      }
+    },
+    "Safe Paste %lld/%lld · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安全粘贴 %1$lld/%2$lld · %3$@"
+          }
+        }
+      }
+    },
+    "Save login for %@?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要保存 %@ 的登录信息吗？"
+          }
+        }
+      }
+    },
     "Save this key to known_hosts and connect" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "将此密钥保存到 known_hosts 并连接"
+          }
+        }
+      }
+    },
+    "saved credential" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的凭据"
+          }
+        }
+      }
+    },
+    "saved host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的主机"
+          }
+        }
+      }
+    },
+    "Saved jump host no longer exists — pick another or None" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的跳板机已不存在——请选择另一台或选择“无”"
+          }
+        }
+      }
+    },
+    "Saved logins" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的登录信息"
+          }
+        }
+      }
+    },
+    "Search or enter address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索或输入地址"
+          }
+        }
+      }
+    },
+    "Section list" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分区列表"
+          }
+        }
+      }
+    },
+    "Send (Return)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送（Return 键）"
+          }
+        }
+      }
+    },
+    "Send to %lld tabs?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要发送到 %lld 个标签页吗？"
+          }
+        }
+      }
+    },
+    "Send to 1 tab?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要发送到 1 个标签页吗？"
+          }
+        }
+      }
+    },
+    "Sends %lld saved logins (username and password) with the group." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随分组一起发送 %lld 个已保存的登录信息（用户名和密码）。"
+          }
+        }
+      }
+    },
+    "Sends 1 saved login (username and password) with the group." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随分组一起发送 1 个已保存的登录信息（用户名和密码）。"
+          }
+        }
+      }
+    },
+    "Sends “%@” once the shell is up, so long output is not paged. Shown in the session and the log like anything else typed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "shell 就绪后发送“%@”，使长输出不分页。它会像其他输入内容一样显示在会话和日志中。"
+          }
+        }
+      }
+    },
+    "Sent to %lld tabs" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发送到 %lld 个标签页"
+          }
+        }
+      }
+    },
+    "Sent to 1 tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发送到 1 个标签页"
+          }
+        }
+      }
+    },
+    "session ended" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话已结束"
           }
         }
       }
@@ -338,12 +3548,1442 @@
         }
       }
     },
+    "Sheep" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小羊"
+          }
+        }
+      }
+    },
+    "SheepTerm could not write credentials.json (%@). The change you just made to the credential list is not saved." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SheepTerm 无法写入 credentials.json（%@）。您刚才对凭据列表所做的更改未保存。"
+          }
+        }
+      }
+    },
+    "SheepTerm could not write history.json (%@). History is kept for this run only." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SheepTerm 无法写入 history.json（%@）。历史记录仅在本次运行期间保留。"
+          }
+        }
+      }
+    },
+    "SheepTerm could not write snippets.json (%@). The change you just made is not saved." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SheepTerm 无法写入 snippets.json（%@）。您刚才所做的更改未保存。"
+          }
+        }
+      }
+    },
+    "SheepTerm is holding its own save until you change something." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在您做出更改之前，SheepTerm 会暂缓自己的保存。"
+          }
+        }
+      }
+    },
+    "SheepTerm saved what it had, which replaced it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SheepTerm 已保存现有内容，并替换了该文件。"
+          }
+        }
+      }
+    },
+    "SheepTerm saved what it had." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SheepTerm 已保存现有内容。"
+          }
+        }
+      }
+    },
+    "SheepTerm waited up to %lld seconds for the disk before quitting. What each one is missing:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SheepTerm 在退出前等待磁盘最多 %lld 秒。各日志缺少的内容："
+          }
+        }
+      }
+    },
+    "Show in Finder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在访达中显示"
+          }
+        }
+      }
+    },
+    "show your saved passwords" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示您保存的密码"
+          }
+        }
+      }
+    },
+    "sign in if needed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如有需要请登录"
+          }
+        }
+      }
+    },
+    "Sign in with Google to sync hosts and passwords across your Macs" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Google 登录，在您的各台 Mac 之间同步主机和密码"
+          }
+        }
+      }
+    },
+    "Sign in with the Google account the link was made for." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请使用该链接所指定的 Google 账户登录。"
+          }
+        }
+      }
+    },
+    "Signed in" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已登录"
+          }
+        }
+      }
+    },
+    "Signing in…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登录…"
+          }
+        }
+      }
+    },
+    "snippets.json was unreadable; the original was preserved as %@ and the snippet list starts empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "snippets.json 无法读取；原文件已保留为 %@，代码片段列表将以空白开始。"
+          }
+        }
+      }
+    },
+    "Some entries were corrected on the way in:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分条目在导入时已更正："
+          }
+        }
+      }
+    },
+    "Some page content was blocked (untrusted certificate: %@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分页面内容已被阻止（不受信任的证书：%@）"
+          }
+        }
+      }
+    },
+    "Split it into smaller sections before sending." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请拆分成较小的部分再发送。"
+          }
+        }
+      }
+    },
+    "Stop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止"
+          }
+        }
+      }
+    },
+    "Stop before sending the next line" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在发送下一行之前停止"
+          }
+        }
+      }
+    },
+    "Stop the transfer (the device gets the abort)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止传输（设备会收到中止信号）"
+          }
+        }
+      }
+    },
+    "stopped at %lld — narrow the search" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在 %lld 处停止——请缩小搜索范围"
+          }
+        }
+      }
+    },
+    "Sync on" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步已开启"
+          }
+        }
+      }
+    },
     "Sync passphrase" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "同步密码短语"
+          }
+        }
+      }
+    },
+    "Sync: checking Google Drive…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步：正在检查 Google 云端硬盘…"
+          }
+        }
+      }
+    },
+    "Sync: choose a passphrase to turn it on" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步：请选择密码短语以开启"
+          }
+        }
+      }
+    },
+    "Sync: enter your passphrase on this Mac" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步：请在此 Mac 上输入密码短语"
+          }
+        }
+      }
+    },
+    "Synced %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已同步（%@）"
+          }
+        }
+      }
+    },
+    "Synced as %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已同步为 %@"
+          }
+        }
+      }
+    },
+    "Syncing…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在同步…"
+          }
+        }
+      }
+    },
+    "That backup cannot be restored" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法恢复该备份"
+          }
+        }
+      }
+    },
+    "That credential no longer exists." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该凭据已不存在。"
+          }
+        }
+      }
+    },
+    "That file is not a SheepTerm backup" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该文件不是 SheepTerm 备份"
+          }
+        }
+      }
+    },
+    "That group is no longer there." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该分组已不存在。"
+          }
+        }
+      }
+    },
+    "That heading is no longer in “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该分区已不在“%@”中。"
+          }
+        }
+      }
+    },
+    "That host is behind a jump host itself — one hop only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该主机本身也在跳板机之后——仅支持一跳"
+          }
+        }
+      }
+    },
+    "That is not a valid regular expression: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这不是有效的正则表达式：%@"
+          }
+        }
+      }
+    },
+    "That passphrase does not open this vault." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此密码短语无法打开该保管库。"
+          }
+        }
+      }
+    },
+    "The %@ inside this backup is not usable: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此备份中的 %1$@ 不可用：%2$@"
+          }
+        }
+      }
+    },
+    "the %@ it carries could not be read (%@)." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其中包含的 %1$@ 无法读取（%2$@）。"
+          }
+        }
+      }
+    },
+    "The block contains more than 10,000 lines." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该文本块超过 10,000 行。"
+          }
+        }
+      }
+    },
+    "The block is larger than 5 MB." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该文本块大于 5 MB。"
+          }
+        }
+      }
+    },
+    "The clipboard contains more than 10,000 lines." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板内容超过 10,000 行。"
+          }
+        }
+      }
+    },
+    "The clipboard is larger than 5 MB." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板内容大于 5 MB。"
+          }
+        }
+      }
+    },
+    "The Credential cell's login wins over the user@ in the address." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“凭据”单元格中的登录信息优先于地址中的 user@。"
+          }
+        }
+      }
+    },
+    "The download could not be saved." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法存储下载的内容。"
+          }
+        }
+      }
+    },
+    "The download does not match its signature. It may have been damaged or tampered with, so it was not installed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载的内容与其签名不符，可能已损坏或被篡改，因此未安装。"
+          }
+        }
+      }
+    },
+    "The download failed: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载失败：%@"
+          }
+        }
+      }
+    },
+    "The downloaded update is not usable: %@. Nothing was installed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载的更新不可用：%@。未安装任何内容。"
+          }
+        }
+      }
+    },
+    "The end of %lld session logs could not be written." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 个会话日志的末尾无法写入。"
+          }
+        }
+      }
+    },
+    "The end of one session log could not be written." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 1 个会话日志的末尾无法写入。"
+          }
+        }
+      }
+    },
+    "The group is empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该分组为空。"
+          }
+        }
+      }
+    },
+    "The group was not created." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分组未创建。"
+          }
+        }
+      }
+    },
+    "The group was not renamed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分组未重命名。"
+          }
+        }
+      }
+    },
+    "The host key for %@ has CHANGED" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的主机密钥已更改"
+          }
+        }
+      }
+    },
+    "The host key for %@ has changed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的主机密钥已更改"
+          }
+        }
+      }
+    },
+    "The host key for %@ is revoked" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的主机密钥已被吊销"
+          }
+        }
+      }
+    },
+    "The host key has CHANGED since you trusted it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机密钥与您此前信任的不同。"
+          }
+        }
+      }
+    },
+    "The host key TYPE has changed since you trusted it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机密钥的类型与您此前信任的不同。"
+          }
+        }
+      }
+    },
+    "The installer could not be started: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法启动安装程序：%@"
+          }
+        }
+      }
+    },
+    "the last writes did not land in time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最后的写入未能及时完成"
+          }
+        }
+      }
+    },
+    "The latest release has no %@ to download." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新发布中没有可下载的 %@。"
+          }
+        }
+      }
+    },
+    "The latest release has no signature (%@), so it cannot be verified. Nothing was installed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新发布没有签名（%@），因此无法验证。未安装任何内容。"
+          }
+        }
+      }
+    },
+    "The latest release is tagged \"%@\", which is not a version this app understands." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新发布的标签为“%@”，此 App 无法识别该版本。"
+          }
+        }
+      }
+    },
+    "The name has no usable characters." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称中没有可用的字符。"
+          }
+        }
+      }
+    },
+    "The next connection will ask you to trust its key again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次连接时将再次要求您信任其密钥。"
+          }
+        }
+      }
+    },
+    "the page stopped; reload to try again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "页面已停止；请重新载入再试"
+          }
+        }
+      }
+    },
+    "The password could not be saved" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存密码"
+          }
+        }
+      }
+    },
+    "the pre-restore folder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复前文件夹"
+          }
+        }
+      }
+    },
+    "The recipients lose access right away. Hosts and credentials they have already imported stay on their Macs — revoking cannot take those back." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接收者将立即失去访问权限。他们已导入的主机和凭据仍保留在他们的 Mac 上——撤销无法收回这些内容。"
+          }
+        }
+      }
+    },
+    "The release information from GitHub could not be read." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取来自 GitHub 的发布信息。"
+          }
+        }
+      }
+    },
+    "The release points somewhere this app does not download from (%@). Nothing was installed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该发布指向此 App 不会从中下载的位置（%@）。未安装任何内容。"
+          }
+        }
+      }
+    },
+    "The restore failed part-way" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复中途失败"
+          }
+        }
+      }
+    },
+    "The section was not created." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分区未创建。"
+          }
+        }
+      }
+    },
+    "The section was not renamed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分区未重命名。"
+          }
+        }
+      }
+    },
+    "The session ended or the tab was switched away after %lld of %lld lines, so the rest was not sent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话在发送 %1$lld/%2$lld 行后结束或标签页已切换，其余内容未发送。"
+          }
+        }
+      }
+    },
+    "The session stopped accepting input after %lld of %lld lines, so the rest was not sent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话在发送 %1$lld/%2$lld 行后停止接受输入，其余内容未发送。"
+          }
+        }
+      }
+    },
+    "The shared group could not be read." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取共享的分组。"
+          }
+        }
+      }
+    },
+    "The two entries differ." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两个条目不同。"
+          }
+        }
+      }
+    },
+    "the update" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该更新"
+          }
+        }
+      }
+    },
+    "The update was not installed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安装更新"
+          }
+        }
+      }
+    },
+    "The user@ in this address wins over the Default credential — this host will ask for a password." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此地址中的 user@ 优先于默认凭据——此主机将要求输入密码。"
+          }
+        }
+      }
+    },
+    "There are no SSH hosts in this group." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此分组中没有 SSH 主机。"
+          }
+        }
+      }
+    },
+    "There is nothing saved for this host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机没有存储任何内容。"
+          }
+        }
+      }
+    },
+    "These %@ use different credentials — pick one to apply to all." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这 %@ 使用不同的凭据——请选择一个应用到全部主机。"
+          }
+        }
+      }
+    },
+    "These logs do not match their sessions." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些日志与其会话不一致。"
+          }
+        }
+      }
+    },
+    "This backup is from a newer SheepTerm" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此备份来自较新版本的 SheepTerm"
+          }
+        }
+      }
+    },
+    "This copy's own version cannot be read." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取此副本自身的版本。"
+          }
+        }
+      }
+    },
+    "This doesn't look like a host list — %@ was not imported." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这看起来不像主机列表——未导入 %@。"
+          }
+        }
+      }
+    },
+    "this hashed entry" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此哈希条目"
+          }
+        }
+      }
+    },
+    "This host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only). Edit the host and pick another, or None." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机通过一台已不存在的跳板机连接（或该跳板机本身也在跳板机之后——仅支持一跳）。请编辑主机并选择另一台，或选择“无”。"
+          }
+        }
+      }
+    },
+    "This log does not match its session." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此日志与其会话不一致。"
+          }
+        }
+      }
+    },
+    "This Mac: %@ · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本机：%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "This Mac: no IPv4" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本机：无 IPv4"
+          }
+        }
+      }
+    },
+    "This replaces every group, host and setting in SheepTerm. Your current hosts, credentials list and settings are copied aside first, so nothing is lost for good. Passwords are not part of a backup — they stay in the Keychain of the Mac they were saved on, so a credential restored from another Mac will ask for its password on every connection until you re-enter it in Settings." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这将替换 SheepTerm 中的所有分组、主机和设置。当前的主机、凭据列表和设置会先另存一份，因此不会永久丢失。密码不包含在备份中——它们保留在保存它们的 Mac 的钥匙串中，因此从另一台 Mac 恢复的凭据在每次连接时都会要求输入密码，直到您在设置中重新输入。"
+          }
+        }
+      }
+    },
+    "this session" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话"
+          }
+        }
+      }
+    },
+    "This session connects to the same target with different settings." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话以不同的设置连接到同一目标。"
+          }
+        }
+      }
+    },
+    "Time allowed for the device CLI to process each command" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留给设备 CLI 处理每条命令的时间"
+          }
+        }
+      }
+    },
+    "Trust Both Keys" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信任两个密钥"
+          }
+        }
+      }
+    },
+    "Trust This Key Too…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时信任此密钥…"
+          }
+        }
+      }
+    },
+    "Two groups cannot share a name." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两个分组不能同名。"
+          }
+        }
+      }
+    },
+    "Two headings here cannot share a name." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此处的两个分区不能同名。"
+          }
+        }
+      }
+    },
+    "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import CSV…. A header row must use these names: Name, Host / IP, Credential, Section. A host may be written admin@host:2222." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在表格中输入（Tab 键移到下一格，Return 键添加一行），用 ⌘V 将电子表格中的一块内容粘贴到某个单元格——会从那里向外展开——或使用“导入 CSV…”。标题行必须使用这些名称：Name、Host / IP、Credential、Section。主机可写成 admin@host:2222。"
+          }
+        }
+      }
+    },
+    "Unfile %lld hosts?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要将 %lld 台主机移出分区吗？"
+          }
+        }
+      }
+    },
+    "Unfile 1 host?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要将 1 台主机移出分区吗？"
+          }
+        }
+      }
+    },
+    "Unknown (%@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知（%@）"
+          }
+        }
+      }
+    },
+    "Unknown column “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知的列“%@”。"
+          }
+        }
+      }
+    },
+    "Unknown columns: %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知的列：%@。"
+          }
+        }
+      }
+    },
+    "up to %@ of output at the end not written" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "末尾最多 %@ 的输出未写入"
+          }
+        }
+      }
+    },
+    "Update" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新"
+          }
+        }
+      }
+    },
+    "Update downloaded" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新已下载"
+          }
+        }
+      }
+    },
+    "Update rewrites the saved host with what you entered; Keep leaves it as it is and adds nothing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“更新”会用您输入的内容改写保存的主机；“保留”则保持原样，不添加任何内容。"
+          }
+        }
+      }
+    },
+    "Update rewrites the saved host; Keep leaves it alone. Either way this session opens with the settings you just entered." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“更新”会改写保存的主机；“保留”则不更改。无论哪种方式，此会话都会使用您刚输入的设置打开。"
+          }
+        }
+      }
+    },
+    "Update SheepTerm and try again. Nothing was changed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请更新 SheepTerm 后再试。未做任何更改。"
+          }
+        }
+      }
+    },
+    "Update the password for %@?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要更新 %@ 的密码吗？"
+          }
+        }
+      }
+    },
+    "URL must not contain spaces" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL 不能包含空格"
+          }
+        }
+      }
+    },
+    "usage limit reached — try again later" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已达到用量上限——请稍后再试"
+          }
+        }
+      }
+    },
+    "username" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用户名"
+          }
+        }
+      }
+    },
+    "username: %@ → %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用户名：%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Verifying…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在验证…"
+          }
+        }
+      }
+    },
+    "was larger than %lld MB" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大于 %lld MB"
+          }
+        }
+      }
+    },
+    "was unreadable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取"
+          }
+        }
+      }
+    },
+    "web tab · press ↩" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网页标签页 · 按 ↩"
+          }
+        }
+      }
+    },
+    "web tab · press ↩ to open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网页标签页 · 按 ↩ 打开"
+          }
+        }
+      }
+    },
+    "What's new in %@ %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 的新功能"
+          }
+        }
+      }
+    },
+    "with credentials" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "含凭据"
+          }
+        }
+      }
+    },
+    "XMODEM for ROMMON / BootROM; XMODEM-1K or YMODEM when the device offers it" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ROMMON / BootROM 使用 XMODEM；设备支持时使用 XMODEM-1K 或 YMODEM"
+          }
+        }
+      }
+    },
+    "You have %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您当前的版本为 %@。"
+          }
+        }
+      }
+    },
+    "You have %@. It cannot be installed from here: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您当前的版本为 %1$@。无法从此处安装：%2$@"
+          }
+        }
+      }
+    },
+    "You're up to date" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已是最新版本"
+          }
+        }
+      }
+    },
+    "Your previous configuration is in %@ inside SheepTerm's Application Support folder. To go back to it, use Restore and choose %@ from that folder." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您之前的配置位于 SheepTerm 的 Application Support 文件夹中的 %1$@。要恢复到该配置，请使用“恢复”并从该文件夹中选择 %2$@。"
+          }
+        }
+      }
+    },
+    "Your previous configuration is in %@ inside SheepTerm's Application Support folder; restore it from there." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您之前的配置位于 SheepTerm 的 Application Support 文件夹中的 %@；请从那里恢复。"
+          }
+        }
+      }
+    },
+    "Your previous configuration was empty, so nothing was set aside." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您之前的配置为空，因此没有另存任何内容。"
+          }
+        }
+      }
+    },
+    "Your previous configuration was put back." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已还原您之前的配置。"
+          }
+        }
+      }
+    },
+    "Yours: %lld hosts. The file from %@: %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的：%1$lld 台主机。来自 %2$@ 的文件：%3$@。"
+          }
+        }
+      }
+    },
+    "“%@” already exists" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”已存在"
+          }
+        }
+      }
+    },
+    "“%@” can’t be opened here" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法在此打开“%@”"
+          }
+        }
+      }
+    },
+    "“%@” is already saved in “%@”" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@”已保存在“%2$@”中"
+          }
+        }
+      }
+    },
+    "“%@” is already used here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”已在此处使用。"
+          }
+        }
+      }
+    },
+    "“%@” is used twice." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”使用了两次。"
+          }
+        }
+      }
+    },
+    "“%@” says" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”显示"
+          }
+        }
+      }
+    },
+    "“%@” was removed from SheepTerm, but macOS refused to delete its stored password. It is still in your login keychain under “Bestchaan.SheepTerm” and SheepTerm can no longer reach it — remove it in Keychain Access if you want it gone." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”已从 SheepTerm 中移除，但 macOS 拒绝删除其存储的密码。该密码仍以“Bestchaan.SheepTerm”保存在您的登录钥匙串中，SheepTerm 已无法访问——如需删除，请在“钥匙串访问”中移除。"
+          }
+        }
+      }
+    },
+    "“%@” was saved, but macOS refused to store its password. SheepTerm will ask for it on every connection until the credential is added again with the Keychain unlocked." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”已保存，但 macOS 拒绝存储其密码。在钥匙串解锁的情况下重新添加该凭据之前，SheepTerm 每次连接都会要求输入密码。"
           }
         }
       }
@@ -385,7 +5025,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⌘T 标签页 · ⌘0 侧边栏 · ⌘1–9 切换"
+            "value" : "⌘T 标签页 · ⌘0 边栏 · ⌘1–9 切换"
           }
         }
       }
@@ -395,7 +5035,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⌘T 标签页 · ⌘0 侧边栏 · ⌘1–9 切换 · ⌃⌥B 发送中断信号"
+            "value" : "⌘T 标签页 · ⌘0 边栏 · ⌘1–9 切换 · ⌃⌥B 发送中断信号"
           }
         }
       }
@@ -543,7 +5183,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加一个空行（或在最后一行按回车键）"
+            "value" : "添加一个空行（或在最后一行按 Return 键）"
           }
         }
       }
@@ -2269,7 +6909,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拖动以更改侧边栏中的显示顺序"
+            "value" : "拖动以更改边栏中的显示顺序"
           }
         }
       }
@@ -2993,7 +7633,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "侧边栏和标签页栏的绘制方式。“液态玻璃”会透出窗口后面的桌面（macOS 26）；“纯色”则保留平整的界面色块。两种方式的布局相同——终端本身永远不会半透明。"
+            "value" : "边栏和标签页栏的绘制方式。“液态玻璃”会透出窗口后面的桌面（macOS 26）；“纯色”则保留平整的界面色块。两种方式的布局相同——终端本身永远不会半透明。"
           }
         }
       }
@@ -3921,7 +8561,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新建区段…"
+            "value" : "新建分区…"
           }
         }
       }
@@ -4757,7 +9397,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "输入后按回车键"
+            "value" : "输入后按 Return 键"
           }
         }
       }
@@ -5103,7 +9743,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "移除区段"
+            "value" : "移除分区"
           }
         }
       }
@@ -5183,7 +9823,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重命名区段…"
+            "value" : "重命名分区…"
           }
         }
       }
@@ -5741,7 +10381,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "区段"
+            "value" : "分区"
           }
         }
       }
@@ -5751,7 +10391,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "区段，第 %lld 行"
+            "value" : "分区，第 %lld 行"
           }
         }
       }
@@ -6166,7 +10806,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "侧边栏"
+            "value" : "边栏"
           }
         }
       }
@@ -6900,7 +11540,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切换侧边栏"
+            "value" : "显示/隐藏边栏"
           }
         }
       }
@@ -7426,7 +12066,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无区段"
+            "value" : "无分区"
           }
         }
       }
@@ -7646,7 +12286,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "要移除区段“%@”吗？"
+            "value" : "要移除分区“%@”吗？"
           }
         }
       }

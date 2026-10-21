@@ -27,7 +27,7 @@ final class CommandHistoryStore: ObservableObject {
         suppressWrites = loaded.suppressWrites
         if let warning = loaded.warning {
             NSLog("SheepTerm: %@", warning)
-            DispatchQueue.main.async { Self.report(title: "Command history could not be read", warning) }
+            DispatchQueue.main.async { Self.report(title: String(localized: "Command history could not be read"), warning) }
         }
     }
 
@@ -57,8 +57,8 @@ final class CommandHistoryStore: ObservableObject {
             // History is a convenience: say it once, do not interrupt typing.
             NSLog("SheepTerm: could not write history.json: %@", error.localizedDescription)
             suppressWrites = true
-            Self.report(title: "Command history not saved",
-                        "SheepTerm could not write history.json (\(error.localizedDescription)). History is kept for this run only.")
+            Self.report(title: String(localized: "Command history not saved"),
+                        String(localized: "SheepTerm could not write history.json (\(error.localizedDescription)). History is kept for this run only."))
         }
     }
 

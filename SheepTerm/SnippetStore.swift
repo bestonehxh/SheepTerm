@@ -45,8 +45,7 @@ final class SnippetStore: ObservableObject {
             data = try Data(contentsOf: fileURL)
         } catch {
             if !FileManager.default.fileExists(atPath: fileURL.path) { return ([], nil) }
-            let warning = "\(fileURL.lastPathComponent) could not be read (\(error.localizedDescription)). "
-                + "The snippet list starts empty and the file will not be overwritten until you change something."
+            let warning = String(localized: "\(fileURL.lastPathComponent) could not be read (\(error.localizedDescription)). The snippet list starts empty and the file will not be overwritten until you change something.")
             NSLog("SheepTerm: %@", warning)
             return ([], warning)
         }
@@ -59,7 +58,7 @@ final class SnippetStore: ObservableObject {
             } catch {
                 NSLog("SheepTerm: could not move corrupt snippets.json aside: %@", error.localizedDescription)
             }
-            let warning = "snippets.json was unreadable; the original was preserved as \(corruptURL.lastPathComponent) and the snippet list starts empty."
+            let warning = String(localized: "snippets.json was unreadable; the original was preserved as \(corruptURL.lastPathComponent) and the snippet list starts empty.")
             NSLog("SheepTerm: %@ (decode error: %@)", warning, error.localizedDescription)
             return ([], warning)
         }
@@ -150,7 +149,7 @@ final class SnippetStore: ObservableObject {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Snippets not saved")
-        alert.informativeText = "SheepTerm could not write snippets.json (\(error.localizedDescription)). The change you just made is not saved."
+        alert.informativeText = String(localized: "SheepTerm could not write snippets.json (\(error.localizedDescription)). The change you just made is not saved.")
         alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }

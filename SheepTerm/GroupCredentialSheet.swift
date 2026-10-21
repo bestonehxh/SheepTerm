@@ -134,19 +134,19 @@ struct GroupCredentialSheet: View {
         guard sshCount > 0 else {
             // Apply is disabled here anyway; saying "Applies to 0 SSH hosts"
             // reads like a bug rather than an answer.
-            return "There are no SSH hosts in this group."
+            return String(localized: "There are no SSH hosts in this group.")
         }
-        let hosts = "\(sshCount) SSH host\(sshCount == 1 ? "" : "s")"
+        let hosts = sshCount == 1 ? String(localized: "1 SSH host") : String(localized: "\(sshCount) SSH hosts")
         if isMixed, choice == .unset {
-            return "These \(hosts) use different credentials — pick one to apply to all."
+            return String(localized: "These \(hosts) use different credentials — pick one to apply to all.")
         }
         guard let credential = selectedCredential else {
-            return "Removes the credential from \(hosts) in this group; usernames are kept."
+            return String(localized: "Removes the credential from \(hosts) in this group; usernames are kept.")
         }
         guard !credential.username.isEmpty else {
-            return "Applies to \(hosts) in this group."
+            return String(localized: "Applies to \(hosts) in this group.")
         }
-        return "Applies to \(hosts) in this group. Their username becomes “\(credential.username)”."
+        return String(localized: "Applies to \(hosts) in this group. Their username becomes “\(credential.username)”.")
     }
 
     private func apply() {
@@ -159,7 +159,7 @@ struct GroupCredentialSheet: View {
         // believing thirteen hosts were changed.
         guard group != nil else {
             dismiss()
-            Self.explain("That group no longer exists.")
+            Self.explain(String(localized: "That group no longer exists."))
             return
         }
         // Nothing picked is nothing to apply (the button is disabled then —
@@ -173,7 +173,7 @@ struct GroupCredentialSheet: View {
         // is worse than doing nothing.
         if case .credential = choice, selectedCredential == nil {
             dismiss()
-            Self.explain("That credential no longer exists.")
+            Self.explain(String(localized: "That credential no longer exists."))
             return
         }
         model.setGroupCredential(groupID: request.groupID, credential: selectedCredential)

@@ -88,12 +88,12 @@ struct WebHostSheet: View {
                     .formRow("URL")
                     .help("http:// or https:// — https:// is added when there is no scheme")
                 if let urlProblem {
-                    Text(urlProblem.message)
+                    Text(urlProblem.localizedMessage)
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.destructive)
                 }
                 FormPopup(selection: $credentialSelection,
-                          items: [.option("None", nil)] + credentialStore.credentials.map {
+                          items: [.option(String(localized: "None"), nil)] + credentialStore.credentials.map {
                               .option("\($0.name) (\($0.username))", $0.id)
                           })
                 .formRow("Credential")
@@ -104,7 +104,7 @@ struct WebHostSheet: View {
                 }
                 if showsGroup {
                     FormPopup(selection: $groupSelection,
-                              items: groupNames.map { .option($0, $0) } + [.separator, .option("New group…", Self.newGroupTag)])
+                              items: groupNames.map { .option($0, $0) } + [.separator, .option(String(localized: "New group…"), Self.newGroupTag)])
                         .formRow("Group")
                     if groupSelection == Self.newGroupTag {
                         TextField("Group name", text: $newGroupName)
@@ -136,8 +136,8 @@ struct WebHostSheet: View {
 
     private var confirmLabel: String {
         switch mode {
-        case .add: return "Add"
-        case .edit: return "Save"
+        case .add: return String(localized: "Add")
+        case .edit: return String(localized: "Save")
         }
     }
 

@@ -255,7 +255,7 @@ struct DetailPane: View {
             }
             .aiPanel()
             if model.showStatusBar
-                && (model.statusShowSession || model.statusShowHints
+                && (model.statusShowSheep || model.statusShowSession || model.statusShowHints
                     || model.statusShowIP || model.statusShowClock) {
                 StatusBarView()
             }

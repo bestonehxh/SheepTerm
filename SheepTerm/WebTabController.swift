@@ -270,7 +270,7 @@ final class WebTabController: NSObject {
         switch WebAddress.classifyTyped(text) {
         case .empty: return
         case .invalid(let problem):
-            view.bar.notice(problem.message)
+            view.bar.notice(problem.localizedMessage)
             return
         case .url(let url), .search(let url): target = url
         }
@@ -429,7 +429,7 @@ final class WebTabController: NSObject {
         // The saved host's own login goes into the host's own address only
         // (or a site it lists) — never into a page the tab wandered off to.
         if credential.id == liveHost.credentialID, !siteLogin {
-            view.bar.notice(WebFillLogin.Refusal.otherOrigin.message)
+            view.bar.notice(WebFillLogin.Refusal.otherOrigin.localizedMessage)
             NSSound.beep()
             return
         }
@@ -457,14 +457,14 @@ final class WebTabController: NSObject {
         if let refusal = WebFillLogin.check(pageURL: pageURL, savedURL: target, username: credential.username,
                                             hasPassword: !password.isEmpty,
                                             provisional: WebFillLogin.isProvisional(currentURL: pageURL, committedURL: committedURL)) {
-            view.bar.notice(refusal.message)
+            view.bar.notice(refusal.localizedMessage)
             NSSound.beep()
             return
         }
         // The document itself is checked too (`expected`): `webView.url` can
         // name a page that is not the one on screen yet.
         guard let expected = WebFillLogin.expectedOrigin(savedURL: target) else {
-            view.bar.notice(WebFillLogin.Refusal.otherOrigin.message)
+            view.bar.notice(WebFillLogin.Refusal.otherOrigin.localizedMessage)
             return
         }
         filledFromKey = Self.digest(credential.username, password)
@@ -475,14 +475,14 @@ final class WebTabController: NSObject {
             guard let self else { return }
             switch result {
             case .success(let value as String) where value == "other-origin":
-                self.view.bar.notice(WebFillLogin.Refusal.otherOrigin.message)
+                self.view.bar.notice(WebFillLogin.Refusal.otherOrigin.localizedMessage)
                 NSSound.beep()
             case .success(let value as String) where value == "filled" || value == "user-only":
                 break
             case .success:
-                self.view.bar.notice("No login form on this page")
+                self.view.bar.notice(String(localized: "No login form on this page"))
             case .failure:
-                self.view.bar.notice("Could not fill this page")
+                self.view.bar.notice(String(localized: "Could not fill this page"))
             }
         }
     }
@@ -543,7 +543,7 @@ final class WebTabController: NSObject {
         case .none:
             return
         case .save:
-            view.bar.ask("Save login for \(place)?", action: "Save") { [weak self] yes in
+            view.bar.ask(String(localized: "Save login for \(place)?"), action: String(localized: "Save")) { [weak self] yes in
                 guard let self else { return }
                 guard yes else { self.declinedSaveOrigins.insert(originKey); return }
                 let credential = store.add(name: place, username: login.username, password: login.password,
@@ -554,19 +554,19 @@ final class WebTabController: NSObject {
                     host.credentialID = credential.id
                     AppModel.shared.store.updateHost(host)
                 }
-                self.view.bar.notice("Login saved")
+                self.view.bar.notice(String(localized: "Login saved"))
             }
         case .update(let id):
-            view.bar.ask("Update the password for \(login.username)?", action: "Update") { [weak self] yes in
+            view.bar.ask(String(localized: "Update the password for \(login.username)?"), action: String(localized: "Update")) { [weak self] yes in
                 guard let self else { return }
                 guard yes else { self.declinedSaveOrigins.insert(originKey); return }
                 if Keychain.setPassword(login.password, for: id) {
                     // Sessions that logged in with the old one must not reuse it.
                     AppModel.shared.forgetCachedPasswords(forCredential: id)
                     store.addWebsite(login.origin, to: id)
-                    self.view.bar.notice("Password updated")
+                    self.view.bar.notice(String(localized: "Password updated"))
                 } else {
-                    self.view.bar.notice("The password could not be saved")
+                    self.view.bar.notice(String(localized: "The password could not be saved"))
                     NSSound.beep()
                 }
             }
@@ -692,7 +692,7 @@ final class WebTabController: NSObject {
             blockedThisNavigation += 1
             if blockedThisNavigation == 1 {
                 let server = space.port == 443 ? space.host : "\(space.host):\(space.port)"
-                view.bar.notice("Some page content was blocked (untrusted certificate: \(server))")
+                view.bar.notice(String(localized: "Some page content was blocked (untrusted certificate: \(server))"))
             }
             return (.cancelAuthenticationChallenge, nil)
         }
@@ -726,7 +726,7 @@ final class WebTabController: NSObject {
             default:
                 refusals.refuse(host: space.host, port: space.port)
                 onStatus?("cancelled — certificate not trusted")
-                view.bar.notice("Certificate not trusted — nothing loaded")
+                view.bar.notice(String(localized: "Certificate not trusted — nothing loaded"))
                 return (.cancelAuthenticationChallenge, nil)
             }
         }
@@ -786,7 +786,7 @@ extension WebTabController: WKNavigationDelegate {
         // (a form post, or the page's own script, is): a login sent before
         // and not settled is dropped — never offered on the next page.
         guard WebFramePolicy.allows(navigationAction.request.url, mainFrame: isMain) else {
-            if isMain { view.bar.notice("Only http:// and https:// open in a web tab") }
+            if isMain { view.bar.notice(String(localized: "Only http:// and https:// open in a web tab")) }
             return (.cancel, preferences)
         }
         // A link to a fragment of the same page (a Bootstrap `<a href="#"
@@ -924,7 +924,7 @@ extension WebTabController: WKUIDelegate {
     private func pageAlert(_ message: String, frame: WKFrameInfo) -> SheepAlert {
         let alert = SheepAlert()
         let origin = frame.securityOrigin.host.isEmpty ? host.name : frame.securityOrigin.host
-        alert.messageText = "“\(ConfigurationHygiene.sanitizedName(origin))” says"
+        alert.messageText = String(localized: "“\(ConfigurationHygiene.sanitizedName(origin))” says")
         alert.informativeText = String(message.prefix(1_000))
         return alert
     }
@@ -935,7 +935,7 @@ extension WebTabController: WKUIDelegate {
     private func presentDialog(_ alert: SheepAlert) async -> NSApplication.ModalResponse? {
         guard !closed, let window = view.window, window.attachedSheet == nil, dialogSheet == nil,
               dialogGate.allow(at: ProcessInfo.processInfo.systemUptime) else {
-            if dialogGate.suppressed { view.bar.notice("Page dialogs blocked") }
+            if dialogGate.suppressed { view.bar.notice(String(localized: "Page dialogs blocked")) }
             return nil
         }
         let sheet = alert.window
@@ -1015,10 +1015,10 @@ extension WebTabController: WKDownloadDelegate {
               let temporary = entry.temporary, let destination = entry.destination else { return }
         do {
             try WebDownloadPath.finish(temporary: temporary, destination: destination)
-            view.bar.notice("Download finished")
+            view.bar.notice(String(localized: "Download finished"))
         } catch {
             WebDownloadPath.discard(temporary: temporary)
-            view.bar.notice("Download failed — \(error.localizedDescription)")
+            view.bar.notice(String(localized: "Download failed — \(error.localizedDescription)"))
         }
     }
 
@@ -1027,7 +1027,7 @@ extension WebTabController: WKDownloadDelegate {
             WebDownloadPath.discard(temporary: temporary)
         }
         guard !closed else { return }
-        view.bar.notice("Download failed — \(error.localizedDescription)")
+        view.bar.notice(String(localized: "Download failed — \(error.localizedDescription)"))
     }
 }
 
@@ -1090,13 +1090,13 @@ final class WebTabView: NSView {
     private var keyButtons: [NSButton] = []
 
     private func makeKey() -> NSButton {
-        let image = NSImage(systemSymbolName: "key.fill", accessibilityDescription: "Saved logins")?
+        let image = NSImage(systemSymbolName: "key.fill", accessibilityDescription: String(localized: "Saved logins"))?
             .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
         let button = LoginKeyButton(image: image ?? NSImage(), target: self, action: #selector(keyClicked(_:)))
         button.isBordered = false
         button.imagePosition = .imageOnly
         button.refusesFirstResponder = true
-        button.toolTip = "Saved logins"
+        button.toolTip = String(localized: "Saved logins")
         addSubview(button)
         return button
     }
@@ -1181,10 +1181,10 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
 
     weak var controller: WebTabController?
 
-    private let back = WebBarView.button("chevron.left", "Back (⌘[)", HistoryButton())
-    private let forward = WebBarView.button("chevron.right", "Forward (⌘])", HistoryButton())
-    private let reload = WebBarView.button("arrow.clockwise", "Reload (⌘R)", ChromeBoxButton())
-    private let external = WebBarView.button("arrow.up.right.square", "Open in Default Browser", ChromeBoxButton())
+    private let back = WebBarView.button("chevron.left", String(localized: "Back (⌘[)"), HistoryButton())
+    private let forward = WebBarView.button("chevron.right", String(localized: "Forward (⌘])"), HistoryButton())
+    private let reload = WebBarView.button("arrow.clockwise", String(localized: "Reload (⌘R)"), ChromeBoxButton())
+    private let external = WebBarView.button("arrow.up.right.square", String(localized: "Open in Default Browser"), ChromeBoxButton())
     private let urlField = NSTextField()
     /// The URL field (an empty tab's keyboard target).
     var locationField: NSView { urlField }
@@ -1194,8 +1194,8 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     /// Save login's question (5.0 (23)): a line and two small buttons in
     /// the URL field's right end, in place of a notice — never a dialog.
     private let promptLabel = NSTextField(labelWithString: "")
-    private let promptYes = NSButton(title: "Save", target: nil, action: nil)
-    private let promptNo = NSButton(title: "Not Now", target: nil, action: nil)
+    private let promptYes = NSButton(title: String(localized: "Save"), target: nil, action: nil)
+    private let promptNo = NSButton(title: String(localized: "Not Now"), target: nil, action: nil)
     private var promptAnswer: ((Bool) -> Void)?
     private var promptGeneration = 0
     private var promptShown: Bool { !promptLabel.isHidden }
@@ -1223,7 +1223,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         urlField.lineBreakMode = .byTruncatingTail
         urlField.cell?.isScrollable = true
         urlField.cell?.wraps = false
-        urlField.placeholderString = "Search or enter address"
+        urlField.placeholderString = String(localized: "Search or enter address")
         urlField.delegate = self
         urlField.target = self
         urlField.action = #selector(urlEntered)
@@ -1237,7 +1237,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         addSubview(urlField)
         findField.font = .systemFont(ofSize: 12)
         findField.controlSize = .small
-        findField.placeholderString = "Find"
+        findField.placeholderString = String(localized: "Find")
         findField.sendsSearchStringImmediately = false
         findField.target = self
         findField.action = #selector(findEntered)
@@ -1348,7 +1348,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         let symbol = web.isLoading ? "xmark" : "arrow.clockwise"
         reload.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
-        reload.setAccessibilityLabel(web.isLoading ? "Stop" : "Reload")
+        reload.setAccessibilityLabel(web.isLoading ? String(localized: "Stop") : String(localized: "Reload"))
         reload.isEnabled = !controller.isEmpty
         external.isEnabled = WebAddress.isLoadable(controller.webView.url ?? URL(string: controller.host.address))
         for button in [back, forward, reload, external] {
@@ -1440,7 +1440,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         configuration.wraps = true
         configuration.caseSensitive = false
         controller.webView.find(text, configuration: configuration) { [weak self] result in
-            if !result.matchFound { self?.notice("Not found") ; NSSound.beep() }
+            if !result.matchFound { self?.notice(String(localized: "Not found")) ; NSSound.beep() }
         }
     }
 
@@ -1643,5 +1643,31 @@ final class HistoryButton: ChromeBoxButton {
     private func showHistory() {
         guard let menu = historyMenu?(), !menu.items.isEmpty else { return }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.height + 2), in: self)
+    }
+}
+
+/// `WebAddress.Problem` / `WebFillLogin.Refusal` live in the source shared with
+/// the Windows build (no String Catalog there), so their lines are put into
+/// words here, where the Mac shows them.
+extension WebAddress.Problem {
+    var localizedMessage: String {
+        switch self {
+        case .empty: return String(localized: "Enter a URL")
+        case .whitespace: return String(localized: "URL must not contain spaces")
+        case .scheme: return String(localized: "Only http:// and https:// are supported")
+        case .invalid: return String(localized: "Not a valid URL")
+        case .passwordInURL: return String(localized: "Put the password in a credential, not the URL")
+        }
+    }
+}
+
+extension WebFillLogin.Refusal {
+    var localizedMessage: String {
+        switch self {
+        case .noLogin: return String(localized: "No saved login for this host")
+        case .otherOrigin: return String(localized: "Not filled — this page is not the saved host’s address")
+        case .noPage: return String(localized: "Nothing to fill yet")
+        case .loading: return String(localized: "Page is still loading")
+        }
     }
 }

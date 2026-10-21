@@ -1393,3 +1393,36 @@ public final class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValid
         return terminal.hyperlinks[index]
     }
 }
+
+// MARK: - Snapshot
+
+extension TerminalView {
+    /// The picture on screen right now, as PNG — the IOSurface the layer is
+    /// showing, so exactly what the user sees (highlight overlay included).
+    /// nil when nothing is presented (a hidden pane, the CAMetalLayer path).
+    public func snapshotPNG() -> Data? {
+        Self.pngData(fromLayerContents: layer?.contents)
+    }
+
+    nonisolated static func pngData(fromLayerContents contents: Any?) -> Data? {
+        guard let contents else { return nil }
+        let object = contents as AnyObject
+        guard CFGetTypeID(object) == IOSurfaceGetTypeID() else { return nil }
+        let surface = unsafeBitCast(object, to: IOSurfaceRef.self) as IOSurface
+        // The frames are BGRA in sRGB (the layer's `colorspace`): copied
+        // byte for byte, tagged sRGB, never colour-managed in between.
+        let w = surface.width, h = surface.height, row = surface.bytesPerRow
+        guard w > 0, h > 0, surface.pixelFormat == 0x42475241 else { return nil }
+        surface.lock(options: .readOnly, seed: nil)
+        let bytes = Data(bytes: surface.baseAddress, count: row * h)
+        surface.unlock(options: .readOnly, seed: nil)
+        guard let provider = CGDataProvider(data: bytes as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: row, space: space,
+                               bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue
+                                                        | CGImageAlphaInfo.noneSkipFirst.rawValue),
+                               provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        else { return nil }
+        return NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])
+    }
+}

@@ -64,9 +64,9 @@ final class SheepAlert: NSObject {
         button.tag = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + buttons.count
         if buttons.isEmpty {
             button.keyEquivalent = "\r"
-        } else if title == "Cancel" {
+        } else if Self.isTitle(title, "Cancel") {
             button.keyEquivalent = "\u{1b}"
-        } else if title == "Don't Save" {
+        } else if Self.isTitle(title, "Don't Save") {
             button.keyEquivalent = "d"
             button.keyEquivalentModifierMask = .command
         }
@@ -174,18 +174,34 @@ final class SheepAlert: NSObject {
     /// Delete…, Remove… and Quit read as destructive wherever they appear;
     /// a call site can mark any other button with `hasDestructiveAction`.
     static func isDestructive(_ button: NSButton) -> Bool {
-        button.hasDestructiveAction || button.title == "Quit"
-            || button.title.hasPrefix("Delete") || button.title.hasPrefix("Remove")
+        button.hasDestructiveAction || isTitle(button.title, "Quit")
+            || hasTitlePrefix(button.title, "Delete") || hasTitlePrefix(button.title, "Remove")
     }
 
-    static func isCancel(_ button: NSButton) -> Bool { button.title.hasPrefix("Cancel") }
+    static func isCancel(_ button: NSButton) -> Bool { hasTitlePrefix(button.title, "Cancel") }
 
     /// The button Esc presses and the row puts next to the action: Cancel,
     /// or the dismiss an alert names otherwise.
     static func isEscape(_ button: NSButton) -> Bool {
-        isCancel(button) || escapeTitles.contains(button.title) || button.title.hasPrefix("Keep ")
+        isCancel(button) || escapeTitles.contains { isTitle(button.title, $0) } || button.title.hasPrefix("Keep ")
+            || (button.title != translated("Keep") && button.title.hasPrefix(translated("Keep")))
     }
     static let escapeTitles: Set<String> = ["Later", "Back", "Close", "Not Now"]
+
+    /// Call sites pass `String(localized:)` titles, so a button's role is
+    /// read from the English word OR its translation — in zh-Hans "取消" is
+    /// still Cancel, "删除主机" still destructive.
+    private static func translated(_ english: String) -> String {
+        String(localized: String.LocalizationValue(english))
+    }
+
+    private static func isTitle(_ title: String, _ english: String) -> Bool {
+        title == english || title == translated(english)
+    }
+
+    private static func hasTitlePrefix(_ title: String, _ english: String) -> Bool {
+        title.hasPrefix(english) || title.hasPrefix(translated(english))
+    }
 
     /// The soft blue macOS 26 gives an alert's default button in a dark
     /// window (sampled from the system Quit alert the user liked, 4.2 (2)) —

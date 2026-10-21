@@ -245,7 +245,7 @@ struct AddHostsSheet: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text(status ?? "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import CSV…. A header row must use these names: Name, Host / IP, Credential, Section. A host may be written admin@host:2222.")
+                Text(status ?? String(localized: "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import CSV…. A header row must use these names: Name, Host / IP, Credential, Section. A host may be written admin@host:2222."))
                     .font(.system(size: 10))
                     .foregroundStyle(status == nil ? .secondary : .primary)
                 Spacer()
@@ -375,8 +375,8 @@ struct AddHostsSheet: View {
     }
 
     private func fixedCell<Field: View>(menu: [MenuEntry],
-                                        menuLabel: String,
-                                        help: String,
+                                        menuLabel: LocalizedStringKey,
+                                        help: LocalizedStringKey,
                                         pick: @escaping (MenuEntry) -> Void,
                                         @ViewBuilder field: () -> Field) -> some View {
         HStack(spacing: Self.chevronGap) {
@@ -446,7 +446,7 @@ struct AddHostsSheet: View {
                 .foregroundStyle(addressWarning(row.wrappedValue) == nil
                                  ? AnyShapeStyle(.primary) : AnyShapeStyle(.orange))
                 .help(addressWarning(row.wrappedValue)
-                      ?? "10.0.0.1, admin@host:2222 — a port and a user may be written here.")
+                      ?? String(localized: "10.0.0.1, admin@host:2222 — a port and a user may be written here."))
         } credential: {
             fixedCell(menu: BulkHostParser.credentialMenuLabels(credentialTriples)
                         .map { MenuEntry(id: $0.id.uuidString, label: $0.label) },
@@ -486,7 +486,7 @@ struct AddHostsSheet: View {
                     // the one outcome a user cannot see for themselves; the
                     // tooltip spells all three out.
                     .foregroundStyle(meaning == "username" ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
-                    .help(meaning.map { "\($0) — \(Self.credentialRules)" } ?? Self.credentialRules)
+                    .help(meaning.map { "\(Self.meaningLabel($0)) — \(Self.credentialRules)" } ?? Self.credentialRules)
             }
         } section: {
             fixedCell(menu: sectionsInChosenGroup.map { MenuEntry(id: $0, label: $0) },
@@ -588,7 +588,7 @@ struct AddHostsSheet: View {
 
     private var addLabel: String {
         let count = usableRows.count
-        return count == 1 ? "Add 1 Host" : "Add \(count) Hosts"
+        return count == 1 ? String(localized: "Add 1 Host") : String(localized: "Add \(count) Hosts")
     }
 
     private var isValid: Bool {
@@ -605,10 +605,10 @@ struct AddHostsSheet: View {
 
     private func columnLabel(_ column: BulkHostParser.Column) -> String {
         switch column {
-        case .name: return "Name"
-        case .address: return "Host / IP"
-        case .credential: return "Credential"
-        case .section: return "Section"
+        case .name: return String(localized: "Name")
+        case .address: return String(localized: "Host / IP")
+        case .credential: return String(localized: "Credential")
+        case .section: return String(localized: "Section")
         }
     }
 
@@ -763,7 +763,7 @@ struct AddHostsSheet: View {
             // perfectly good told the user the wrong thing. `pasteBlock` says
             // it the same way. (The anchor already has its previous text back,
             // so "Nothing was pasted" is literally true.)
-            status = note.isEmpty ? "Nothing in that paste looked like a row." : "Nothing was pasted" + note
+            status = note.isEmpty ? String(localized: "Nothing in that paste looked like a row.") : String(localized: "Nothing was pasted") + note
             return
         }
         // Worked out from the grid AS IT IS, before anything is written: which
@@ -797,14 +797,15 @@ struct AddHostsSheet: View {
         // "cleared" counts CELLS (a row that got a name while its old address
         // was emptied reports both), so the wording says cells.
         let filled = outcome.filled, cleared = outcome.cleared
-        let clearedCells = "\(cleared) cell\(cleared == 1 ? "" : "s") cleared"
+        let clearedCells = cleared == 1 ? String(localized: "1 cell cleared") : String(localized: "\(cleared) cells cleared")
         let pasted: String
         if filled > 0 {
-            pasted = "Pasted \(filled) row\(filled == 1 ? "" : "s")" + (cleared > 0 ? " · " + clearedCells : "")
+            pasted = (filled == 1 ? String(localized: "Pasted 1 row") : String(localized: "Pasted \(filled) rows"))
+                + (cleared > 0 ? " · " + clearedCells : "")
         } else if cleared > 0 {
-            pasted = "Cleared \(cleared) cell\(cleared == 1 ? "" : "s")"
+            pasted = cleared == 1 ? String(localized: "Cleared 1 cell") : String(localized: "Cleared \(cleared) cells")
         } else {
-            pasted = "Nothing changed"
+            pasted = String(localized: "Nothing changed")
         }
         status = pasted + note + headerHint(limited)
     }
@@ -832,8 +833,7 @@ struct AddHostsSheet: View {
     /// would be worse; this is the line that stops that being a surprise.
     private func headerHint(_ block: BulkHostParser.Block) -> String {
         guard block.firstRowMayBeHeader else { return "" }
-        return " · First row read as data — a header must use "
-            + "Name, Host / IP, Credential, Section."
+        return " · " + String(localized: "First row read as data — a header must use Name, Host / IP, Credential, Section.")
     }
 
     /// A header this app will not take refuses the whole paste: nothing is
@@ -854,15 +854,15 @@ struct AddHostsSheet: View {
         var detail: [String] = []
         if !unknown.isEmpty {
             detail.append(unknown.count == 1
-                          ? "Unknown column “\(unknown[0])”."
-                          : "Unknown columns: \(unknown.joined(separator: ", ")).")
+                          ? String(localized: "Unknown column “\(unknown[0])”.")
+                          : String(localized: "Unknown columns: \(unknown.joined(separator: ", "))."))
         }
         if !duplicates.isEmpty {
             detail.append(duplicates.count == 1
-                          ? "“\(duplicates[0])” is used twice."
-                          : "Repeated columns: \(duplicates.joined(separator: ", ")).")
+                          ? String(localized: "“\(duplicates[0])” is used twice.")
+                          : String(localized: "Repeated columns: \(duplicates.joined(separator: ", "))."))
         }
-        status = "Header not recognised — nothing was pasted. Use \(BulkHostParser.acceptedHeadingSummary)."
+        status = String(localized: "Header not recognised — nothing was pasted. Use \(BulkHostParser.acceptedHeadingSummary).")
         let informative = detail.joined(separator: " ")
         DispatchQueue.main.async {
             let alert = SheepAlert()
@@ -940,12 +940,19 @@ struct AddHostsSheet: View {
         return .rows(placed)
     }
 
-    private func describe(_ placed: Placed, _ verb: String) -> String {
+    private func describe(_ placed: Placed, imported: Bool) -> String {
         switch placed {
         case .rows(let count):
-            return "\(verb) \(count) row\(count == 1 ? "" : "s")"
+            if imported {
+                return count == 1 ? String(localized: "Imported 1 row") : String(localized: "Imported \(count) rows")
+            }
+            return count == 1 ? String(localized: "Pasted 1 row") : String(localized: "Pasted \(count) rows")
         case .column(let column, let count):
-            return "\(verb) \(count) \(columnLabel(column)) value\(count == 1 ? "" : "s")"
+            let label = columnLabel(column)
+            if imported {
+                return count == 1 ? String(localized: "Imported 1 \(label) value") : String(localized: "Imported \(count) \(label) values")
+            }
+            return count == 1 ? String(localized: "Pasted 1 \(label) value") : String(localized: "Pasted \(count) \(label) values")
         }
     }
 
@@ -955,7 +962,7 @@ struct AddHostsSheet: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .plainText]
         panel.allowsMultipleSelection = false
-        panel.prompt = "Import"
+        panel.prompt = String(localized: "Import")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         importFile(at: url)
     }
@@ -973,9 +980,9 @@ struct AddHostsSheet: View {
             var row = DraftHost()
             write(value, into: &row, column: column)
             if place(row) {
-                status = "Pasted 1 \(columnLabel(column)) value"
+                status = String(localized: "Pasted 1 \(columnLabel(column)) value")
             } else {
-                status = "Nothing was pasted" + BulkHostParser.capNote(placed: 0,
+                status = String(localized: "Nothing was pasted") + BulkHostParser.capNote(placed: 0,
                                                                          cap: Self.importRowCap)
             }
             return
@@ -986,11 +993,11 @@ struct AddHostsSheet: View {
             return
         }
         guard !block.isEmpty else {
-            status = "Nothing in the clipboard looked like a row."
+            status = String(localized: "Nothing in the clipboard looked like a row.")
             return
         }
         let (parsed, note) = capped(block)
-        status = describe(placeBlock(parsed), "Pasted") + note + headerHint(parsed)
+        status = describe(placeBlock(parsed), imported: false) + note + headerHint(parsed)
     }
 
     /// A file goes through exactly the path a paste does — same parser, same
@@ -1004,13 +1011,13 @@ struct AddHostsSheet: View {
         // got to say no.
         let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard BulkHostParser.importSizeAllowed(bytes: bytes) else {
-            status = "\(name) is too large to be a host list."
+            status = String(localized: "\(name) is too large to be a host list.")
             return
         }
         guard let text = Self.readText(at: url) else {
             // Said in the status line, not an alert: the sheet is already on
             // screen and a modal over a sheet for "wrong file" is a lot.
-            status = "Could not read \(name)"
+            status = String(localized: "Could not read \(name)")
             return
         }
         let parsed = BulkHostParser.block(from: text)
@@ -1023,17 +1030,17 @@ struct AddHostsSheet: View {
         // refused a perfectly good CSV of `core-sw-01` hostnames, which have
         // no dots in them at all.
         if !parsed.rows.isEmpty, !BulkHostParser.looksLikeHostList(parsed, text: text) {
-            status = "This doesn't look like a host list — \(name) was not imported."
+            status = String(localized: "This doesn't look like a host list — \(name) was not imported.")
             return
         }
         // A cap, because the grid is a view of every row at once: 2,000 is
         // far past any real list and still opens.
         guard !parsed.isEmpty else {
-            status = "Nothing in \(name) looked like a row."
+            status = String(localized: "Nothing in \(name) looked like a row.")
             return
         }
         let (limited, note) = capped(parsed)
-        status = "\(describe(placeBlock(limited), "Imported")) from \(name)"
+        status = String(localized: "\(describe(placeBlock(limited), imported: true)) from \(name)")
             + note + headerHint(limited)
     }
 
@@ -1068,13 +1075,17 @@ struct AddHostsSheet: View {
         }
     }
 
-    static let credentialRules = """
-        Leave it empty to use the Default credential above. \
-        Type the name or the username of a saved credential to use that one. \
-        Any other text is this host's username on its own — no credential, \
-        so connecting asks for a password. A credential named here also wins \
-        over a user@ written in the Host / IP cell.
-        """
+    static let credentialRules = String(localized: "Leave it empty to use the Default credential above. Type the name or the username of a saved credential to use that one. Any other text is this host's username on its own — no credential, so connecting asks for a password. A credential named here also wins over a user@ written in the Host / IP cell.")
+
+    /// `meaning(of:)` in words: its two fixed answers are translated, a
+    /// credential's own username is shown as it is.
+    static func meaningLabel(_ meaning: String) -> String {
+        switch meaning {
+        case "username": return String(localized: "username")
+        case "credential": return String(localized: "credential")
+        default: return meaning
+        }
+    }
 
     /// What the Credential cell's text resolves to: the credential this row
     /// will use, and the username to save when it is not one of ours.
@@ -1136,10 +1147,10 @@ struct AddHostsSheet: View {
     /// Why this row's Host / IP field is marked, or nil when it is not.
     private func addressWarning(_ row: DraftHost) -> String? {
         if addressUserWins(row) {
-            return "The user@ in this address wins over the Default credential — this host will ask for a password."
+            return String(localized: "The user@ in this address wins over the Default credential — this host will ask for a password.")
         }
         if credentialBeatsAddressUser(row) {
-            return "The Credential cell's login wins over the user@ in the address."
+            return String(localized: "The Credential cell's login wins over the user@ in the address.")
         }
         return nil
     }
@@ -1283,8 +1294,8 @@ struct AddHostsSheet: View {
         // reason used to be layout — NSAlert left-aligned long text; since
         // 4.2 (2) every alert is a SheepAlert that stays centred, so it is
         // only readability now.)
-        let message = group.map { "Added \(added) host\(added == 1 ? "" : "s") to “\($0)”." }
-            ?? "No hosts were added."
+        let message = group.map { added == 1 ? String(localized: "Added 1 host to “\($0)”.") : String(localized: "Added \(added) hosts to “\($0)”.") }
+            ?? String(localized: "No hosts were added.")
         // ONE line for everything, zeros left out, and the words kept short:
         // "4 filed · 2 existed · 1 repeated · 1 skipped." reads at a glance;
         // the same facts as three sentences did not.
@@ -1294,13 +1305,13 @@ struct AddHostsSheet: View {
             // stays two words so the line stays one line.
             let alone = existed == 0 && repeated == 0 && skipped == 0
             counts.append(alone
-                          ? "\(filed.hosts) filed under \(filed.sections) "
-                            + "section\(filed.sections == 1 ? "" : "s")"
-                          : "\(filed.hosts) filed")
+                          ? (filed.sections == 1 ? String(localized: "\(filed.hosts) filed under 1 section")
+                                                 : String(localized: "\(filed.hosts) filed under \(filed.sections) sections"))
+                          : String(localized: "\(filed.hosts) filed"))
         }
-        if existed > 0 { counts.append("\(existed) existed") }
-        if repeated > 0 { counts.append("\(repeated) repeated") }
-        if skipped > 0 { counts.append("\(skipped) skipped") }
+        if existed > 0 { counts.append(String(localized: "\(existed) existed")) }
+        if repeated > 0 { counts.append(String(localized: "\(repeated) repeated")) }
+        if skipped > 0 { counts.append(String(localized: "\(skipped) skipped")) }
         var detail: [String] = []
         if !counts.isEmpty { detail.append(counts.joined(separator: " · ") + ".") }
         // The hygiene report is the one part that cannot be short: it names

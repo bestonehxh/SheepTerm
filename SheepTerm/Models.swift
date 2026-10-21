@@ -545,33 +545,27 @@ enum ConfigurationHygiene {
             guard !isEmpty else { return nil }
             var lines: [String] = []
             if shortenedNames > 0 {
-                lines.append("• \(shortenedNames) name(s) or section label(s) were shortened to "
-                             + "\(ConfigurationHygiene.maxNameLength) characters "
-                             + "or had control characters removed.")
+                lines.append("• " + String(localized: "\(shortenedNames) name(s) or section label(s) were shortened to \(ConfigurationHygiene.maxNameLength) characters or had control characters removed."))
             }
             if replacedNames > 0 {
-                lines.append("• \(replacedNames) entr(ies) had no usable name left and were named after "
-                             + "their address.")
+                lines.append("• " + String(localized: "\(replacedNames) entr(ies) had no usable name left and were named after their address."))
             }
             if droppedHeadings > 0 {
-                lines.append("• \(droppedHeadings) empty section name(s) were dropped.")
+                lines.append("• " + String(localized: "\(droppedHeadings) empty section name(s) were dropped."))
             }
             if cleanedFields > 0 {
-                lines.append("• \(cleanedFields) address(es) or username(s) had control characters removed.")
+                lines.append("• " + String(localized: "\(cleanedFields) address(es) or username(s) had control characters removed."))
             }
             if narrowedPorts > 0 {
-                lines.append("• \(narrowedPorts) SSH host(s) had a port outside "
-                             + "\(Host.sshPortRange.lowerBound)–\(Host.sshPortRange.upperBound) "
-                             + "and were set to \(Host.defaultSSHPort).")
+                lines.append("• " + String(localized: "\(narrowedPorts) SSH host(s) had a port outside \(String(Host.sshPortRange.lowerBound))–\(String(Host.sshPortRange.upperBound)) and were set to \(String(Host.defaultSSHPort))."))
             }
             if narrowedBauds > 0 {
-                lines.append("• \(narrowedBauds) serial host(s) had a baud rate SheepTerm cannot use "
-                             + "and were set to \(Host.defaultSerialBaud).")
+                lines.append("• " + String(localized: "\(narrowedBauds) serial host(s) had a baud rate SheepTerm cannot use and were set to \(String(Host.defaultSerialBaud))."))
             }
             // Not "every one of them was kept": a dropped section name is a
             // row that is gone, and the bullet below says so. Short, because
             // the alert has to stay in the compact centred-icon layout.
-            return "Some entries were corrected on the way in:\n"
+            return String(localized: "Some entries were corrected on the way in:") + "\n"
                 + lines.joined(separator: "\n")
         }
     }
@@ -583,7 +577,7 @@ enum ConfigurationHygiene {
         var errorDescription: String? {
             switch self {
             case .undecodable(let name, let reason):
-                return "the \(name) it carries could not be read (\(reason))."
+                return String(localized: "the \(name) it carries could not be read (\(reason)).")
             }
         }
     }
@@ -1131,14 +1125,14 @@ enum JumpTarget: Equatable {
         if let jumpHostID {
             if candidates.contains(where: { $0.id == jumpHostID }) { return nil }
             if saved.contains(where: { $0.id == jumpHostID }) {
-                return "That host is behind a jump host itself — one hop only"
+                return String(localized: "That host is behind a jump host itself — one hop only")
             }
-            return "Saved jump host no longer exists — pick another or None"
+            return String(localized: "Saved jump host no longer exists — pick another or None")
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed.contains(where: { $0.isWhitespace }) { return "Jump host must not contain spaces" }
-        return parse(trimmed) == nil ? "Jump host must be user@host[:port]" : nil
+        if trimmed.contains(where: { $0.isWhitespace }) { return String(localized: "Jump host must not contain spaces") }
+        return parse(trimmed) == nil ? String(localized: "Jump host must be user@host[:port]") : nil
     }
 
     /// Typed text that does not parse keeps Connect/Save disabled.
@@ -2001,11 +1995,11 @@ enum BulkHostParser {
     /// What to add to a paste's status line when the grid could not take the
     /// whole block. `placed` is what landed, `cap` the grid's limit.
     static func capNote(placed: Int, cap: Int) -> String {
-        if placed == 0 { return " · grid is full (\(cap) rows)" }
+        if placed == 0 { return " · " + String(localized: "grid is full (\(String(cap)) rows)") }
         // "first 1 rows only" is the kind of sentence that makes the whole
         // dialog look machine-written.
-        if placed == 1 { return " · first row only (grid cap \(cap))" }
-        return " · first \(placed) rows only (grid cap \(cap))"
+        if placed == 1 { return " · " + String(localized: "first row only (grid cap \(String(cap)))") }
+        return " · " + String(localized: "first \(placed) rows only (grid cap \(String(cap)))")
     }
 
     /// Does this file look like a list of HOSTS at all?
@@ -2599,10 +2593,8 @@ final class HostStore: ObservableObject {
             let corruptURL = url.appendingPathExtension("corrupt-\(corruptStamp())")
             let setAside = (try? FileManager.default.moveItem(at: url, to: corruptURL)) != nil
             let warning = setAside
-                ? "\(url.lastPathComponent) could not be read (\(error.localizedDescription)); "
-                    + "it was preserved as \(corruptURL.lastPathComponent) and the list starts empty."
-                : "\(url.lastPathComponent) could not be read (\(error.localizedDescription)) and could not "
-                    + "be set aside. SheepTerm started with an empty list and will not overwrite the file."
+                ? String(localized: "\(url.lastPathComponent) could not be read (\(error.localizedDescription)); it was preserved as \(corruptURL.lastPathComponent) and the list starts empty.")
+                : String(localized: "\(url.lastPathComponent) could not be read (\(error.localizedDescription)) and could not be set aside. SheepTerm started with an empty list and will not overwrite the file.")
             NSLog("SheepTerm: %@", warning)
             return ([], warning)
         }
@@ -2616,7 +2608,7 @@ final class HostStore: ObservableObject {
                 NSLog("SheepTerm: could not move corrupt %@ aside: %@",
                       url.lastPathComponent, error.localizedDescription)
             }
-            let warning = "\(url.lastPathComponent) was unreadable; the original was preserved as \(corruptURL.lastPathComponent) and the list starts empty."
+            let warning = String(localized: "\(url.lastPathComponent) was unreadable; the original was preserved as \(corruptURL.lastPathComponent) and the list starts empty.")
             NSLog("SheepTerm: %@ (decode error: %@)", warning, error.localizedDescription)
             return ([], warning)
         }
@@ -2859,18 +2851,16 @@ final class HostStore: ObservableObject {
             NSLog("SheepTerm: could not set aside unreadable %@: %@",
                   url.lastPathComponent, error.localizedDescription)
             let held = url == Self.recentsURL ? suppressRecentsWrites : suppressHostsWrites
-            let warning = "\(url.lastPathComponent) was changed by something else, could not be read, "
-                + "and could not be set aside either (\(error.localizedDescription)). "
-                + (held ? "SheepTerm is holding its own save until you change something."
-                        : "SheepTerm saved what it had, which replaced it.")
+            let warning = String(localized: "\(url.lastPathComponent) was changed by something else, could not be read, and could not be set aside either (\(error.localizedDescription)).") + " "
+                + (held ? String(localized: "SheepTerm is holding its own save until you change something.")
+                        : String(localized: "SheepTerm saved what it had, which replaced it."))
             dataLoadWarning = [dataLoadWarning, warning].compactMap { $0 }.joined(separator: "\n")
             return false
         }
         let held = url == Self.recentsURL ? suppressRecentsWrites : suppressHostsWrites
-        let warning = "\(url.lastPathComponent) was changed by something else and could not be read. "
-            + "It was preserved as \(corruptURL.lastPathComponent); "
-            + (held ? "SheepTerm is holding its own save until you change something."
-                    : "SheepTerm saved what it had.")
+        let warning = String(localized: "\(url.lastPathComponent) was changed by something else and could not be read. It was preserved as \(corruptURL.lastPathComponent);") + " "
+            + (held ? String(localized: "SheepTerm is holding its own save until you change something.")
+                    : String(localized: "SheepTerm saved what it had."))
         NSLog("SheepTerm: %@", warning)
         dataLoadWarning = [dataLoadWarning, warning].compactMap { $0 }.joined(separator: "\n")
         return true

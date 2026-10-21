@@ -158,14 +158,15 @@ public struct AlgorithmPreferences: Sendable, Equatable {
                   .aes256CBC, .aes192CBC, .aes128CBC, .tripleDESCBC],
         macs: [.hmacSHA256ETM, .hmacSHA512ETM, .hmacSHA256, .hmacSHA512, .hmacSHA1, .hmacMD5])
 
-    /// The same lists with the host-key algorithms for `keyTypes` moved to
-    /// the front (in that order), everything else keeping its place — what
-    /// libssh did with the types already in known_hosts.
+    /// The same lists with the host-key algorithms for the pinned `keyTypes`
+    /// moved to the front IN THIS LIST'S OWN ORDER (strongest first), the rest
+    /// keeping their place — OpenSSH's order_hostkeyalgs. Not known_hosts
+    /// file order: a host pinned with a stale RSA line ABOVE its current
+    /// ECDSA line then asked for RSA first, got the new RSA key, and read
+    /// HOST KEY CHANGED where `ssh` (asking for ECDSA) matched — a Huawei AC,
+    /// 2026-10-21.
     public func preferringHostKeyTypes(_ keyTypes: [String]) -> AlgorithmPreferences {
-        var front: [HostKeyAlgorithm] = []
-        for type in keyTypes {
-            front += hostKeys.filter { $0.keyType == type && !front.contains($0) }
-        }
+        let front = hostKeys.filter { keyTypes.contains($0.keyType) }
         return AlgorithmPreferences(kex: kex, hostKeys: front + hostKeys.filter { !front.contains($0) },
                                     ciphers: ciphers, macs: macs)
     }

@@ -79,7 +79,7 @@ struct BroadcastSheet: View {
                         )) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(tab.title)
-                                Text(tab.status ?? "")
+                                Text(StatusInfoDisplay.text(tab.status) ?? "")
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -122,18 +122,22 @@ struct BroadcastSheet: View {
             let targets = ticked
             let tabs = candidates
             let model = model
-            variablesRequest = SnippetVariablesRequest(title: "Broadcast", template: line) { filled in
+            variablesRequest = SnippetVariablesRequest(title: String(localized: "Broadcast"), template: line) { filled in
                 let sends = BroadcastPlan.sends(text: filled, to: targets, among: tabs)
                 guard !sends.isEmpty, let confirmed = Self.confirmDangerous(filled, to: sends.map(\.id), model: model) else { return }
                 let count = model.broadcast(sends, confirmed: confirmed)
-                report("Sent to \(count) tab\(count == 1 ? "" : "s")")
+                report(Self.sentReport(count))
             }
             return
         }
         let sends = plan
         guard let confirmed = Self.confirmDangerous(line, to: sends.map(\.id), model: model) else { return }
         let count = model.broadcast(sends, confirmed: confirmed)
-        report("Sent to \(count) tab\(count == 1 ? "" : "s")")
+        report(Self.sentReport(count))
+    }
+
+    private static func sentReport(_ count: Int) -> String {
+        count == 1 ? String(localized: "Sent to 1 tab") : String(localized: "Sent to \(count) tabs")
     }
 
     /// Confirm Dangerous Commands, once for every ticked tab instead of a
@@ -149,7 +153,7 @@ struct BroadcastSheet: View {
               CommandGuard.isDangerous(line, anyOf: vendors.isEmpty ? [.auto] : vendors) else { return false }
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Send to \(tabs) tab\(tabs == 1 ? "" : "s")?"
+        alert.messageText = tabs == 1 ? String(localized: "Send to 1 tab?") : String(localized: "Send to \(tabs) tabs?")
         alert.informativeText = line
         alert.addButton(withTitle: String(localized: "Cancel"))   // default: Return cancels
         alert.addButton(withTitle: String(localized: "Send")).hasDestructiveAction = true

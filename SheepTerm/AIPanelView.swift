@@ -135,6 +135,29 @@ struct AIPanelView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.visible)
             .fixedSize()
+            // The model for THIS provider, choosable right here (and in
+            // Settings ▸ AI; both read the same preference).
+            Menu {
+                ForEach(AICLI.models(for: conversation.provider), id: \.self) { model in
+                    Button {
+                        ai.setModel(model, for: conversation.provider)
+                    } label: {
+                        if ai.model(for: conversation.provider) == model {
+                            Label(AICLI.modelTitle(model, for: conversation.provider), systemImage: "checkmark")
+                        } else {
+                            Text(AICLI.modelTitle(model, for: conversation.provider))
+                        }
+                    }
+                }
+            } label: {
+                Text(AICLI.modelTitle(ai.model(for: conversation.provider), for: conversation.provider))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.dimText)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
+            .accessibilityLabel("Model")
             Spacer()
             Button {
                 ai.newChat(for: session)
@@ -217,6 +240,9 @@ private struct AIMessageView: View, Equatable {
                 ForEach(message.attachments) { attachment in
                     AIAttachmentChip(attachment: attachment, onRemove: nil)
                 }
+                ForEach(message.images) { image in
+                    AIImageChip(image: image, onRemove: nil)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -243,7 +269,7 @@ private struct AIMessageView: View, Equatable {
                     ProgressView().controlSize(.small)
                 }
                 if let failure = message.failure {
-                    Text(failure)
+                    Text(AIFailureText.localized(failure, provider: message.provider))
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.destructive)
                         .textSelection(.enabled)
@@ -259,6 +285,67 @@ private struct AIMessageView: View, Equatable {
         }
     }
 
+}
+
+/// The panel's failure lines, account reasons and chip summaries come from
+/// code shared with the Windows build (no String Catalog there) as fixed
+/// English that the harness compares; they are translated here, where the Mac
+/// shows them. Anything else — the CLI's own error text — is shown as it came.
+enum AIFailureText {
+    static func localized(_ failure: String, provider: AIProvider) -> String {
+        let name = provider.label
+        if failure == AIRunMessages.notInstalled(provider) {
+            return String(localized: "\(name) isn't installed — Settings ▸ AI ▸ Install")
+        }
+        if failure == AIRunMessages.notSignedIn(provider) {
+            return String(localized: "\(name) isn't signed in — Settings ▸ AI ▸ Sign In")
+        }
+        if failure == AIRunMessages.apiKey(provider) {
+            return String(localized: "\(name) is signed in with an API key — Settings ▸ AI ▸ Sign In with your account")
+        }
+        let prefix = "\(name): "
+        if failure.hasPrefix(prefix), let detail = detail(String(failure.dropFirst(prefix.count)), name: name) {
+            return String(localized: "\(name): \(detail)")
+        }
+        return detail(failure, name: name) ?? failure
+    }
+
+    private static func detail(_ text: String, name: String) -> String? {
+        switch text {
+        case "usage limit reached — try again later": return String(localized: "usage limit reached — try again later")
+        case "couldn't prepare the run": return String(localized: "couldn't prepare the run")
+        case "Claude started with tools enabled — stopped. Update Claude Code and try again.":
+            return String(localized: "Claude started with tools enabled — stopped. Update Claude Code and try again.")
+        case "Claude started with MCP servers — stopped.": return String(localized: "Claude started with MCP servers — stopped.")
+        case "Claude is using an API key, not your Claude account — Settings ▸ AI ▸ Sign In.":
+            return String(localized: "Claude is using an API key, not your Claude account — Settings ▸ AI ▸ Sign In.")
+        case "\(name) returned an error.": return String(localized: "\(name) returned an error.")
+        case "\(name) reported an error.": return String(localized: "\(name) reported an error.")
+        default:
+            let exited = "exited with status "
+            if text.hasPrefix(exited), let status = Int(text.dropFirst(exited.count)) {
+                return String(localized: "exited with status \(status)")
+            }
+            return nil
+        }
+    }
+
+    /// `AIAccountStatus.unknown`'s reason, shown in Settings ▸ AI.
+    static func unknownReason(_ why: String) -> String {
+        switch why {
+        case "didn't answer": return String(localized: "didn't answer")
+        case "sign in if needed": return String(localized: "sign in if needed")
+        default: return why
+        }
+    }
+
+    /// `AIAttachment.summary` ("N lines · K secrets removed"), in words.
+    static func summary(of attachment: AIAttachment) -> String {
+        let lines = attachment.lineCount == 1 ? String(localized: "1 line") : String(localized: "\(attachment.lineCount) lines")
+        let secrets = attachment.removed == 1 ? String(localized: "1 secret removed")
+            : String(localized: "\(attachment.removed) secrets removed")
+        return "\(lines) · \(secrets)"
+    }
 }
 
 /// Parsed answers, kept per (message id, text length): a streaming answer is
@@ -344,7 +431,7 @@ private struct AICodeBlock: View {
         }
     }
 
-    private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+    private func iconButton(_ symbol: String, help: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 10.5))
@@ -377,7 +464,7 @@ struct AIAttachmentChip: View {
                     .frame(width: 10)
                 Image(systemName: "text.alignleft")
                     .font(.system(size: 10))
-                Text(attachment.summary)
+                Text(AIFailureText.summary(of: attachment))
                     .font(.system(size: 11))
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -415,6 +502,53 @@ struct AIAttachmentChip: View {
     }
 }
 
+/// A pasted image: a small preview, its size. In the composer it can be
+/// removed; under a sent message it is just a record.
+struct AIImageChip: View {
+    let image: AIImageAttachment
+    let onRemove: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Group {
+                if let nsImage = NSImage(data: image.pngData) {
+                    Image(nsImage: nsImage).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.dimText)
+                }
+            }
+            .frame(width: 30, height: 30)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Image")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.tabText.opacity(0.9))
+                Text(image.summary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.dimText)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if let onRemove {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.dimText)
+                .accessibilityLabel("Remove image")
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background { ControlFill(zone: .sidebar, cornerRadius: 6) }
+    }
+}
+
 // MARK: - Composer
 
 private struct AIComposer: View {
@@ -428,6 +562,11 @@ private struct AIComposer: View {
             ForEach(conversation.pending) { attachment in
                 AIAttachmentChip(attachment: attachment) {
                     ai.removeAttachment(attachment.id, from: session)
+                }
+            }
+            ForEach(conversation.pendingImages) { image in
+                AIImageChip(image: image) {
+                    ai.removeImage(image.id, from: session)
                 }
             }
             if let notice = conversation.notice {
@@ -448,13 +587,15 @@ private struct AIComposer: View {
                     AIComposerTextView(
                         text: Binding(get: { conversation.draft }, set: { ai.setDraft($0, for: session) }),
                         height: $height,
-                        onSend: { ai.send(for: session) })
+                        onSend: { ai.send(for: session) },
+                        onImage: { ai.attachImage($0, for: session) })
                         .frame(height: min(max(height, 18), 120))
                         .id(session)
                 }
                 HStack(spacing: 2) {
                     iconButton("selection.pin.in.out", help: "Attach Selection") { ai.attachSelection(for: session) }
                     iconButton("text.append", help: "Attach New Output") { ai.attachTail(for: session) }
+                    iconButton("camera.viewfinder", help: "Capture Terminal") { ai.captureTerminal(for: session) }
                     Spacer()
                     if conversation.running {
                         iconButton("stop.circle.fill", help: "Stop", size: 17, tint: Theme.tabText) { ai.stop(for: session) }
@@ -477,7 +618,7 @@ private struct AIComposer: View {
         .padding(.top, 4)
     }
 
-    private func iconButton(_ symbol: String, help: String, size: CGFloat = 12.5, tint: Color? = nil,
+    private func iconButton(_ symbol: String, help: LocalizedStringKey, size: CGFloat = 12.5, tint: Color? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -489,10 +630,13 @@ private struct AIComposer: View {
 }
 
 /// Multi-line field: Return sends, ⇧Return (or ⌥Return) is a new line.
+/// ⌘V with an IMAGE on the clipboard pastes the image into the chat instead
+/// of text (an attachment chip appears above the field).
 private struct AIComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let onSend: () -> Void
+    let onImage: (Data) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -502,7 +646,8 @@ private struct AIComposerTextView: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
-        let textView = NSTextView()
+        let textView = AIPasteTextView()
+        textView.onImagePaste = onImage
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
@@ -528,6 +673,7 @@ private struct AIComposerTextView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
+        (textView as? AIPasteTextView)?.onImagePaste = onImage
         if textView.string != text {
             textView.string = text
             context.coordinator.measure()
@@ -566,5 +712,53 @@ private struct AIComposerTextView: NSViewRepresentable {
             parent.onSend()
             return true
         }
+    }
+}
+
+/// The composer's field. An ordinary ⌘V is untouched (super's paste); when the
+/// clipboard holds an image — raw PNG/TIFF data or a copied image file — the
+/// PNG bytes go to `onImagePaste` and nothing is inserted into the text.
+final class AIPasteTextView: NSTextView {
+    var onImagePaste: ((Data) -> Void)?
+
+    override func paste(_ sender: Any?) {
+        if let png = Self.clipboardPNG() {
+            onImagePaste?(png)
+            return
+        }
+        super.paste(sender)
+    }
+
+    /// PNG bytes for an image on the general pasteboard, or nil (text paste).
+    static func clipboardPNG() -> Data? {
+        let pasteboard = NSPasteboard.general
+        // A copied image FILE (Finder ⌘C, a screenshot on disk).
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self],
+                                             options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+            for url in urls where NSImage(contentsOf: url) != nil {
+                if let data = try? Data(contentsOf: url), let png = pngData(from: data) { return png }
+            }
+        }
+        // Raw image data (⌘⇧⌃4 screenshots, Preview copies).
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            guard let data = pasteboard.data(forType: type) else { continue }
+            if let png = pngData(from: data) { return png }
+        }
+        return nil
+    }
+
+    static func pngData(from data: Data) -> Data? { AIImagePNG.from(data) }
+}
+
+/// PNG bytes for image data in any NSImage-readable format (PNG passes
+/// through, TIFF/JPEG/HEIC/others are re-encoded). Paste uses it.
+enum AIImagePNG {
+    static func from(_ data: Data) -> Data? {
+        if let rep = NSBitmapImageRep(data: data), let png = rep.representation(using: .png, properties: [:]) {
+            return png
+        }
+        guard let image = NSImage(data: data), let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 }

@@ -75,7 +75,7 @@ struct LogSearchSheet: View {
             emptyText(problem, warn: true)
         } else if let outcome {
             if outcome.results.isEmpty {
-                emptyText(text.isEmpty ? "Type to search." : "No log line matches “\(text)”.")
+                emptyText(text.isEmpty ? String(localized: "Type to search.") : String(localized: "No log line matches “\(text)”."))
             } else {
                 List(selection: $selection) {
                     ForEach(outcome.results) { file in
@@ -127,9 +127,11 @@ struct LogSearchSheet: View {
     }
 
     private func statusText(_ o: LogSearch.Outcome) -> String {
-        var parts = ["\(o.total) hit\(o.total == 1 ? "" : "s") in \(o.results.count) of \(o.filesSearched) log\(o.filesSearched == 1 ? "" : "s")"]
-        if o.truncated { parts.append("stopped at \(LogSearch.maxHits) — narrow the search") }
-        if o.unreadable > 0 { parts.append("\(o.unreadable) unreadable") }
+        let hits = o.total == 1 ? String(localized: "1 hit") : String(localized: "\(o.total) hits")
+        var parts = [o.filesSearched == 1 ? String(localized: "\(hits) in \(o.results.count) of 1 log")
+                                          : String(localized: "\(hits) in \(o.results.count) of \(o.filesSearched) logs")]
+        if o.truncated { parts.append(String(localized: "stopped at \(LogSearch.maxHits) — narrow the search")) }
+        if o.unreadable > 0 { parts.append(String(localized: "\(o.unreadable) unreadable")) }
         return parts.joined(separator: " · ")
     }
 
@@ -199,7 +201,7 @@ struct LogSearchSheet: View {
                 case .failure(let error):
                     outcome = nil
                     if case LogSearch.Failure.badRegex(let why) = error {
-                        problem = "That is not a valid regular expression: \(why)"
+                        problem = String(localized: "That is not a valid regular expression: \(why)")
                     } else {
                         problem = "\(error)"
                     }

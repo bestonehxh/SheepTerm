@@ -41,7 +41,7 @@ private struct SignInRow: View {
 private extension Error {
     /// Short, in words; never the raw Swift type.
     var shareMessage: String {
-        if let sync = self as? SyncBackendError { return sync.errorDescription ?? "Google Drive failed." }
+        if let sync = self as? SyncBackendError { return sync.errorDescription ?? String(localized: "Google Drive failed.") }
         return (self as? LocalizedError)?.errorDescription ?? localizedDescription
     }
 }
@@ -105,7 +105,7 @@ struct ShareLinkSheet: View {
 
     @ViewBuilder private var form: some View {
         if !links.isSignedIn {
-            SignInRow(text: "Links are shared from your Google account.")
+            SignInRow(text: String(localized: "Links are shared from your Google account."))
         }
         Form {
             TextField("Recipients", text: $recipients, prompt: Text("name@gmail.com, other@gmail.com"))
@@ -113,8 +113,9 @@ struct ShareLinkSheet: View {
             Toggle("Include credentials", isOn: $includeCredentials)
                 .disabled(logins == 0)
                 .help(logins == 0
-                      ? "None of the hosts in this group has a saved credential."
-                      : "Sends \(logins) saved login\(logins == 1 ? "" : "s") (username and password) with the group.")
+                      ? String(localized: "None of the hosts in this group has a saved credential.")
+                      : logins == 1 ? String(localized: "Sends 1 saved login (username and password) with the group.")
+                      : String(localized: "Sends \(logins) saved logins (username and password) with the group."))
             RevealableSecureField(title: "Share passphrase", text: $passphrase)
                 .help("At least \(ShareService.minimumPassphraseLength) characters. The link opens nothing without it. Tell the recipients by another route (phone, LINE) \u{2014} never together with the link.")
             RevealableSecureField(title: "Confirm passphrase", text: $confirmation)
@@ -129,7 +130,11 @@ struct ShareLinkSheet: View {
         .textFieldStyle(.roundedBorder)
         .onSubmit { create() }
         if let note = group.flatMap({ ShareLinkPlan.jumpHostNote(ShareLinkPlan.jumpHostCount($0)) }) {
-            Text(note).font(.system(size: 11)).foregroundStyle(.secondary)
+            // The note is shared with Windows and compared by the harness; said here in words.
+            let count = group.map { ShareLinkPlan.jumpHostCount($0) } ?? 0
+            Text(count == 1 ? String(localized: "1 host uses a jump host — it is not shared.")
+                            : String(localized: "\(count) hosts use a jump host — it is not shared."))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
         }
         if let error {
             Text(error).font(.system(size: 11)).foregroundStyle(Theme.destructive).fixedSize(horizontal: false, vertical: true)
@@ -145,7 +150,7 @@ struct ShareLinkSheet: View {
 
     private var working: some View {
         VStack(alignment: .leading, spacing: 14) {
-            WorkingRow(text: engine.isAuthorizing ? "Allow SheepTerm in your browser\u{2026}" : "Creating the link\u{2026}",
+            WorkingRow(text: engine.isAuthorizing ? String(localized: "Allow SheepTerm in your browser\u{2026}") : String(localized: "Creating the link\u{2026}"),
                        cancel: engine.isAuthorizing ? { engine.cancelSignIn() } : nil)
         }
     }
@@ -174,8 +179,8 @@ struct ShareLinkSheet: View {
     }
 
     static func expiryText(_ date: Date?) -> String {
-        guard let date else { return "never expires" }
-        return "expires \(date.formatted(date: .abbreviated, time: .shortened))"
+        guard let date else { return String(localized: "never expires") }
+        return String(localized: "expires \(date.formatted(date: .abbreviated, time: .shortened))")
     }
 
     private func close() {
@@ -246,7 +251,7 @@ struct ImportLinkSheet: View {
 
     @ViewBuilder private var enter: some View {
         if !links.isSignedIn {
-            SignInRow(text: "Sign in with the Google account the link was made for.")
+            SignInRow(text: String(localized: "Sign in with the Google account the link was made for."))
         }
         TextField("Link", text: $text, prompt: Text("Paste a share link"))
             .textFieldStyle(.roundedBorder)
@@ -272,7 +277,8 @@ struct ImportLinkSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             // Counted from the decoded group, not the envelope (the envelope is only the sender's claim).
             Text(name).font(.system(size: 14, weight: .semibold))
-            Text("\(hostCount) host\(hostCount == 1 ? "" : "s") \u{00B7} credentials \(content.credentials == nil ? "not included" : "included")")
+            Text((hostCount == 1 ? String(localized: "1 host") : String(localized: "\(hostCount) hosts")) + " \u{00B7} "
+                 + (content.credentials == nil ? String(localized: "credentials not included") : String(localized: "credentials included")))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             Text("From \(content.sender)").font(.system(size: 12)).foregroundStyle(.secondary)
         }
@@ -289,8 +295,15 @@ struct ImportLinkSheet: View {
         }
     }
 
+    private static func importedText(_ done: ShareLinks.Imported) -> String {
+        let hosts = done.hostCount == 1 ? String(localized: "1 host") : String(localized: "\(done.hostCount) hosts")
+        guard done.loginCount > 0 else { return String(localized: "Imported “\(done.name)” — \(hosts).") }
+        let logins = done.loginCount == 1 ? String(localized: "1 credential") : String(localized: "\(done.loginCount) credentials")
+        return String(localized: "Imported “\(done.name)” — \(hosts), \(logins).")
+    }
+
     @ViewBuilder private func importedView(_ done: ShareLinks.Imported) -> some View {
-        Text("Imported \u{201C}\(done.name)\u{201D} \u{2014} \(done.hostCount) host\(done.hostCount == 1 ? "" : "s")\(done.loginCount > 0 ? ", \(done.loginCount) credential\(done.loginCount == 1 ? "" : "s")" : "").")
+        Text(Self.importedText(done))
             .font(.system(size: 12))
         HStack {
             Spacer()
@@ -306,7 +319,7 @@ struct ImportLinkSheet: View {
     private func open() {
         guard let link = parsed, links.isSignedIn, !passphrase.isEmpty else { return }
         error = nil
-        stage = .working("Opening the link\u{2026}")
+        stage = .working(String(localized: "Opening the link\u{2026}"))
         let secret = passphrase
         task = Task {
             do {
@@ -353,7 +366,7 @@ struct SharedLinksSheet: View {
                                 Text(record.groupName)
                                 Text(record.recipients.joined(separator: ", "))
                                     .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
-                                Text("\(record.hostCount) host\(record.hostCount == 1 ? "" : "s")\(record.includesCredentials ? " \u{00B7} with credentials" : "") \u{00B7} \(ShareLinkSheet.expiryText(record.expires))")
+                                Text(Self.summary(of: record))
                                     .font(.system(size: 10)).foregroundStyle(record.isExpired(at: Date()) ? Theme.warn : .secondary)
                             }
                             Spacer()
@@ -378,7 +391,7 @@ struct SharedLinksSheet: View {
                 Text(error).font(.system(size: 11)).foregroundStyle(Theme.destructive).fixedSize(horizontal: false, vertical: true)
             }
             if busy {
-                WorkingRow(text: engine.isAuthorizing ? "Allow SheepTerm in your browser\u{2026}" : "Revoking\u{2026}",
+                WorkingRow(text: engine.isAuthorizing ? String(localized: "Allow SheepTerm in your browser\u{2026}") : String(localized: "Revoking\u{2026}"),
                            cancel: engine.isAuthorizing ? { engine.cancelSignIn() } : nil)
             }
             HStack {
@@ -393,13 +406,21 @@ struct SharedLinksSheet: View {
         .onAppear { links.refresh() }
     }
 
+    /// "3 hosts · with credentials · expires …" under a record.
+    private static func summary(of record: ShareRecord) -> String {
+        var parts = [record.hostCount == 1 ? String(localized: "1 host") : String(localized: "\(record.hostCount) hosts")]
+        if record.includesCredentials { parts.append(String(localized: "with credentials")) }
+        parts.append(ShareLinkSheet.expiryText(record.expires))
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
     private func confirmRevoke(_ record: ShareRecord) {
         // Deferred a turn, like every sheet-side alert.
         DispatchQueue.main.async {
             let alert = SheepAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Revoke the link to \u{201C}\(record.groupName)\u{201D}?"
-            alert.informativeText = "The recipients lose access right away. Hosts and credentials they have already imported stay on their Macs \u{2014} revoking cannot take those back."
+            alert.messageText = String(localized: "Revoke the link to \u{201C}\(record.groupName)\u{201D}?")
+            alert.informativeText = String(localized: "The recipients lose access right away. Hosts and credentials they have already imported stay on their Macs \u{2014} revoking cannot take those back.")
             let revoke = alert.addButton(withTitle: String(localized: "Revoke"))
             let cancel = alert.addButton(withTitle: String(localized: "Cancel"))
             revoke.hasDestructiveAction = true

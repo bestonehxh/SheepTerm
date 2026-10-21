@@ -25,11 +25,12 @@ struct StatusBarView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // The connection-state sheep and the highlight vendor control
-            // always show for a remote tab; only the session/cipher/device-IP/
-            // user TEXT is gated by statusShowSession (hidden by default).
+            // The connection-state sheep (statusShowSheep) and the highlight
+            // vendor control sit at the left edge for a remote tab, ahead of
+            // the session/cipher/device-IP/user TEXT (statusShowSession), so
+            // turning the text on never pushes them away from the edge.
             if let tab = model.selectedTab {
-                SessionStatusText(tab: tab, showText: model.statusShowSession) {
+                SessionStatusText(tab: tab, showText: model.statusShowSession, showSheep: model.statusShowSheep) {
                     model.setHighlightVendorCurrent($0)
                 }
             } else if model.statusShowSession {
@@ -171,23 +172,68 @@ struct SleepingSheepView: View {
     }
 }
 
+/// `statusInfo` is a data channel — the app keys on its prefixes
+/// ("disconnected", "ssh2 ·", "serial ·", "· LEGACY") — so it stays English
+/// and only its words are translated here, where it is shown. Technical lines
+/// (cipher, baud, address) pass through as they are.
+enum StatusInfoDisplay {
+    static func text(_ info: String?) -> String? {
+        guard let info else { return nil }
+        if info == "disconnected" { return String(localized: "disconnected") }
+        if let rest = info.dropPrefix("disconnected — ") {
+            return String(localized: "disconnected — \(reason(rest))")
+        }
+        if let rest = info.dropPrefix("failed — ") {
+            return String(localized: "failed — \(reason(rest))")
+        }
+        if info == "new tab" { return String(localized: "new tab") }
+        if info == "cancelled — certificate not trusted" { return String(localized: "cancelled — certificate not trusted") }
+        if let server = info.dropPrefix("certificate — ") { return String(localized: "certificate — \(server)") }
+        if info.hasSuffix("…"), let rest = info.dropPrefix("loading ") {
+            return String(localized: "loading \(String(rest.dropLast()))…")
+        }
+        return info
+    }
+
+    private static func reason(_ reason: String) -> String {
+        switch reason {
+        case "cancelled": return String(localized: "cancelled")
+        case "host key refused": return String(localized: "host key refused")
+        case "session ended": return String(localized: "session ended")
+        case "jump host missing": return String(localized: "jump host missing")
+        case "auto-reconnect gave up": return String(localized: "auto-reconnect gave up")
+        case "auto-reconnect limit reached": return String(localized: "auto-reconnect limit reached")
+        case "not an http(s) address": return String(localized: "not an http(s) address")
+        case "the page stopped; reload to try again": return String(localized: "the page stopped; reload to try again")
+        default: return reason // e.g. a localizedDescription, already in the user's language
+        }
+    }
+}
+
+private extension String {
+    func dropPrefix(_ prefix: String) -> String? {
+        hasPrefix(prefix) ? String(dropFirst(prefix.count)) : nil
+    }
+}
+
 struct SessionStatusText: View {
     @ObservedObject var tab: SessionTab
     /// Whether the session/cipher/device-IP/username line is shown. The
     /// remote controls (state sheep + vendor picker) show regardless.
     var showText: Bool = true
+    var showSheep: Bool = true
     var onVendorChange: (Vendor) -> Void = { _ in }
 
     private var text: String {
         switch tab.content {
         case .local:
-            return "local · \((LocalTerminalController.userShell() as NSString).lastPathComponent)"
+            return String(localized: "local · \((LocalTerminalController.userShell() as NSString).lastPathComponent)")
         case .ssh(let controller):
-            return tab.statusInfo ?? "connecting to \(controller.host.address)…"
+            return StatusInfoDisplay.text(tab.statusInfo) ?? String(localized: "connecting to \(controller.host.address)…")
         case .serial(let controller):
-            return tab.statusInfo ?? "opening \(controller.host.address)…"
+            return StatusInfoDisplay.text(tab.statusInfo) ?? String(localized: "opening \(controller.host.address)…")
         case .web(let controller):
-            return tab.statusInfo ?? "loading \(WebAddress.displayHost(of: controller.host.address))…"
+            return StatusInfoDisplay.text(tab.statusInfo) ?? String(localized: "loading \(WebAddress.displayHost(of: controller.host.address))…")
         }
     }
 
@@ -219,20 +265,15 @@ struct SessionStatusText: View {
 
     private var connectionStateText: String {
         switch connectionState {
-        case .connecting: return "Connecting…"
-        case .connected: return "Connected"
-        case .closed: return "Disconnected"
+        case .connecting: return String(localized: "Connecting…")
+        case .connected: return String(localized: "Connected")
+        case .closed: return String(localized: "Disconnected")
         }
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            if showText {
-                Text(text)
-                    .foregroundStyle(isLegacy ? Theme.warn : Theme.dimText)
-                    .lineLimit(1)
-            }
-            if isRemote {
+            if isRemote, showSheep {
                 Button {
                     tab.highlightEnabled.toggle() // didSet records the new default
                 } label: {
@@ -252,13 +293,15 @@ struct SessionStatusText: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+            }
+            if isRemote {
                 // The pack this session colours with, and a one-click way to
                 // correct it: a serial console does not announce its vendor,
                 // so the first thing you learn about a box is often that it
                 // is not the one you expected.
                 Menu {
                     ForEach(Vendor.allCases) { family in
-                        Toggle(family.label, isOn: Binding(
+                        Toggle(family.localizedLabel, isOn: Binding(
                             get: { tab.highlightVendor == family },
                             set: { _ in onVendorChange(family) }
                         ))
@@ -272,6 +315,11 @@ struct SessionStatusText: View {
                 .fixedSize()
                 .foregroundStyle(Theme.dimText)
                 .opacity(tab.highlightEnabled ? 1 : 0.4)
+            }
+            if showText {
+                Text(text)
+                    .foregroundStyle(isLegacy ? Theme.warn : Theme.dimText)
+                    .lineLimit(1)
             }
         }
     }

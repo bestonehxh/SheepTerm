@@ -275,10 +275,16 @@ nonisolated final class AIProcessRun: @unchecked Sendable {
         DispatchQueue.global().async { [self] in
             var claude = ClaudeStreamParser()
             var codex = CodexStreamParser()
+            var gemini = GeminiStreamParser()
             var pending = Data()
             func feed(_ lineData: Data) {
                 let line = String(decoding: lineData, as: UTF8.self)
-                let events = provider == .claude ? claude.consume(line) : codex.consume(line)
+                let events: [AIStreamEvent]
+                switch provider {
+                case .claude: events = claude.consume(line)
+                case .chatgpt: events = codex.consume(line)
+                case .gemini: events = gemini.consume(line)
+                }
                 for event in events { deliver(event) }
             }
             Self.pump(stdoutFD, wake: wakeRead) { chunk in
@@ -460,6 +466,11 @@ nonisolated struct AIRunPlanner {
     var loginPath: String?
     /// Off only in tests that cannot nest sandboxes.
     var sandboxCodex = true
+    /// The same switch for Gemini's run (its own flag so a test can sandbox
+    /// one and not the other).
+    var sandboxGemini = true
+    /// Tests: where Gemini's own state folder is (defaults to `~/.gemini`).
+    var geminiHomeOverride: String?
 
     static func defaultRoot() -> String {
         (NSTemporaryDirectory() as NSString).appendingPathComponent("SheepTerm-AI-\(getuid())")
@@ -469,7 +480,15 @@ nonisolated struct AIRunPlanner {
     var claudeWorkDir: String { (root as NSString).appendingPathComponent("claude-work") }
     /// Parent of the per-run Codex folders (and the Codex status check's cwd).
     var codexRunsDir: String { (root as NSString).appendingPathComponent("codex-runs") }
+    /// Parent of the per-run Gemini folders (and the Gemini status check's cwd).
+    var geminiRunsDir: String { (root as NSString).appendingPathComponent("gemini-runs") }
     var promptsDir: String { (root as NSString).appendingPathComponent("prompts") }
+    /// Gemini CLI's own state folder (auth + session history); the sandbox
+    /// allows it, exactly as it allows CODEX_HOME for Codex.
+    var geminiHome: String {
+        if let geminiHomeOverride { return geminiHomeOverride }
+        return (NSHomeDirectory() as NSString).appendingPathComponent(".gemini")
+    }
     /// A Codex run folder left behind (the app was killed mid-run) is
     /// removed once it is this old; a live run is never that long.
     static let staleCodexRunAge: TimeInterval = 24 * 3600
@@ -480,7 +499,7 @@ nonisolated struct AIRunPlanner {
         for legacy in ["work", "tmp"] {
             try? FileManager.default.removeItem(atPath: (root as NSString).appendingPathComponent(legacy))
         }
-        for dir in [claudeWorkDir, codexRunsDir, promptsDir] {
+        for dir in [claudeWorkDir, codexRunsDir, geminiRunsDir, promptsDir] {
             try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
         }
@@ -495,33 +514,48 @@ nonisolated struct AIRunPlanner {
     /// A fresh folder for one Codex run (`work` = cwd, `tmp` = TMPDIR);
     /// stale ones from a killed app are swept first.
     func makeCodexRunDir() throws -> String {
+        try makeRunDir(in: codexRunsDir)
+    }
+
+    /// A fresh folder for one Gemini run — same shape and sweep as Codex's.
+    func makeGeminiRunDir() throws -> String {
+        try makeRunDir(in: geminiRunsDir)
+    }
+
+    private func makeRunDir(in parent: String) throws -> String {
         let fm = FileManager.default
         let now = Date()
-        for name in (try? fm.contentsOfDirectory(atPath: codexRunsDir)) ?? [] {
-            let path = (codexRunsDir as NSString).appendingPathComponent(name)
+        for name in (try? fm.contentsOfDirectory(atPath: parent)) ?? [] {
+            let path = (parent as NSString).appendingPathComponent(name)
             if let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
                now.timeIntervalSince(modified) > Self.staleCodexRunAge {
                 try? fm.removeItem(atPath: path)
             }
         }
-        let runDir = (codexRunsDir as NSString).appendingPathComponent(UUID().uuidString)
+        let runDir = (parent as NSString).appendingPathComponent(UUID().uuidString)
         for dir in [runDir, (runDir as NSString).appendingPathComponent("work"), (runDir as NSString).appendingPathComponent("tmp")] {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         }
         return runDir
     }
 
-    func claudeSpec(binary: AIBinary, system: String, prompt: String, model: String, sessionID: String, resume: Bool) throws -> AIProcessRun.Spec {
+    func claudeSpec(binary: AIBinary, system: String, prompt: String, model: String, sessionID: String, resume: Bool,
+                    images: [AIImageAttachment] = []) throws -> AIProcessRun.Spec {
         try prepareDirectories()
         let file = (promptsDir as NSString).appendingPathComponent("system-\(UUID().uuidString).txt")
         guard FileManager.default.createFile(atPath: file, contents: Data(system.utf8), attributes: [.posixPermissions: 0o600]) else {
             throw CocoaError(.fileWriteUnknown)
         }
         let env = AICLI.childEnvironment(baseEnvironment, provider: .claude, path: loginPath, tmpdir: nil)
+        // Images travel as base64 blocks in a stream-json stdin line
+        // (`--input-format stream-json`); a text-only turn is unchanged.
+        let streamJSON = !images.isEmpty
+        let stdin = streamJSON ? AICLI.claudeStreamJSONInput(prompt: prompt, images: images) : prompt
         return AIProcessRun.Spec(
             executable: binary.path,
-            arguments: AICLI.claudeArguments(systemPromptFile: file, model: model, sessionID: sessionID, resume: resume),
-            environment: env, cwd: claudeWorkDir, stdin: Data(prompt.utf8), cleanup: [file])
+            arguments: AICLI.claudeArguments(systemPromptFile: file, model: model, sessionID: sessionID, resume: resume,
+                                             streamJSONInput: streamJSON),
+            environment: env, cwd: claudeWorkDir, stdin: Data(stdin.utf8), cleanup: [file])
     }
 
     var codexHome: String {
@@ -529,12 +563,23 @@ nonisolated struct AIRunPlanner {
         return (NSHomeDirectory() as NSString).appendingPathComponent(".codex")
     }
 
-    func codexSpec(binary: AIBinary, prompt: String, threadID: String?) throws -> AIProcessRun.Spec {
+    func codexSpec(binary: AIBinary, prompt: String, threadID: String?,
+                   model: String = AICLI.defaultChatGPTModel, images: [AIImageAttachment] = []) throws -> AIProcessRun.Spec {
         try prepareDirectories()
         let runDir = try makeCodexRunDir()
         let workDir = (runDir as NSString).appendingPathComponent("work")
         let tmpDir = (runDir as NSString).appendingPathComponent("tmp")
-        let codexArgs = AICLI.codexArguments(threadID: threadID)
+        // Pasted images: written into the run's work folder (a write root, so
+        // the sandbox lets Codex read them) and passed with `--image`.
+        var imagePaths: [String] = []
+        for image in images {
+            let path = (workDir as NSString).appendingPathComponent(image.name)
+            guard FileManager.default.createFile(atPath: path, contents: image.pngData, attributes: [.posixPermissions: 0o600]) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            imagePaths.append(path)
+        }
+        let codexArgs = AICLI.codexArguments(threadID: threadID, model: model, images: imagePaths)
         var readRoots = CodexSandbox.installRoots(forResolved: binary.resolved)
         var path = "/usr/bin:/bin:/usr/sbin:/sbin"
         if let node = AIBinaryLocator.nodeInterpreter(for: binary, path: loginPath ?? baseEnvironment["PATH"]) {
@@ -557,17 +602,77 @@ nonisolated struct AIRunPlanner {
                                  environment: env, cwd: workDir, stdin: Data(prompt.utf8), cleanup: [runDir])
     }
 
+    /// Gemini's run: the same per-run folder shape as Codex (`work` = cwd,
+    /// `tmp` = TMPDIR). The system prompt goes in a 0600 file passed through
+    /// `GEMINI_SYSTEM_MD` (a full replacement, so the vendor's own rules never
+    /// fight ours); pasted images are written into `work` and referenced with
+    /// `@name`. Runs under `sandbox-exec` like Codex: file reads are denied
+    /// outside the system, the binary's install root, `~/.gemini` and the run
+    /// folder — so even if a tool runs it cannot touch the user's files.
+    func geminiSpec(binary: AIBinary, system: String, prompt: String, model: String,
+                    sessionID: String?, resume: Bool, images: [AIImageAttachment] = []) throws -> AIProcessRun.Spec {
+        try prepareDirectories()
+        let runDir = try makeGeminiRunDir()
+        let workDir = (runDir as NSString).appendingPathComponent("work")
+        let tmpDir = (runDir as NSString).appendingPathComponent("tmp")
+        let systemFile = (runDir as NSString).appendingPathComponent("system.md")
+        guard FileManager.default.createFile(atPath: systemFile, contents: Data(system.utf8), attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        for image in images {
+            let path = (workDir as NSString).appendingPathComponent(image.name)
+            guard FileManager.default.createFile(atPath: path, contents: image.pngData, attributes: [.posixPermissions: 0o600]) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+        let geminiArgs = AICLI.geminiArguments(model: model, sessionID: sessionID, resume: resume)
+        var readRoots = CodexSandbox.installRoots(forResolved: binary.resolved)
+        var path = "/usr/bin:/bin:/usr/sbin:/sbin"
+        if let node = AIBinaryLocator.nodeInterpreter(for: binary, path: loginPath ?? baseEnvironment["PATH"]) {
+            readRoots += CodexSandbox.installRoots(forResolved: node)
+            path = (node as NSString).deletingLastPathComponent + ":" + path
+        }
+        path = (binary.path as NSString).deletingLastPathComponent + ":" + path
+        var env = AICLI.childEnvironment(baseEnvironment, provider: .gemini, path: path, tmpdir: tmpDir)
+        env["GEMINI_SYSTEM_MD"] = systemFile
+        // `~/.gemini` (auth and session history) plus the run folder are the
+        // only writable places; it is readable for the same reason.
+        let writeRoots = [geminiHome, runDir].map(canonicalPath)
+        guard sandboxGemini else {
+            return AIProcessRun.Spec(executable: binary.path, arguments: geminiArgs, environment: env, cwd: workDir,
+                                     stdin: Data(prompt.utf8), cleanup: [runDir])
+        }
+        let profile = CodexSandbox.profile(readRoots: (readRoots + [geminiHome]).map(canonicalPath),
+                                           writeRoots: writeRoots)
+        return AIProcessRun.Spec(executable: "/usr/bin/sandbox-exec",
+                                 arguments: ["-p", profile, binary.resolved] + geminiArgs,
+                                 environment: env, cwd: workDir, stdin: Data(prompt.utf8), cleanup: [runDir])
+    }
+
     /// Login status, off the main thread (blocks up to `timeout`).
     func status(_ provider: AIProvider, binary: AIBinary?, timeout: TimeInterval = 20) -> AIAccountStatus {
         guard let binary else { return .notInstalled }
         try? prepareDirectories()
         let env = AICLI.childEnvironment(baseEnvironment, provider: provider, path: loginPath, tmpdir: nil)
-        let args = provider == .claude ? AICLI.claudeStatusArguments : AICLI.codexStatusArguments
-        let cwd = provider == .claude ? claudeWorkDir : codexRunsDir
+        let args: [String]
+        let cwd: String
+        switch provider {
+        case .claude: args = AICLI.claudeStatusArguments; cwd = claudeWorkDir
+        case .chatgpt: args = AICLI.codexStatusArguments; cwd = codexRunsDir
+        case .gemini: args = AICLI.geminiStatusArguments; cwd = geminiRunsDir
+        }
         guard let result = runCapture(binary.path, args, environment: env, cwd: cwd, timeout: timeout) else {
             return .unknown("didn't answer")
         }
-        return provider == .claude ? AICLI.claudeStatus(exitCode: result.status, output: result.output)
-                                   : AICLI.codexStatus(exitCode: result.status, output: result.output + "\n" + result.errors)
+        switch provider {
+        case .claude:
+            return AICLI.claudeStatus(exitCode: result.status, output: result.output)
+        case .chatgpt:
+            return AICLI.codexStatus(exitCode: result.status, output: result.output + "\n" + result.errors)
+        case .gemini:
+            let credentials = (geminiHome as NSString).appendingPathComponent("oauth_creds.json")
+            return AICLI.geminiStatus(exitCode: result.status, output: result.output,
+                                      credentialsExist: FileManager.default.fileExists(atPath: credentials))
+        }
     }
 }

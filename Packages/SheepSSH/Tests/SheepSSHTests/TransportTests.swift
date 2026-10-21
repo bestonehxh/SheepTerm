@@ -64,11 +64,36 @@ final class TransportTests: XCTestCase {
     }
 
     func testPinnedHostKeyTypesGoFirst() {
+        // Pinned types first, in the list's own (strength) order — not the
+        // order the lines appear in known_hosts (OpenSSH's order_hostkeyalgs).
         let p = AlgorithmPreferences.legacy.preferringHostKeyTypes(["ssh-rsa", "ecdsa-sha2-nistp256"])
-        XCTAssertEqual(p.hostKeys, [.rsaSHA512, .rsaSHA256, .rsaSHA1, .ecdsaP256, .ed25519, .ecdsaP521, .ecdsaP384, .dss])
+        XCTAssertEqual(p.hostKeys, [.ecdsaP256, .rsaSHA512, .rsaSHA256, .rsaSHA1, .ed25519, .ecdsaP521, .ecdsaP384, .dss])
+        XCTAssertEqual(AlgorithmPreferences.legacy.preferringHostKeyTypes(["ecdsa-sha2-nistp256", "ssh-rsa"]).hostKeys, p.hostKeys,
+                       "file order does not matter")
+        XCTAssertEqual(AlgorithmPreferences.modern.preferringHostKeyTypes(["ssh-rsa"]).hostKeys,
+                       [.rsaSHA512, .rsaSHA256, .ed25519, .ecdsaP521, .ecdsaP384, .ecdsaP256], "one pinned type still goes first")
         XCTAssertEqual(AlgorithmPreferences.modern.preferringHostKeyTypes([]).hostKeys, AlgorithmPreferences.modern.hostKeys)
         XCTAssertEqual(AlgorithmPreferences.modern.preferringHostKeyTypes(["ssh-dss"]).hostKeys, AlgorithmPreferences.modern.hostKeys,
                        "a type the list does not offer adds nothing")
+    }
+
+    /// The Huawei AC case end to end on the pure parts: known_hosts holds a
+    /// stale RSA line ABOVE the current ECDSA line; the device offers both.
+    /// The negotiated host key must be the ECDSA one, which matches.
+    func testStaleRSALineAboveTheCurrentECDSALineStillMatches() throws {
+        let ecdsa = "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBPh5/RP/jnbRXMEWIQI7LmArF+bv48JcqzHZmCnpotbPWuWjVj7aretJru9KHUcVG60pNLh85JmI2SgHF9rlwng="
+        let staleRSA = "AAAAB3NzaC1yc2EAAAADAQABAAAAgQC6o0CZGUXSxf0J+HOaQpXZ114NzHtrDfx+U2rqRg02nmyAwVGU5TfcXbpJS7UaCITZnYsJO+tgVUsdzysxqCZ//08PYqGG79E6n22lKfCfU5Uz3YYRRrR0x4anU4O3RIZWNSdgGvsRTeNYSb2KtQU2/HsX4TyZ6WBDpPO9QQUO7Q=="
+        let known = KnownHosts(text: "10.200.34.10 ssh-rsa \(staleRSA)\n10.200.34.10 ecdsa-sha2-nistp256 \(ecdsa)\n")
+        XCTAssertEqual(known.skippedLines, 0)
+        XCTAssertEqual(known.pinnedKeyTypes(host: "10.200.34.10", port: 22), ["ssh-rsa", "ecdsa-sha2-nistp256"], "file order: RSA first")
+        let prefs = AlgorithmPreferences.modern.preferringHostKeyTypes(known.pinnedKeyTypes(host: "10.200.34.10", port: 22))
+        let device = KexInit(cookie: Array(0..<16), kexAlgorithms: ["ecdh-sha2-nistp256"],
+                             hostKeyAlgorithms: ["rsa-sha2-256", "rsa-sha2-512", "ecdsa-sha2-nistp256"],
+                             ciphers: ["aes256-ctr"], macs: ["hmac-sha2-256"])
+        let chosen = try Negotiation.negotiate(client: prefs.available, server: device)
+        XCTAssertEqual(chosen.hostKey, .ecdsaP256)
+        let presented = try SSHPublicKey(openSSHLine: "ecdsa-sha2-nistp256 " + ecdsa)
+        XCTAssertEqual(known.lookup(host: "10.200.34.10", port: 22, key: presented), .ok(line: 2))
     }
 
     func testClientKexInitCarriesTheMarkers() throws {

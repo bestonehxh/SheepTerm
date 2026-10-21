@@ -80,6 +80,10 @@ enum AuthPrompt {
                                isCancelled: @escaping @Sendable () -> Bool) -> SSHWorker.HostKeyAnswer {
         // The worker may have been stopped while this waited for main.
         if isCancelled() { return .stopped }
+        // This fallback panel only knows first connections: a key that
+        // conflicts with the pin is never offered here (the tab's card has
+        // the guarded "Trust This Key Too").
+        if question.conflict != nil { return .cancel }
         final class Box { var trusted = false }
         let box = Box()
 
@@ -201,7 +205,7 @@ struct AuthPromptView: View {
                     .multilineTextAlignment(.center)
             }
 
-            PopupTextEntry(placeholder: secure ? "Password" : "Username", secure: secure, text: $text,
+            PopupTextEntry(placeholder: secure ? String(localized: "Password") : String(localized: "Username"), secure: secure, text: $text,
                            focusTrigger: focusTrigger) { completion(answer) }
 
             HStack(spacing: 10) {

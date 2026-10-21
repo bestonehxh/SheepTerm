@@ -77,8 +77,7 @@ final class CredentialStore: ObservableObject {
         } catch {
             // Same rule as hosts.json: unreadable is not empty (see Models).
             if !FileManager.default.fileExists(atPath: fileURL.path) { return ([], nil) }
-            let warning = "\(fileURL.lastPathComponent) could not be read (\(error.localizedDescription)). "
-                + "The credential list starts empty and the file will not be overwritten until you change something."
+            let warning = String(localized: "\(fileURL.lastPathComponent) could not be read (\(error.localizedDescription)). The credential list starts empty and the file will not be overwritten until you change something.")
             NSLog("SheepTerm: %@", warning)
             return ([], warning)
         }
@@ -92,7 +91,7 @@ final class CredentialStore: ObservableObject {
                 NSLog("SheepTerm: could not move corrupt credentials.json aside: %@",
                       error.localizedDescription)
             }
-            let warning = "credentials.json was unreadable; the original was preserved as \(corruptURL.lastPathComponent). Your saved passwords are still in the Keychain, but SheepTerm cannot see which is which until the file is restored or the credentials are re-added."
+            let warning = String(localized: "credentials.json was unreadable; the original was preserved as \(corruptURL.lastPathComponent). Your saved passwords are still in the Keychain, but SheepTerm cannot see which is which until the file is restored or the credentials are re-added.")
             NSLog("SheepTerm: %@ (decode error: %@)", warning, error.localizedDescription)
             return ([], warning)
         }
@@ -176,10 +175,7 @@ final class CredentialStore: ObservableObject {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Credentials not saved")
-        alert.informativeText = """
-            SheepTerm could not write credentials.json (\(error.localizedDescription)). \
-            The change you just made to the credential list is not saved.
-            """
+        alert.informativeText = String(localized: "SheepTerm could not write credentials.json (\(error.localizedDescription)). The change you just made to the credential list is not saved.")
         alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
@@ -238,11 +234,7 @@ final class CredentialStore: ObservableObject {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Password not saved to the Keychain")
-        alert.informativeText = """
-            “\(credential.name)” was saved, but macOS refused to store its \
-            password. SheepTerm will ask for it on every connection until \
-            the credential is added again with the Keychain unlocked.
-            """
+        alert.informativeText = String(localized: "“\(credential.name)” was saved, but macOS refused to store its password. SheepTerm will ask for it on every connection until the credential is added again with the Keychain unlocked.")
         alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }
@@ -325,12 +317,7 @@ final class CredentialStore: ObservableObject {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Password not removed from the Keychain")
-        alert.informativeText = """
-            “\(credential.name)” was removed from SheepTerm, but macOS refused \
-            to delete its stored password. It is still in your login keychain \
-            under “Bestchaan.SheepTerm” and SheepTerm can no longer reach it — \
-            remove it in Keychain Access if you want it gone.
-            """
+        alert.informativeText = String(localized: "“\(credential.name)” was removed from SheepTerm, but macOS refused to delete its stored password. It is still in your login keychain under “Bestchaan.SheepTerm” and SheepTerm can no longer reach it — remove it in Keychain Access if you want it gone.")
         alert.addButton(withTitle: String(localized: "OK"))
         alert.sheepStyled().runModal()
     }

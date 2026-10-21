@@ -256,7 +256,7 @@ nonisolated enum SnippetVariables {
     /// command into two — and run the second without being asked.
     static func error(for value: String) -> String? {
         value.unicodeScalars.contains { $0 == "\n" || $0 == "\r" || $0 == "\u{2028}" || $0 == "\u{2029}" || $0 == "\u{85}" }
-            ? "No line breaks in a value." : nil
+            ? String(localized: "No line breaks in a value.") : nil
     }
 
     /// The text with every placeholder replaced: the typed value, else the

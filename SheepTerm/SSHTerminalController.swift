@@ -460,7 +460,8 @@ final class SSHTerminalController: NSObject {
         // the user's, but the key type is the server's.
         let shown = SSHWorker.HostKeyQuestion(host: SSHWorker.printable(question.host), port: question.port,
                                               keyType: SSHWorker.printable(question.keyType),
-                                              fingerprint: SSHWorker.printable(question.fingerprint))
+                                              fingerprint: SSHWorker.printable(question.fingerprint),
+                                              conflict: question.conflict)
         let prompt = ConnectionPrompt(step: .hostKey(shown), host: subject.host, viaJump: subject.viaJump,
                                       tabHost: subject.tabHost, fallbackText: question.target)
         return PromptBridge<SSHWorker.HostKeyAnswer>.askHostKey(isCancelled: isCancelled) { bridge in
@@ -521,7 +522,7 @@ final class SSHTerminalController: NSObject {
         // shell (card closes) or a failure / another question replaces it —
         // no "Authenticating…" page at the end (the user, 5.0 (3)).
         guard prompt.stage != .password else { pendingProgress = nil; return }
-        let text = prompt.stage == .hostKey ? "Connecting…" : "Authenticating…"
+        let text = prompt.stage == .hostKey ? String(localized: "Connecting…") : String(localized: "Authenticating…")
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.stopped else { return }
             self.terminalHost.showConnectionProgress(text, stage: prompt.stage) { [weak self] in self?.cancelConnecting() }
@@ -549,7 +550,7 @@ final class SSHTerminalController: NSObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.stopped else { return }
             self.terminalHost.beginConnectionCard(self.cardHeader)
-            self.terminalHost.showConnectionProgress("Connecting…", stage: .connect) { [weak self] in self?.cancelConnecting() }
+            self.terminalHost.showConnectionProgress(String(localized: "Connecting…"), stage: .connect) { [weak self] in self?.cancelConnecting() }
         }
         pendingProgress = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.cardGrace, execute: work)
@@ -577,10 +578,10 @@ final class SSHTerminalController: NSObject {
         let target = refusedTarget()
         let title: String
         switch conflict {
-        case .changed?: title = "The host key for \(target) has CHANGED"
-        case .revoked?: title = "The host key for \(target) is revoked"
+        case .changed?: title = String(localized: "The host key for \(target) has CHANGED")
+        case .revoked?: title = String(localized: "The host key for \(target) is revoked")
         case nil:
-            title = message.hasPrefix(SSHWorker.hostKeyRefusedPrefix) ? "Host key refused" : "Connection failed"
+            title = message.hasPrefix(SSHWorker.hostKeyRefusedPrefix) ? String(localized: "Host key refused") : String(localized: "Connection failed")
         }
         let hostKeyProblem = conflict != nil || message.hasPrefix(SSHWorker.hostKeyRefusedPrefix)
         let knownHosts: (() -> Void)? = conflict == nil ? nil : {
@@ -642,8 +643,8 @@ final class SSHTerminalController: NSObject {
             onStatus?("disconnected — jump host missing")
             cancelPendingProgress()
             terminalHost.beginConnectionCard(cardHeader)
-            terminalHost.showConnectionFailure(title: "Jump host missing",
-                                               message: "This host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only). Edit the host and pick another, or None.",
+            terminalHost.showConnectionFailure(title: String(localized: "Jump host missing"),
+                                               message: String(localized: "This host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only). Edit the host and pick another, or None."),
                                                hostKeyProblem: false, onKnownHosts: nil) { [weak self] in
                 self?.terminalHost.closeConnectionCard()
             }
@@ -756,13 +757,13 @@ final class SSHTerminalController: NSObject {
         alert.alertStyle = .warning
         switch conflict {
         case .changed:
-            alert.messageText = "The host key for \(target) has changed"
+            alert.messageText = String(localized: "The host key for \(target) has changed")
             alert.informativeText = String(localized: "The connection was refused — this can mean a man-in-the-middle. ")
-                + "Only if you know the device was reinstalled or its key replaced, remove the old key in Known Hosts and connect again."
+                + String(localized: "Only if you know the device was reinstalled or its key replaced, remove the old key in Known Hosts and connect again.")
         case .revoked:
-            alert.messageText = "The host key for \(target) is revoked"
+            alert.messageText = String(localized: "The host key for \(target) is revoked")
             alert.informativeText = String(localized: "known_hosts marks this key @revoked, so the connection was refused. ")
-                + "Known Hosts shows the entry."
+                + String(localized: "Known Hosts shows the entry.")
         }
         alert.addButton(withTitle: String(localized: "Cancel"))
         alert.addButton(withTitle: String(localized: "Open Known Hosts…"))
