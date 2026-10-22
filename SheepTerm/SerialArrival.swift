@@ -41,6 +41,15 @@ nonisolated enum SerialArrival {
         return Host(name: shortName(path), kind: .serial, address: path, port: ConsoleBaud.baud(for: usb))
     }
 
+    /// What a serial tab's "port is open" status does to Recent (5.0 (39)/(40)). `noted` = the speed its
+    /// recent was written at — carried over a Reconnect, so a speed picked while the tab was down moves
+    /// the row too (the Windows port did this first). nil = leave Recent alone.
+    enum RecentStep: Equatable { case note, move(from: Int) }
+    static func recentStep(didNote: Bool, noted: Int?, baud: Int) -> RecentStep? {
+        if let noted, noted != baud { return .move(from: noted) }
+        return didNote ? nil : .note
+    }
+
     /// The shadow tab now: one device at a time (the newest arrival), gone
     /// when it expires, when the cable is pulled, or when a tab already
     /// holds that device.

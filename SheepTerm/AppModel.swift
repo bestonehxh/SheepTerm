@@ -1530,18 +1530,15 @@ final class AppModel: ObservableObject {
                 // recorded (and must not be written twice).
                 if status.hasPrefix("serial ·") {
                     tab.wasConnected = true
-                    let baud = controller?.host.port ?? host.port
-                    if !tab.didNoteRecent {
-                        tab.didNoteRecent = true
-                        tab.notedSerialBaud = host.port
-                        self?.store.noteRecent(host)
+                    var current = host
+                    current.port = controller?.host.port ?? host.port
+                    switch SerialArrival.recentStep(didNote: tab.didNoteRecent, noted: tab.notedSerialBaud, baud: current.port) {
+                    case .note?: self?.store.noteRecent(current)
+                    case .move(let from)?: self?.store.noteRecent(current, replacingPort: from)
+                    case nil: break
                     }
-                    if let noted = tab.notedSerialBaud, noted != baud {
-                        var moved = host
-                        moved.port = baud
-                        tab.notedSerialBaud = baud
-                        self?.store.noteRecent(moved, replacingPort: noted)
-                    }
+                    tab.didNoteRecent = true
+                    tab.notedSerialBaud = current.port
                     // Same 30 s rule as SSH: a port that opens and dies right
                     // back (half-seated cable, switch rebooting) must not
                     // reset the attempt counter, or the retries never stop.
@@ -1893,6 +1890,8 @@ final class AppModel: ObservableObject {
         var handedLogger: SessionLogger?
         // The tab keeps the name its device's prompt gave it (PromptName).
         let carriedPromptName = tab.promptName
+        // A speed picked while the console was down moves its Recent row on reconnect (5.0 (40)).
+        let carriedNotedBaud = tab.notedSerialBaud
         switch tab.content {
         case .ssh(let controller):
             host = controller.host
@@ -1945,6 +1944,7 @@ final class AppModel: ObservableObject {
             if selectedID == old { selectedID = next }
         }
         if let newTab = tabs.last {
+            newTab.notedSerialBaud = carriedNotedBaud
             newTab.vendorManuallyChosen = oldManual
             // An explicit choice (including an explicit .auto) must keep
             // passive detection OFF on the new controller too.
