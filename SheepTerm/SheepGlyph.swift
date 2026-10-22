@@ -5,38 +5,66 @@
 // A chibi lamb with a dark-brown outline (it has to read at 16 pt on the dark status bar):
 //   * walking (connecting) — side view facing RIGHT, a balanced fleece of equal cloud lobes (three over three, one at
 //     each side) shaded darker underneath, a round head with a wool cap, both ears, open eyes, blush; four stubby legs
-//     whose pairs swing in opposition, and the pose's bob;
+//     whose pairs swing in opposition, and the pose's bob; drawn at the lying sheep's size (`sleepScale`), feet on the
+//     same ground (the owner, 2026-10-22: the standing sheep read bigger);
 //   * asleep (connected) — head on the LEFT resting its chin on the ground, the body a loaf lying FLAT on the ground
 //     (wool lumps only on its back), a tucked hoof, closed eyes; the fleece breathes from the ground up, and three z's
 //     sit on a rising staircase above the head — small, medium, large — appearing one after another, then fading;
 //   * closed — the walking sheep, still and dimmed.
 // Asleep, every colour is `sleepBrightness` darker (it must not outshine the bar).
 // Units are the design canvas, 44 × 32; a painter scales by `scale` (0.5: 22 × 16 pt), puts the canvas `slotX(pose)` pt
-// from the left edge of the `slotWidth(pose)` × 16 slot and vertically centred, moves by the pose's `x` and mirrors the canvas about its centre for a sheep heading LEFT (the pose's `mirrored` is
-// "heading right"). Vertically nothing leaves the canvas, z's included; the walking sheep's rump and ear overhang
-// it by up to 1 pt at the sides, which the 36 pt slot has room for. A window that is not active has a still sheep.
+// from the left edge of the `slotWidth(pose)` × 16 slot and vertically centred, moves by the pose's `x` and mirrors the
+// canvas about its centre for a sheep heading LEFT (the pose's `mirrored` is "heading right"). Nothing leaves the
+// canvas, z's included.
+// A window that is not active has a still sheep.
 import Foundation
 
 public enum SheepGlyph {
     public static let width = 44.0, height = 32.0
     /// Design units → points in the status bar.
     public static let scale = 0.5
-    /// The slot the bar gives the sheep (pt), 12 pt from the bar's left edge on every platform; `slotWidth(pose)` wide.
-    public static let slotWidth = 36.0, slotHeight = 16.0
-    /// Asleep the slot is narrower: the lying sheep ends 22 pt in, and the 7 pt after it are the walking sheep's at rest,
-    /// so the family badge keeps the same gap from the sheep in both poses (the owner, 2026-10-22).
-    public static let sleepingSlotWidth = 29.0
+    /// The slot the bar gives the sheep starts 12 pt from the bar's left edge on every platform — the clock's gap from the
+    /// right edge — and nothing is drawn left of it (the owner, 2026-10-22). Walking (and closed), the slot is the
+    /// drawing plus `walkReach` on each side: at rest the sheep sits in the middle, and the walk's ends touch the slot's
+    /// edges. Asleep, the drawing (its largest z first) starts at the slot's edge and `walkReach` follows it, so the
+    /// family badge keeps the same gap from the sheep as from the walking sheep at rest.
+    public static let slotHeight = 16.0
+    /// How far the walk goes either side of rest (pt): SheepAnimation's (progress - 0.5) * 18.
+    public static let walkReach = 9.0
     public static func slotWidth(_ pose: SheepPose) -> Double {
-        if case .sleeping = pose { return sleepingSlotWidth }
-        return slotWidth
+        let b = bounds(pose), w = (b.right - b.left) * scale
+        if case .sleeping = pose { return w + walkReach }
+        return w + 2 * walkReach
+    }
+    /// Where the canvas's left edge sits (at rest), in pt from the slot's left edge.
+    public static func slotX(_ pose: SheepPose) -> Double {
+        if case .sleeping = pose { return -bounds(pose).left * scale }
+        return walkReach - bounds(pose).left * scale
     }
 
-    /// Where the canvas's left edge sits, in pt from the slot's left edge. The walking (and closed) sheep is centred in
-    /// the slot; the sleeping sheep moves left until its largest z starts exactly at the slot's edge — 12 pt from the
-    /// bar's left edge, the same gap as the clock keeps from the right edge (the owner, 2026-10-22).
-    public static func slotX(_ pose: SheepPose) -> Double {
-        if case .sleeping = pose { let z = zSlots[2]; return -(z.x - z.width / 2) * scale }
-        return (slotWidth - width * scale) / 2
+    /// The drawing's left and right edges in canvas units (outlines included).
+    static func bounds(_ pose: SheepPose) -> (left: Double, right: Double) {
+        if case .sleeping = pose { return asleepBounds }
+        return standingBounds
+    }
+    static let standingBounds = horizontalBounds(standing(swing: 0, bob: 0, alpha: 1))
+    static let asleepBounds = horizontalBounds(lying(breathe: 0) + zs(time: 0, moving: false))
+    static func horizontalBounds(_ shapes: [Shape]) -> (left: Double, right: Double) {
+        var l = Double.infinity, r = -Double.infinity
+        func add(_ a: Double, _ b: Double) { l = min(l, a); r = max(r, b) }
+        for s in shapes {
+            switch s {
+            case .circle(let cx, _, let rad, let p): add(cx - rad - p.strokeWidth / 2, cx + rad + p.strokeWidth / 2)
+            case .ellipse(let cx, _, let rx, let ry, _, let p): let e = max(rx, ry) + p.strokeWidth / 2; add(cx - e, cx + e)
+            case .roundedRect(let x, _, let w, _, _, let p): add(x - p.strokeWidth / 2, x + w + p.strokeWidth / 2)
+            case .leg(let hx, _, let w, let h, let rot, let p):
+                let e = rot == 0 ? w / 2 + p.strokeWidth / 2 : h; add(hx - e, hx + e)
+            case .polyline(let pts, let w, _, _):
+                for x in stride(from: 0, to: pts.count, by: 2).map({ pts[$0] }) { add(x - w / 2, x + w / 2) }
+            case .clipAbove, .endClip: break
+            }
+        }
+        return (l, r)
     }
 
     /// Fill and/or outline of a closed shape.
@@ -121,7 +149,38 @@ public enum SheepGlyph {
 
     // MARK: walking
 
+    /// Where the standing sheep's feet are in its own drawing (the near legs' bottoms).
+    static let standingFeet = (x: 22.0, y: 29.6)
+
+    /// The walking sheep at the lying sheep's size: scaled by `sleepScale` about its feet, which rest on the same ground.
     static func standing(swing: Double, bob: Double, alpha: Double) -> [Shape] {
+        standingDrawing(swing: swing, bob: bob, alpha: alpha).map {
+            placed($0, k: sleepScale, from: standingFeet, to: (x: standingFeet.x, y: canvasGround))
+        }
+    }
+
+    /// `shape` scaled by `k` about `from`, which moves to `to`.
+    static func placed(_ shape: Shape, k: Double, from: (x: Double, y: Double), to: (x: Double, y: Double)) -> Shape {
+        func X(_ x: Double) -> Double { to.x + (x - from.x) * k }
+        func Y(_ y: Double) -> Double { to.y + (y - from.y) * k }
+        func p(_ paint: Paint) -> Paint { Paint(fill: paint.fill, stroke: paint.stroke, strokeWidth: paint.strokeWidth * k, alpha: paint.alpha) }
+        switch shape {
+        case .circle(let cx, let cy, let r, let paint): return .circle(cx: X(cx), cy: Y(cy), r: r * k, paint: p(paint))
+        case .ellipse(let cx, let cy, let rx, let ry, let rot, let paint):
+            return .ellipse(cx: X(cx), cy: Y(cy), rx: rx * k, ry: ry * k, rotation: rot, paint: p(paint))
+        case .roundedRect(let x, let y, let w, let h, let r, let paint):
+            return .roundedRect(x: X(x), y: Y(y), w: w * k, h: h * k, radius: r * k, paint: p(paint))
+        case .leg(let hx, let hy, let w, let h, let rot, let paint):
+            return .leg(hipX: X(hx), hipY: Y(hy), w: w * k, h: h * k, rotation: rot, paint: p(paint))
+        case .polyline(let pts, let width, let rgb, let alpha):
+            let moved = pts.indices.map { $0 % 2 == 0 ? X(pts[$0]) : Y(pts[$0]) }
+            return .polyline(points: moved, width: width * k, rgb: rgb, alpha: alpha)
+        case .clipAbove(let y): return .clipAbove(y: Y(y))
+        case .endClip: return shape
+        }
+    }
+
+    static func standingDrawing(swing: Double, bob: Double, alpha: Double) -> [Shape] {
         let o = Palette.outline
         func p(_ fill: UInt32?, stroke: UInt32? = nil, _ w: Double = 0) -> Paint { Paint(fill: fill, stroke: stroke, strokeWidth: w, alpha: alpha) }
         // The legs first, under the fleece: far pair darker, each pair swinging against the other.
