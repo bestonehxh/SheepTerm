@@ -368,6 +368,7 @@ struct ConnectionCardContent: View {
             SheepLockBadge(symbol: badge?.symbol, danger: badge?.danger ?? false)
                 .frame(width: 64, height: 64)
             titles
+                .frame(minHeight: Self.titlesHeight, alignment: .top)
             if model.webTrack {
                 StageTrack(nodes: StageTrack.webNodes, current: model.stage == .connect ? 0 : 1, failed: isFailure)
             } else {
@@ -475,8 +476,10 @@ struct ConnectionCardContent: View {
                     .foregroundStyle(problem ? Color(nsColor: SheepAlert.destructiveRed) : Color.primary)
                     .multilineTextAlignment(.center)
                 secondary(model.header.subtitle)
-                // A paragraph: its lines start under each other, not centred.
-                secondary(message).lineLimit(4).multilineTextAlignment(.leading).textSelection(.enabled)
+                // A longer message is the content band's (pageBody).
+                if Self.failureMessageFitsTitles(message) {
+                    secondary(message).lineLimit(1).textSelection(.enabled)
+                }
             case .certificate(let question):
                 title(model.header.title)
                 secondary(question.server)
@@ -494,6 +497,28 @@ struct ConnectionCardContent: View {
                 .padding(.top, 2)
             }
         }
+    }
+
+    /// The title block's height on every page — one title line and two
+    /// 12 pt lines, the host-key page's — so a page with fewer lines
+    /// (username, password) keeps the badge, the track and the buttons where
+    /// every other step has them (the user, 2026-10-22).
+    static let titlesHeight: CGFloat = {
+        let probe = NSHostingView(rootView: VStack(spacing: 4) {
+            Text(verbatim: "Ag").font(.system(size: 15, weight: .semibold))
+            Text(verbatim: "Ag").font(.system(size: 12))
+            Text(verbatim: "Ag").font(.system(size: 12)).padding(.top, 2)
+        })
+        return ceil(probe.fittingSize.height)
+    }()
+
+    /// A failure message that fits on one line stays under the address; a
+    /// longer one takes the page's empty content band (four 12 pt lines), so
+    /// the failure page keeps every other page's layout.
+    static func failureMessageFitsTitles(_ message: String) -> Bool {
+        guard !message.contains("\n") else { return false }
+        let width = (message as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width
+        return width <= ConnectionCardView.cardWidth - 2 * 28
     }
 
     private func title(_ text: String) -> some View {
@@ -525,10 +550,20 @@ struct ConnectionCardContent: View {
             }
         case .certificate(let question):
             CertificatePage(model: model, question: question)
-        case .failure(_, _, _, let plan):
+        case .failure(_, let message, _, let plan):
             // Apple's order: the dismiss left of the action; the default
-            // (Try Again, Return) rightmost.
-            CardPage(content: { EmptyView() }, buttons: {
+            // (Try Again, Return) rightmost. The band is never `EmptyView`:
+            // SwiftUI drops an EmptyView with its frame (and the stack's
+            // spacing), and the page came out 78 pt short, re-centred lower
+            // in the card (the user, 2026-10-22).
+            CardPage(content: {
+                if Self.failureMessageFitsTitles(message) {
+                    Color.clear
+                } else {
+                    // A paragraph: its lines start under each other, not centred.
+                    secondary(message).lineLimit(4).multilineTextAlignment(.leading).textSelection(.enabled)
+                }
+            }, buttons: {
                 ForEach(plan.buttons.indices, id: \.self) { index in
                     switch plan.buttons[index] {
                     case .openKnownHosts:

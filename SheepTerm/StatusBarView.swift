@@ -112,7 +112,7 @@ private struct ClockText: View {
 
 /// Tiny sheep pacing back and forth — the "connecting" indicator. (The
 /// sheep picks connectionState: walking = connecting, napping = connected,
-/// faded = closed; the highlight on/off state lives in the button tooltip.)
+/// faded = closed.) Drawn by `SheepGlyphView`, the same sheep on every platform.
 struct WalkingSheepView: View {
     @ObservedObject private var windowKey = MainWindowKeyMonitor.shared
 
@@ -120,8 +120,7 @@ struct WalkingSheepView: View {
         if !windowKey.isKey {
             // Static frame while the window isn't key — no TimelineView
             // ticking at 20 fps in the background.
-            Text("🐑")
-                .font(.system(size: 12))
+            SheepGlyphView(pose: .walking(x: 0, bob: 0, mirrored: false), windowActive: false)
         } else {
             TimelineView(.animation(minimumInterval: 0.05)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
@@ -131,16 +130,13 @@ struct WalkingSheepView: View {
                 let progress = walkingRight ? phase * 2 : (1 - phase) * 2
                 let x = (progress - 0.5) * 18
                 let bob = abs(sin(progress * .pi * 8)) * -1.2
-                Text("🐑")
-                    .font(.system(size: 12))
-                    .scaleEffect(x: walkingRight ? -1 : 1, y: 1)
-                    .offset(x: x, y: bob)
+                SheepGlyphView(pose: .walking(x: x, bob: bob, mirrored: walkingRight), time: time)
             }
         }
     }
 }
 
-/// Connected: the sheep naps with a gently drifting 💤.
+/// Connected: the sheep naps, breathing, with its z's rising one by one.
 struct SleepingSheepView: View {
     @ObservedObject private var windowKey = MainWindowKeyMonitor.shared
 
@@ -148,25 +144,12 @@ struct SleepingSheepView: View {
         if !windowKey.isKey {
             // Static frame while the window isn't key — no TimelineView
             // ticking in the background.
-            HStack(spacing: 1) {
-                Text("🐑")
-                    .font(.system(size: 12))
-                Text("💤")
-                    .font(.system(size: 8))
-                    .opacity(0.7)
-            }
+            SheepGlyphView(pose: .sleeping(zOpacity: 0.7, zOffsetY: 0), windowActive: false)
         } else {
             TimelineView(.animation(minimumInterval: 0.12)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 let pulse = (sin(time * 2.2) + 1) / 2
-                HStack(spacing: 1) {
-                    Text("🐑")
-                        .font(.system(size: 12))
-                    Text("💤")
-                        .font(.system(size: 8))
-                        .opacity(0.35 + 0.65 * pulse)
-                        .offset(y: 2 - 3 * pulse)
-                }
+                SheepGlyphView(pose: .sleeping(zOpacity: 0.35 + 0.65 * pulse, zOffsetY: 2 - 3 * pulse), time: time)
             }
         }
     }
@@ -282,25 +265,19 @@ struct SessionStatusText: View {
     var body: some View {
         HStack(spacing: 8) {
             if isRemote, showSheep {
-                Button {
-                    tab.highlightEnabled.toggle() // didSet records the new default
-                } label: {
-                    Group {
-                        switch connectionState {
-                        case .connecting:
-                            WalkingSheepView()
-                        case .connected:
-                            SleepingSheepView()
-                        case .closed:
-                            Text("🐑")
-                                .font(.system(size: 12))
-                                .opacity(0.25)
-                        }
+                // A picture, not a button (the owner's call, 2026-10-22):
+                // ⇧⌘H and the menu toggle highlighting.
+                Group {
+                    switch connectionState {
+                    case .connecting:
+                        WalkingSheepView()
+                    case .connected:
+                        SleepingSheepView()
+                    case .closed:
+                        SheepGlyphView(pose: .closed)
                     }
-                    .frame(width: 36, height: 16)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .frame(height: 16)          // as wide as SheepGlyph.slotWidth(pose): narrower asleep
             }
             if isRemote {
                 // The pack this session colours with, and a one-click way to

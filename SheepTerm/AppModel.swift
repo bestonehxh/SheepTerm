@@ -36,8 +36,8 @@ final class SessionTab: ObservableObject, Identifiable {
             case .local, .web: return
             }
             // The default for the NEXT tab follows whichever toggle was used
-            // last — ⇧⌘H, the status-bar sheep, or the tab's context menu.
-            // Two of the three used to write it and the third did not.
+            // last — ⇧⌘H or the tab's context menu (the status-bar sheep was
+            // a third until 5.0 (41); once one of them did not write it).
             UserDefaults.standard.set(highlightEnabled, forKey: "highlightDefault")
         }
     }
