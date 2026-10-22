@@ -19,6 +19,10 @@ nonisolated final class SerialWorker: Sendable {
         /// ahead of `pendingWrites`: a break is for a device that is booting,
         /// and the moment matters more than the order against queued text.
         var pendingBreak = false
+        /// A line speed the user picked in the tab (5.0 (39)), not yet taken
+        /// by the loop. Applied on the open port — no close, no reopen.
+        var pendingBaud: Int?
+        var onBaudChanged: (@Sendable (Int) -> Void)?
         /// Write end of the self-pipe; -1 when the loop isn't up.
         var wakeFD: Int32 = -1
         var onData: (@Sendable ([UInt8]) -> Void)?
@@ -79,6 +83,11 @@ nonisolated final class SerialWorker: Sendable {
         get { state.withLock { $0.onClosed } }
         set { state.withLock { $0.onClosed = newValue } }
     }
+    /// The port runs at a new speed (`setBaud` went through). Worker queue.
+    var onBaudChanged: (@Sendable (Int) -> Void)? {
+        get { state.withLock { $0.onBaudChanged } }
+        set { state.withLock { $0.onBaudChanged = newValue } }
+    }
 
     /// `cfsetspeed` takes a `speed_t`, which is UNSIGNED: `speed_t(-1)` is a
     /// Swift trap and not a failed guard, so a `Host.port` of −1 restored from
@@ -108,6 +117,7 @@ nonisolated final class SerialWorker: Sendable {
             state.running = true
             state.pendingWrites.removeAll(keepingCapacity: true)
             state.pendingBreak = false
+            state.pendingBaud = nil
             state.writeOverflowNotified = false
             return true
         }
@@ -209,6 +219,32 @@ nonisolated final class SerialWorker: Sendable {
         }
     }
 
+    /// Change the line speed of the open port (5.0 (39)): the status bar's
+    /// baud menu, for a console that came up at the wrong speed. Taken by the
+    /// loop at the top of its next pass; success is `onStatus` with the new
+    /// line + `onBaudChanged`, a driver refusal an `onNotice`. false = no live
+    /// session, a file transfer owns the line, or not a baud rate.
+    @discardableResult
+    func setBaud(_ baudRate: Int) -> Bool {
+        guard Self.rejection(forBaud: baudRate) == nil else { return false }
+        return state.withLock { state in
+            guard state.running, !state.transferActive else { return false }
+            state.pendingBaud = baudRate
+            if state.wakeFD >= 0 {
+                var byte: UInt8 = 0
+                _ = Darwin.write(state.wakeFD, &byte, 1)
+            }
+            return true
+        }
+    }
+
+    private func takeBaud() -> Int? {
+        state.withLock { state in
+            defer { state.pendingBaud = nil }
+            return state.pendingBaud
+        }
+    }
+
     private var isRunning: Bool {
         state.withLock { $0.running }
     }
@@ -282,6 +318,7 @@ nonisolated final class SerialWorker: Sendable {
                 state.running = false
                 state.pendingWrites.removeAll(keepingCapacity: true)
                 state.pendingBreak = false
+                state.pendingBaud = nil
                 state.runActive = false
                 state.transferActive = false
                 state.cancelTransfer = false
@@ -378,7 +415,29 @@ nonisolated final class SerialWorker: Sendable {
             return
         }
 
-        onStatus?("serial · \((devicePath as NSString).lastPathComponent) · \(baudRate) 8N1")
+        func reportStatus(_ baud: Int) {
+            onStatus?("serial · \((devicePath as NSString).lastPathComponent) · \(baud) 8N1")
+        }
+        reportStatus(baudRate)
+
+        /// A speed picked in the tab: same termios, new speed, on the open
+        /// port. TCSANOW, not TCSADRAIN — the port is at the wrong speed, and
+        /// waiting for its output to drain is waiting on the very thing that
+        /// is wrong (a wedged line would hang the change forever).
+        func applyBaudIfPending() {
+            guard let baud = takeBaud() else { return }
+            var current = termios()
+            guard tcgetattr(fd, &current) == 0,
+                  cfsetspeed(&current, speed_t(baud)) == 0,
+                  tcsetattr(fd, TCSANOW, &current) == 0 else {
+                onNotice?("cannot set \(baud) baud: \(String(cString: strerror(errno)))")
+                return
+            }
+            // The new speed first, then the status line: both hop to main in
+            // order, and the status handler reads the host's port.
+            onBaudChanged?(baud)
+            reportStatus(baud)
+        }
 
         var buffer = [UInt8](repeating: 0, count: 4096)
 
@@ -499,6 +558,9 @@ nonisolated final class SerialWorker: Sendable {
         }
 
         while isRunning {
+            // Ahead of a transfer taken this pass: its first byte goes out
+            // at the speed the user picked before starting it.
+            applyBaudIfPending()
             guard serviceTransfer() else { return }
             // Before the queued text, every pass — see `sendBreak`.
             sendBreakIfPending()
@@ -633,9 +695,10 @@ nonisolated final class SerialWorker: Sendable {
         running: Bool,
         runActive: Bool,
         pendingWriteCount: Int,
-        pendingBreak: Bool
+        pendingBreak: Bool,
+        pendingBaud: Int?
     ) {
-        state.withLock { ($0.running, $0.runActive, $0.pendingWrites.count, $0.pendingBreak) }
+        state.withLock { ($0.running, $0.runActive, $0.pendingWrites.count, $0.pendingBreak, $0.pendingBaud) }
     }
 #endif
 }

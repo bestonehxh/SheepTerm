@@ -30,9 +30,9 @@ struct StatusBarView: View {
             // the session/cipher/device-IP/user TEXT (statusShowSession), so
             // turning the text on never pushes them away from the edge.
             if let tab = model.selectedTab {
-                SessionStatusText(tab: tab, showText: model.statusShowSession, showSheep: model.statusShowSheep) {
-                    model.setHighlightVendorCurrent($0)
-                }
+                SessionStatusText(tab: tab, showText: model.statusShowSession, showSheep: model.statusShowSheep,
+                                  onVendorChange: { model.setHighlightVendorCurrent($0) },
+                                  onBaudChange: { model.setBaud($0, for: tab) })
             } else if model.statusShowSession {
                 Text("no session")
             }
@@ -223,6 +223,14 @@ struct SessionStatusText: View {
     var showText: Bool = true
     var showSheep: Bool = true
     var onVendorChange: (Vendor) -> Void = { _ in }
+    var onBaudChange: (Int) -> Void = { _ in }
+
+    /// A serial tab's line speed (5.0 (39)): read from the controller's host,
+    /// which `onBaudChanged` updates before the new status line arrives.
+    private var serialBaud: Int? {
+        if case .serial(let controller) = tab.content { return controller.host.port }
+        return nil
+    }
 
     private var text: String {
         switch tab.content {
@@ -315,6 +323,27 @@ struct SessionStatusText: View {
                 .fixedSize()
                 .foregroundStyle(Theme.dimText)
                 .opacity(tab.highlightEnabled ? 1 : 0.4)
+            }
+            if let baud = serialBaud {
+                // The console's speed, changed in place: one cable meets a
+                // 9600 Cisco and a 115200 Aruba CX in the same day, and a
+                // console at the wrong speed shows only garbage.
+                Menu {
+                    ForEach(ConsoleBaud.rates.contains(baud) ? ConsoleBaud.rates : (ConsoleBaud.rates + [baud]).sorted(), id: \.self) { rate in
+                        Toggle(String(rate), isOn: Binding(
+                            get: { baud == rate },
+                            set: { _ in onBaudChange(rate) }
+                        ))
+                    }
+                } label: {
+                    Text(String(baud))
+                        .lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(Theme.dimText)
+                .help("Baud rate")
             }
             if showText {
                 Text(text)

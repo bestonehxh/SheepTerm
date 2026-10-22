@@ -222,6 +222,15 @@ final class SerialTerminalController: NSObject {
                 self?.printNotice(message)
             }
         }
+        worker.onBaudChanged = { [weak self] baud in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // Reconnect (manual or automatic) opens `host`: it keeps the
+                // speed that worked. The saved host is not touched.
+                self.host.port = baud
+                self.printNotice("speed set to \(baud) baud")
+            }
+        }
         worker.onStatus = { [weak self] status in
             DispatchQueue.main.async {
                 self?.onStatus?(status)
@@ -247,7 +256,17 @@ final class SerialTerminalController: NSObject {
     }
 
     func start() {
-        printNotice("opening \(host.address) at \(host.port) baud…")
+        // A console that names itself (an Aruba CX USB-C port) says so, and
+        // says when the speed asked for is not the one it runs at.
+        let known = ConsoleBaud.known(SerialWatcher.usbDevice(at: host.address))
+        if let known, known.baud == host.port {
+            printNotice("opening \(host.address) at \(host.port) baud (\(known.label))…")
+        } else {
+            printNotice("opening \(host.address) at \(host.port) baud…")
+            if let known {
+                printNotice("this port is an \(known.label), which runs at \(known.baud) baud — click the speed in the status bar to change it")
+            }
+        }
         if let logger {
             // A handed-over logger's notices belong to THIS session now — the
             // controller that opened it is on its way out.
@@ -289,6 +308,22 @@ final class SerialTerminalController: NSObject {
         if !worker.sendBreak() {
             printNotice(worker.isTransferring ? "a file transfer is running — break not sent"
                                               : "no serial session — break not sent", error: true)
+        }
+    }
+
+    // MARK: - Line speed (5.0 (39))
+
+    /// The status bar's baud menu. A live port changes speed in place
+    /// (`onBaudChanged` confirms it); a closed one keeps the choice for the
+    /// next connect (Reconnect).
+    func setBaud(_ baud: Int) {
+        guard baud != host.port, Host.serialBaudRange.contains(baud) else { return }
+        if worker.setBaud(baud) { return }
+        if worker.isTransferring {
+            printNotice("a file transfer is running — speed not changed", error: true)
+        } else {
+            host.port = baud
+            printNotice("the next connection opens at \(baud) baud")
         }
     }
 

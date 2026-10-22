@@ -3126,6 +3126,18 @@ final class HostStore: ObservableObject {
         saveRecents()
     }
 
+    /// A serial session changed speed in the tab (5.0 (39)): its recent moves
+    /// to the new speed instead of keeping a second row at the old one.
+    func noteRecent(_ host: Host, replacingPort oldPort: Int) {
+        var old = host
+        old.port = oldPort
+        recents.removeAll { $0.sameConnection(as: old) }
+        // Like `updateRecents`: a recents.json merged in later must not bring
+        // the old speed back. Not a user mutation (see `noteRecent`).
+        if old.connectionKey != host.connectionKey { deletedRecentKeys.insert(old.connectionKey) }
+        noteRecent(host)
+    }
+
     func removeRecent(_ host: Host) {
         noteUserMutation()
         // Match by connection key, not id: the caller hands us a host

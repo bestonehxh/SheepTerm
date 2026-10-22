@@ -7,9 +7,6 @@ import Foundation
 /// (IOKit notifications, no polling) and `AppModel` shows the shadow.
 nonisolated enum SerialArrival {
     static let lifetime: TimeInterval = 15
-    /// Baud when nothing better is known: network gear consoles ship 9600 8N1.
-    static let defaultBaud = 9600
-
     /// A cable's callout device, not one of the Mac's own ports.
     static func isCable(_ path: String) -> Bool {
         let name = (path as NSString).lastPathComponent
@@ -32,13 +29,16 @@ nonisolated enum SerialArrival {
         return name.hasPrefix("cu.") ? String(name.dropFirst(3)) : name
     }
 
-    /// What the shadow opens: the saved serial host on that device, else the
-    /// last recent on it (its baud), else a fresh console at 9600.
-    static func host(for path: String, saved: [Host], recents: [Host]) -> Host {
+    /// What the shadow opens: the saved serial host on that device, else a
+    /// fresh console at the speed its USB device asks for (`ConsoleBaud`:
+    /// an Aruba CX USB-C port 115200, every console cable 9600). Not the last
+    /// recent's baud any more (5.0 (39)): one cable goes from a Cisco to an
+    /// Aruba controller to a Huawei in a day, so the speed it had last time
+    /// says nothing about the box it is plugged into now.
+    static func host(for path: String, saved: [Host], usb: ConsoleBaud.USBDevice?) -> Host {
         let port = calloutPath(path)
         if let host = saved.first(where: { $0.kind == .serial && calloutPath($0.address) == port }) { return host }
-        let baud = recents.first(where: { $0.kind == .serial && calloutPath($0.address) == port })?.port ?? defaultBaud
-        return Host(name: shortName(path), kind: .serial, address: path, port: baud)
+        return Host(name: shortName(path), kind: .serial, address: path, port: ConsoleBaud.baud(for: usb))
     }
 
     /// The shadow tab now: one device at a time (the newest arrival), gone

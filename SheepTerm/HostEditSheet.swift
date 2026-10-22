@@ -34,7 +34,7 @@ struct HostEditSheet: View {
     /// The same question for the Username field. See `effectiveUsername`.
     @State private var usernameEdited = false
 
-    private static let baudRates = [9600, 19200, 38400, 57600, 115200, 230400]
+    private static let baudRates = ConsoleBaud.rates
     /// Console ports on network gear are 9600 8N1 out of the box — Cisco,
     /// Aruba, Huawei and Juniper all ship that way.
     private static let defaultBaud = 9600

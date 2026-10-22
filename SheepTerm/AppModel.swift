@@ -66,6 +66,10 @@ final class SessionTab: ObservableObject, Identifiable {
     /// password auth notes it via rememberSessionPassword, key-only SSH
     /// and serial note it on the first success status.
     var didNoteRecent = false
+    /// Serial (5.0 (39)): the speed the recent was noted at. A speed picked
+    /// in the tab moves the recent to it — the one that came up as garbage
+    /// is not worth a row.
+    var notedSerialBaud: Int?
     /// 5.0 (1): the name the device's prompt gave a session that was called
     /// after its cable / bare address (`PromptName`). `title` already reads
     /// `Core-SW (cu.usbserial-1420)`; a reconnect carries this to the successor.
@@ -1240,6 +1244,15 @@ final class AppModel: ObservableObject {
         return count
     }
 
+    /// The status bar's baud menu on a serial tab (5.0 (39)).
+    func setBaud(_ baud: Int, for tab: SessionTab) {
+        guard case .serial(let controller) = tab.content else { return }
+        controller.setBaud(baud)
+        // A closed port only records the choice: no status line follows to
+        // redraw the status bar's speed, so say it changed.
+        tab.objectWillChange.send()
+    }
+
     /// Edit → Send Break (⌃⌥B). Serial consoles only: a break is a line
     /// condition, and SSH and a local shell have no line to put it on.
     func sendBreak() {
@@ -1509,7 +1522,7 @@ final class AppModel: ObservableObject {
                 tab.highlightVendor = detected
             }
             tab.highlightEnabled = UserDefaults.standard.object(forKey: "highlightDefault") as? Bool ?? true
-            controller.onStatus = { [weak tab, weak self] status in
+            controller.onStatus = { [weak tab, weak self, weak controller] status in
                 guard let tab else { return }
                 tab.statusInfo = status
                 // The port is open only when this status arrives — note the
@@ -1517,9 +1530,17 @@ final class AppModel: ObservableObject {
                 // recorded (and must not be written twice).
                 if status.hasPrefix("serial ·") {
                     tab.wasConnected = true
+                    let baud = controller?.host.port ?? host.port
                     if !tab.didNoteRecent {
                         tab.didNoteRecent = true
+                        tab.notedSerialBaud = host.port
                         self?.store.noteRecent(host)
+                    }
+                    if let noted = tab.notedSerialBaud, noted != baud {
+                        var moved = host
+                        moved.port = baud
+                        tab.notedSerialBaud = baud
+                        self?.store.noteRecent(moved, replacingPort: noted)
                     }
                     // Same 30 s rule as SSH: a port that opens and dies right
                     // back (half-seated cable, switch rebooting) must not
@@ -2249,6 +2270,18 @@ final class AppModel: ObservableObject {
         if let path = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SERIAL_ARRIVE"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.serialEvent(arrived: path, gone: nil) }
         }
+        // SHEEPTERM_DEBUG_SERIAL_OPEN=<path> opens that console after 2 s, as the shadow would (a pty for the baud menu shots).
+        if let path = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SERIAL_OPEN"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.open(host: SerialArrival.host(for: path, saved: [], usb: SerialWatcher.usbDevice(at: path)))
+            }
+            // ...and SHEEPTERM_DEBUG_SERIAL_BAUD=<n> picks that speed from the status bar menu 2 s later.
+            if let baud = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SERIAL_BAUD"].flatMap(Int.init) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    if let tab = self?.selectedTab { self?.setBaud(baud, for: tab) }
+                }
+            }
+        }
         #endif
     }
 
@@ -2288,7 +2321,8 @@ final class AppModel: ObservableObject {
             selectedID = tab.id
             DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
         } else {
-            open(host: SerialArrival.host(for: shadow.path, saved: store.groups.flatMap(\.hosts), recents: store.recents))
+            open(host: SerialArrival.host(for: shadow.path, saved: store.groups.flatMap(\.hosts),
+                                          usb: SerialWatcher.usbDevice(at: shadow.path)))
         }
         collapseSidebar()
     }

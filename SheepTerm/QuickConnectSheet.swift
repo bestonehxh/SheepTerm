@@ -72,10 +72,11 @@ struct QuickConnectSheet: View {
 
     private static let defaultGroup = "Quick Connect"
     private static let newGroupTag = "\u{0}new-group"
-    private static let baudRates = [9600, 19200, 38400, 57600, 115200, 230400]
+    private static let baudRates = ConsoleBaud.rates
     /// Console ports on network gear are 9600 8N1 out of the box — Cisco,
-    /// Aruba, Huawei and Juniper all ship that way.
-    private static let defaultBaud = 9600
+    /// Aruba, Huawei and Juniper all ship that way. A device that names
+    /// itself (an Aruba CX USB-C port, 115200) sets its own when picked.
+    private static let defaultBaud = ConsoleBaud.standard
 
     private var groupNames: [String] {
         var names = model.store.groups.map(\.name)
@@ -177,6 +178,11 @@ struct QuickConnectSheet: View {
                     }
                     FormPopup(selection: $baud, items: Self.baudRates.map { .option(String($0), $0) })
                         .formRow("Baud rate")
+                        // Picking a device sets the speed it wants (5.0 (39));
+                        // the popup still overrides it.
+                        .onChange(of: device) { _, path in
+                            baud = ConsoleBaud.baud(for: SerialWatcher.usbDevice(at: path))
+                        }
                     FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                         .formRow("Device family")
                 }
