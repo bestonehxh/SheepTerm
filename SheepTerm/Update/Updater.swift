@@ -85,6 +85,8 @@ final class Updater {
     /// count time asleep), so turning the setting on later also works.
     func start() {
         guard launchTimer == nil, tickTimer == nil else { return }
+        removeLeftoverBackups()
+        trashStrayCopy()
         launchTimer = Timer.scheduledTimer(withTimeInterval: UpdateCore.launchDelay, repeats: false) { _ in
             MainActor.assumeIsolated { self.tick() }
         }
@@ -459,8 +461,12 @@ final class Updater {
     }
 
     private func finishInstall(app: URL, zip: URL, work: URL, offer: UpdateOffer) {
-        guard let target = UpdateCore.installTarget(bundleURL: Bundle.main.bundleURL) else {
-            revealVerifiedZip(zip, work: work, offer: offer)
+        guard let plan = UpdateCore.installPlan(bundleURL: Bundle.main.bundleURL, appName: config.appName,
+                                                home: NSHomeDirectory()) else {
+            try? FileManager.default.removeItem(at: work)
+            showError(String(localized: "The update was not installed"),
+                      .notInstallable(String(localized: "Something that is not \(config.appName) is at /Applications/\(config.appName).app.")),
+                      page: offer.page)
             return
         }
         guard hooks.confirmBeforeQuit() else {
@@ -472,55 +478,142 @@ final class Updater {
             .appendingPathComponent("Logs", isDirectory: true)
         try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
         let log = logDir.appendingPathComponent("\(config.appName)-update.log")
+        // Made by this user now, so a helper running as root appends to a file the user still owns.
+        if !FileManager.default.fileExists(atPath: log.path) { FileManager.default.createFile(atPath: log.path, contents: nil) }
         let stamp = String(Int(Date().timeIntervalSince1970))
+        var arguments = [script.path,
+                         String(ProcessInfo.processInfo.processIdentifier),
+                         plan.target.path, app.path,
+                         UpdateCore.backupPath(for: plan.target, stamp: stamp),
+                         work.path, log.path]
+        if plan.target.standardizedFileURL != Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL {
+            arguments.append(Bundle.main.bundleURL.path)   // FALLBACK: relaunched if the install fails
+        }
         do {
             try Data(UpdateCore.helperScript.utf8).write(to: script)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        } catch {
+            failToStart(error.localizedDescription, work: work, offer: offer)
+            return
+        }
+        UserDefaults.standard.set(plan.strayCopy?.path, forKey: strayKey)
+        if plan.needsAdmin {
+            Task {
+                let status = await Self.runAsAdmin(arguments, uid: getuid(), appName: config.appName)
+                guard status == 0 else {
+                    // Cancelled at the password prompt, or refused: nothing changed.
+                    UserDefaults.standard.removeObject(forKey: strayKey)
+                    try? FileManager.default.removeItem(at: work)
+                    return
+                }
+                hooks.prepareForQuit()
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        do {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
-            process.arguments = [script.path,
-                                 String(ProcessInfo.processInfo.processIdentifier),
-                                 target.path, app.path,
-                                 UpdateCore.backupPath(for: target, stamp: stamp),
-                                 work.path, log.path]
+            process.arguments = arguments
             process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory()]
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             try process.run()
         } catch {
-            try? FileManager.default.removeItem(at: work)
-            showError(String(localized: "The update was not installed"),
-                      .notInstallable(String(localized: "The installer could not be started: \(error.localizedDescription)")),
-                      page: offer.page)
+            UserDefaults.standard.removeObject(forKey: strayKey)
+            failToStart(error.localizedDescription, work: work, offer: offer)
             return
         }
         hooks.prepareForQuit()
         NSApp.terminate(nil)
     }
 
-    /// Not in a writable /Applications: the verified zip goes to Downloads
-    /// and is shown in Finder; the user installs it by hand.
-    private func revealVerifiedZip(_ zip: URL, work: URL, offer: UpdateOffer) {
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
-        let base = (offer.zipName as NSString).deletingPathExtension
-        var destination = downloads.appendingPathComponent(offer.zipName)
-        var n = 2
-        while FileManager.default.fileExists(atPath: destination.path) {
-            destination = downloads.appendingPathComponent("\(base) \(n).zip")
-            n += 1
+    private func failToStart(_ reason: String, work: URL, offer: UpdateOffer) {
+        try? FileManager.default.removeItem(at: work)
+        showError(String(localized: "The update was not installed"),
+                  .notInstallable(String(localized: "The installer could not be started: \(reason)")),
+                  page: offer.page)
+    }
+
+    /// The helper, detached, as root: macOS asks for an administrator's
+    /// password (`do shell script … with administrator privileges`). The
+    /// trailing `&` with every stream redirected lets osascript return as
+    /// soon as it has started, while the helper waits for this app to quit.
+    /// 0 = started; anything else = cancelled or refused.
+    nonisolated private static func runAsAdmin(_ arguments: [String], uid: uid_t, appName: String) async -> Int32 {
+        let source = """
+        on run argv
+            set cmd to "SHEEP_UPDATE_AS_USER=\(uid) PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh"
+            repeat with a in argv
+                set cmd to cmd & " " & quoted form of (a as text)
+            end repeat
+            do shell script cmd & " </dev/null >/dev/null 2>&1 &" with prompt "\(appName) wants to install its update in Applications." with administrator privileges
+        end run
+        """
+        return await run("/usr/bin/osascript", ["-e", source] + arguments)
+    }
+
+    // MARK: Tidying after an install
+
+    /// Deletes the old bundles a past update could not (UpdateCore.leftoverBackups),
+    /// off the main thread; a failure is only logged.
+    private func removeLeftoverBackups() {
+        guard let target = UpdateCore.applicationsBundle(Bundle.main.bundleURL) else { return }
+        let log = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs/\(config.appName)-update.log")
+        Task.detached(priority: .background) {
+            let fm = FileManager.default
+            let entries = (try? fm.contentsOfDirectory(atPath: target.deletingLastPathComponent().path)) ?? []
+            for old in UpdateCore.leftoverBackups(beside: target, entries: entries, now: Date()) {
+                let note: String
+                do { try fm.removeItem(at: old); note = "removed the leftover \(old.path)" }
+                catch { note = "could not remove the leftover \(old.path): \(error.localizedDescription)" }
+                Self.appendLog(note, to: log)
+            }
         }
-        do {
-            try FileManager.default.moveItem(at: zip, to: destination)
-        } catch {
-            destination = zip
+    }
+
+    nonisolated private static func appendLog(_ line: String, to log: URL) {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let data = Data("\(formatter.string(from: Date())) \(line)\n".utf8)
+        if let handle = try? FileHandle(forWritingTo: log) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: log)
         }
-        if destination != zip { try? FileManager.default.removeItem(at: work) }
-        _ = hooks.presenter.present(
-            title: String(localized: "Update downloaded"),
-            message: String(localized: "\(config.appName) can only replace itself when it runs from the Applications folder and that folder is writable. The verified \(offer.zipName) is in Finder: unzip it and move \(config.appName).app into Applications."),
-            accessory: nil, buttons: [UpdateAlertButton(title: String(localized: "Show in Finder"), role: .primary)])
-        NSWorkspace.shared.activateFileViewerSelecting([destination])
+    }
+
+    private var strayKey: String { "\(config.appName)UpdaterStrayCopy" }
+
+    /// After an update that ran from outside /Applications: the old copy
+    /// (Downloads, Desktop…) goes to the Trash once the new app runs from
+    /// /Applications — only if it is still this app and not newer.
+    private func trashStrayCopy() {
+        guard let path = UserDefaults.standard.string(forKey: strayKey) else { return }
+        guard let own = UpdateCore.applicationsBundle(Bundle.main.bundleURL) else { return }
+        UserDefaults.standard.removeObject(forKey: strayKey)
+        let stray = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        guard stray != own,
+              let data = try? Data(contentsOf: stray.appendingPathComponent("Contents/Info.plist")),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let running = UpdateCore.currentVersion(
+                  shortVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                  bundleVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+                  scheme: config.tagScheme),
+              UpdateCore.strayIsDisposable(plist: plist, bundleIdentifier: Bundle.main.bundleIdentifier ?? "",
+                                           running: running, scheme: config.tagScheme)
+        else { return }
+        let log = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs/\(config.appName)-update.log")
+        NSWorkspace.shared.recycle([stray]) { _, error in
+            Self.appendLog(error.map { "could not move \(stray.path) to the Trash: \($0.localizedDescription)" }
+                           ?? "moved the old copy \(stray.path) to the Trash", to: log)
+        }
     }
 }
 

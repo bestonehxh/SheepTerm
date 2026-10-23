@@ -530,19 +530,85 @@ nonisolated enum UpdateCore {
 
     // MARK: Installing
 
-    /// Where the update may be installed: the running bundle itself, and only
-    /// when it sits in /Applications (directly or in a subfolder) and both it
-    /// and its folder are writable — the helper RENAMES the old bundle aside,
-    /// which needs the folder. nil means "reveal the verified zip instead".
-    static func installTarget(bundleURL: URL, fileManager: FileManager = .default) -> URL? {
+    /// The running bundle when it sits in /Applications (directly or in a
+    /// subfolder) and is not a translocated copy; nil anywhere else.
+    static func applicationsBundle(_ bundleURL: URL) -> URL? {
         let resolved = bundleURL.resolvingSymlinksInPath().standardizedFileURL
         let path = resolved.path
         guard path.hasPrefix("/Applications/"), path.hasSuffix(".app"),
               !path.contains("/AppTranslocation/") else { return nil }
-        let parent = resolved.deletingLastPathComponent().path
-        guard fileManager.isWritableFile(atPath: parent),
-              fileManager.isWritableFile(atPath: path) else { return nil }
         return resolved
+    }
+
+    /// What is at a path, as the install plan needs it.
+    enum PathKind: Sendable { case missing, directory, other }
+
+    /// The filesystem questions `installPlan` asks — injected so the
+    /// harness can answer them for paths it cannot create (/Applications).
+    struct InstallProbe: Sendable {
+        var kind: @Sendable (String) -> PathKind
+        var isWritable: @Sendable (String) -> Bool
+
+        static let live = InstallProbe(
+            kind: { path in
+                guard let type = try? FileManager.default.attributesOfItem(atPath: path)[.type] as? FileAttributeType
+                else { return .missing }
+                return type == .typeDirectory ? .directory : .other
+            },
+            isWritable: { FileManager.default.isWritableFile(atPath: $0) })
+    }
+
+    /// Where an update goes and how.
+    struct InstallPlan: Equatable, Sendable {
+        /// The bundle the helper replaces (or creates).
+        var target: URL
+        /// /Applications (or the bundle) is not writable by this user: the
+        /// helper runs with administrator privileges, asked by macOS.
+        var needsAdmin: Bool
+        /// The running copy when it lives outside /Applications under the
+        /// user's home (Downloads, Desktop…): the new app moves it to the
+        /// Trash, so updating does not leave "SheepTerm 2.app" behind.
+        var strayCopy: URL?
+    }
+
+    /// The running bundle when it is in /Applications; otherwise
+    /// `/Applications/<appName>.app`, replaced when it is there already —
+    /// never "a zip in Downloads to unpack by hand", which is how a copy run
+    /// from Downloads turned every update into SheepTerm 2, 3, 4… (5.0 (43)).
+    /// nil only when the target path holds something that is not a bundle.
+    static func installPlan(bundleURL: URL, appName: String, home: String,
+                            probe: InstallProbe = .live) -> InstallPlan? {
+        let resolved = bundleURL.resolvingSymlinksInPath().standardizedFileURL
+        var stray: URL?
+        let target: URL
+        if let own = applicationsBundle(bundleURL) {
+            target = own
+        } else {
+            target = URL(fileURLWithPath: "/Applications", isDirectory: true)
+                .appendingPathComponent("\(appName).app", isDirectory: true)
+            let path = resolved.path
+            let homePrefix = home.hasSuffix("/") ? home : home + "/"
+            if path.hasSuffix(".app"), path.hasPrefix(homePrefix), !path.contains("/AppTranslocation/") {
+                stray = resolved
+            }
+        }
+        let kind = probe.kind(target.path)
+        guard kind != .other else { return nil }
+        let writable = probe.isWritable(target.deletingLastPathComponent().path)
+            && (kind == .missing || probe.isWritable(target.path))
+        return InstallPlan(target: target, needsAdmin: !writable, strayCopy: stray)
+    }
+
+    /// The copy `strayCopy` named, seen from the newly installed app: it is
+    /// moved to the Trash only if it is still this app (same identifier)
+    /// and not newer than the one running now.
+    static func strayIsDisposable(plist: [String: Any]?, bundleIdentifier: String,
+                                  running: UpdateVersion, scheme: UpdateConfig.TagScheme) -> Bool {
+        guard let plist, plist["CFBundleIdentifier"] as? String == bundleIdentifier,
+              let version = currentVersion(shortVersion: plist["CFBundleShortVersionString"] as? String,
+                                           bundleVersion: plist["CFBundleVersion"] as? String, scheme: scheme)
+        else { return false }
+        return !isNewer(version, than: running, scheme: scheme)
     }
 
     /// Next to the target, on the same volume, so moving it aside is a rename.
@@ -551,15 +617,39 @@ nonisolated enum UpdateCore {
             .appendingPathComponent(".\(target.deletingPathExtension().lastPathComponent)-previous-\(stamp).app").path
     }
 
+    /// Old bundles a past update left beside `target` (`backupPath` names,
+    /// stamped at least `leftoverMinAge` seconds before `now`): the helper's
+    /// `rm -rf` of the backup can fail (macOS App Management may refuse to
+    /// delete another signer's bundle), and a hidden `.App-previous-….app`
+    /// in /Applications still shows in Launchpad and Spotlight as a second
+    /// copy. Anything younger may belong to a helper that is still swapping.
+    static func leftoverBackups(beside target: URL, entries: [String], now: Date) -> [URL] {
+        let prefix = ".\(target.deletingPathExtension().lastPathComponent)-previous-"
+        return entries.sorted().compactMap { name in
+            guard name.hasPrefix(prefix), name.hasSuffix(".app") else { return nil }
+            let stamp = name.dropFirst(prefix.count).dropLast(4)
+            guard !stamp.isEmpty, stamp.allSatisfy(\.isASCII), stamp.allSatisfy(\.isNumber),
+                  let seconds = TimeInterval(stamp),
+                  seconds <= now.timeIntervalSince1970 - leftoverMinAge else { return nil }
+            return target.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+        }
+    }
+    static let leftoverMinAge: TimeInterval = 600
+
     /// The detached /bin/sh helper that swaps the bundle once the app has
-    /// exited. Arguments: PID TARGET NEW BACKUP WORKDIR LOG.
+    /// exited. Arguments: PID TARGET NEW BACKUP WORKDIR LOG [FALLBACK].
+    /// A missing TARGET is a fresh install (the app ran from outside
+    /// /Applications); FALLBACK, the running copy, is relaunched if that fails.
+    /// SHEEP_UPDATE_AS_USER=<uid>: the helper runs as root (administrator
+    /// privileges) and opens the app as that user, never as root.
     ///   1. waits for PID to exit (up to SHEEP_UPDATE_WAIT_TENTHS × 0.1 s,
     ///      default 30 min — Quit may sit on a log-flush report while the user
     ///      is away; gives up and changes nothing if it never exits);
     ///   2. refuses unless NEW and TARGET are real directories and BACKUP is free;
     ///   3. renames TARGET → BACKUP, then NEW → TARGET;
     ///   4. success: strips com.apple.quarantine, deletes BACKUP and WORKDIR,
-    ///      relaunches TARGET;
+    ///      relaunches TARGET (a BACKUP that will not delete is logged and left
+    ///      for `leftoverBackups`);
     ///   5. failure: removes whatever half-copy is at TARGET, renames BACKUP
     ///      back and relaunches the OLD app (exit 70); if even that fails, the
     ///      old bundle is left at BACKUP and the log says so (exit 71).
@@ -572,15 +662,22 @@ nonisolated enum UpdateCore {
     static let helperScript = #"""
     #!/bin/sh
     # Sheep updater install helper (generated by UpdateCore.helperScript).
-    PID="$1"; TARGET="$2"; NEW="$3"; BACKUP="$4"; WORK="$5"; LOG="${6:-/dev/null}"
+    PID="$1"; TARGET="$2"; NEW="$3"; BACKUP="$4"; WORK="$5"; LOG="${6:-/dev/null}"; FALLBACK="${7:-}"
     OPEN="${SHEEP_UPDATE_OPEN:-/usr/bin/open}"
     WAIT="${SHEEP_UPDATE_WAIT_TENTHS:-18000}"
+    ASUSER="${SHEEP_UPDATE_AS_USER:-}"
     say() { echo "$(/bin/date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null; }
     drop_work() { case "$WORK" in /?*/?*) /bin/rm -rf "$WORK" ;; esac; }
+    launch() {
+      if [ -n "$ASUSER" ]; then /bin/launchctl asuser "$ASUSER" /usr/bin/sudo -u "#$ASUSER" "$OPEN" "$1"
+      else "$OPEN" "$1"; fi
+    }
     case "$PID" in ''|*[!0-9]*) say "bad pid '$PID'"; exit 64;; esac
+    case "$ASUSER" in *[!0-9]*) say "bad user '$ASUSER'"; exit 64;; esac
     for p in "$TARGET" "$NEW" "$BACKUP"; do
       case "$p" in /?*) ;; *) say "not an absolute path: '$p'"; exit 64;; esac
     done
+    case "$FALLBACK" in ''|/?*) ;; *) say "not an absolute path: '$FALLBACK'"; exit 64;; esac
     n=0
     while /bin/kill -0 "$PID" 2>/dev/null; do
       n=$((n + 1))
@@ -588,20 +685,35 @@ nonisolated enum UpdateCore {
       /bin/sleep 0.1
     done
     if [ ! -d "$NEW" ] || [ -L "$NEW" ]; then say "new bundle missing: $NEW - nothing changed"; drop_work; exit 66; fi
-    if [ ! -d "$TARGET" ] || [ -L "$TARGET" ]; then say "target missing: $TARGET - nothing changed"; drop_work; exit 66; fi
+    if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
+      if /bin/mv "$NEW" "$TARGET"; then
+        /usr/bin/xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null
+        drop_work
+        say "installed $TARGET (new)"
+        launch "$TARGET"
+        exit 0
+      fi
+      say "could not install $TARGET - nothing changed"
+      if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then /bin/rm -rf "$TARGET"; fi
+      drop_work
+      if [ -n "$FALLBACK" ]; then launch "$FALLBACK"; fi
+      exit 69
+    fi
+    if [ ! -d "$TARGET" ] || [ -L "$TARGET" ]; then say "target is not a bundle: $TARGET - nothing changed"; drop_work; exit 66; fi
     if [ -e "$BACKUP" ] || [ -L "$BACKUP" ]; then say "backup path already exists: $BACKUP - nothing changed"; drop_work; exit 67; fi
     if ! /bin/mv "$TARGET" "$BACKUP"; then
       say "could not move the old bundle aside - nothing changed"
       drop_work
-      "$OPEN" "$TARGET"
+      launch "${FALLBACK:-$TARGET}"
       exit 68
     fi
     if /bin/mv "$NEW" "$TARGET"; then
       /usr/bin/xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null
-      /bin/rm -rf "$BACKUP"
+      /bin/rm -rf "$BACKUP" 2>/dev/null
       drop_work
       say "installed $TARGET"
-      "$OPEN" "$TARGET"
+      if [ -e "$BACKUP" ] || [ -L "$BACKUP" ]; then say "could not delete the old bundle at $BACKUP - the app removes it at a later launch"; fi
+      launch "$TARGET"
       exit 0
     fi
     say "moving the new bundle in failed - restoring the old one"
@@ -609,7 +721,7 @@ nonisolated enum UpdateCore {
     if /bin/mv "$BACKUP" "$TARGET"; then
       say "restored $TARGET"
       drop_work
-      "$OPEN" "$TARGET"
+      launch "${FALLBACK:-$TARGET}"
       exit 70
     fi
     say "RESTORE FAILED - the old app is at $BACKUP"
