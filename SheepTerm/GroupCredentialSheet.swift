@@ -136,17 +136,16 @@ struct GroupCredentialSheet: View {
             // reads like a bug rather than an answer.
             return String(localized: "There are no SSH hosts in this group.")
         }
-        let hosts = sshCount == 1 ? String(localized: "1 SSH host") : String(localized: "\(sshCount) SSH hosts")
         if isMixed, choice == .unset {
-            return String(localized: "These \(hosts) use different credentials — pick one to apply to all.")
+            return String(localized: "These \(sshCount) SSH hosts use different credentials — pick one to apply to all.")
         }
         guard let credential = selectedCredential else {
-            return String(localized: "Removes the credential from \(hosts) in this group; usernames are kept.")
+            return String(localized: "Removes the credential from \(sshCount) SSH hosts in this group; usernames are kept.")
         }
         guard !credential.username.isEmpty else {
-            return String(localized: "Applies to \(hosts) in this group.")
+            return String(localized: "Applies to \(sshCount) SSH hosts in this group.")
         }
-        return String(localized: "Applies to \(hosts) in this group. Their username becomes “\(credential.username)”.")
+        return String(localized: "Applies to \(sshCount) SSH hosts in this group. Their username becomes “\(credential.username)”.")
     }
 
     private func apply() {

@@ -701,7 +701,7 @@ enum ConfigurationHygiene {
                 // called it anyway; "Untitled Host" only when there is not
                 // even one of those.
                 let address = sanitizedName(hosts[index].address)
-                hosts[index].name = address.isEmpty ? "Untitled Host" : address
+                hosts[index].name = address.isEmpty ? String(localized: "Untitled Host") : address
                 report.replacedNames += 1
             }
             if !hosts[index].hasUsablePort {
@@ -883,7 +883,7 @@ enum ConfigurationHygiene {
         if let data = files["hosts.json"] {
             do {
                 var groups = try JSONDecoder().decode([HostGroup].self, from: data)
-                report = report + sanitize(&groups, emptyGroupName: "Untitled Group")
+                report = report + sanitize(&groups, emptyGroupName: String(localized: "Untitled Group"))
                 files["hosts.json"] = try encoder.encode(groups)
             } catch {
                 throw HygieneError.undecodable(name: "hosts.json", reason: error.localizedDescription)

@@ -32,7 +32,7 @@ enum NetworkTables {
 
         /// The ARP table's Interface cell: "en0", or "en0 · permanent" (no
         /// separate, mostly blank column for the flag).
-        var interfaceCell: String { permanent ? interface + " \u{00B7} permanent" : interface }
+        var interfaceCell: String { permanent ? String(localized: "\(interface) · permanent") : interface }
     }
 
     static func formatMAC(_ bytes: [UInt8]) -> String {

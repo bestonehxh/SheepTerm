@@ -276,7 +276,9 @@ struct SyncAccountButton: View {
         case .needsPassphrase: return String(localized: "Sync: enter your passphrase on this Mac")
         case .ready:
             if !engine.isOnline { return String(localized: "Offline — will sync when the Mac is back online") }
-            return String(localized: "Synced as \(engine.account ?? String(localized: "Google account"))") + (engine.lastError.map { " — \($0)" } ?? "")
+            let account = engine.account ?? String(localized: "Google account")
+            if let error = engine.lastError { return String(localized: "Synced as \(account) — \(error)") }
+            return String(localized: "Synced as \(account)")
         }
     }
 }

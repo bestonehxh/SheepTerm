@@ -438,7 +438,7 @@ final class SidebarLabelCell: NSView, SidebarRowHighlight {
         // "Lab 13" — a row of a list, or thirteen of something? Said out loud
         // once, here, for group rows and heading rows alike.
         if let number {
-            setAccessibilityLabel(number == 1 ? String(localized: "\(text), 1 host") : String(localized: "\(text), \(number) hosts"))
+            setAccessibilityLabel(String(localized: "\(text), \(number) hosts"))
         } else {
             setAccessibilityLabel(text)
         }
@@ -1334,9 +1334,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 let alert = SheepAlert()
                 alert.alertStyle = .warning
                 alert.messageText = String(localized: "Remove the heading “\(label)”?")
-                alert.informativeText = (count == 1
-                    ? String(localized: "1 host stays in “\(group.name)”.")
-                    : String(localized: "\(count) hosts stay in “\(group.name)”."))
+                alert.informativeText = String(localized: "\(count) hosts stay in “\(group.name)”.")
                 alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
                 alert.addButton(withTitle: String(localized: "Remove Section"))
                 // An EMPTY heading is removed without asking: there is
@@ -1469,10 +1467,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             let alert = SheepAlert()
             alert.alertStyle = .warning
             alert.messageText = String(localized: "Delete \(groups.count) groups?")
-            alert.informativeText = (hostCount == 1
-                ? String(localized: "1 host goes with them.")
-                : String(localized: "\(hostCount) hosts go with them."))
-                + " " + String(localized: "This cannot be undone.")
+            alert.informativeText = String(localized: "\(hostCount) hosts go with them. This cannot be undone.")
             alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
             alert.addButton(withTitle: String(localized: "Delete"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
@@ -1529,8 +1524,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // Two names and a count, not a list: the list pushed this alert
             // into the wide layout, and the number is what matters here.
             let named = hosts.prefix(2).map(\.name).joined(separator: ", ")
-            let more = hosts.count > 2 ? " " + String(localized: "and \(hosts.count - 2) more") : ""
-            alert.informativeText = "\(named)\(more). " + String(localized: "This cannot be undone.")
+            let more = hosts.count - 2
+            alert.informativeText = more > 0
+                ? String(localized: "\(named) and \(more) more. This cannot be undone.")
+                : String(localized: "\(named). This cannot be undone.")
             alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
             alert.addButton(withTitle: String(localized: "Remove"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
@@ -1548,7 +1545,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// `HostStore.unfileQuestion` (shared with Windows, compared by the
     /// harness), in words.
     static func unfileQuestion(_ count: Int) -> String {
-        count == 1 ? String(localized: "Unfile 1 host?") : String(localized: "Unfile \(count) hosts?")
+        String(localized: "Unfile \(count) hosts?")
     }
 
     private func confirmUnfiling(count: Int, message: String) -> Bool {

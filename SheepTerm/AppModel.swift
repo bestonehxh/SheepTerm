@@ -713,9 +713,7 @@ final class AppModel: ObservableObject {
               unflushed.map { "\($0.session) (\(detail($0)))" }.joined(separator: ", "))
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = names.count == 1
-            ? String(localized: "The end of one session log could not be written.")
-            : String(localized: "The end of \(names.count) session logs could not be written.")
+        alert.messageText = String(localized: "The end of \(names.count) session logs could not be written.")
         let listed = unflushed.prefix(8).map { flush in
             var line = "• \(flush.session)"
             if let name = flush.logName { line += " — \(name)" }
@@ -780,7 +778,7 @@ final class AppModel: ObservableObject {
     /// the whole file's, and the corrections are named once.
     func confirmImport(_ payload: SharePayload) {
         var groups = payload.allGroups
-        let hygiene = ConfigurationHygiene.sanitize(&groups, emptyGroupName: "Imported Group")
+        let hygiene = ConfigurationHygiene.sanitize(&groups, emptyGroupName: String(localized: "Imported Group"))
         // Deduped HERE, before any count is shown: `applyImport` collapses a
         // row the file repeated exactly, so "Import “Lab” (12 hosts)?" over
         // such a file was a promise of twelve that only eleven kept. The SAME
@@ -803,9 +801,7 @@ final class AppModel: ObservableObject {
             hygieneNote = ""
             // Short: one line per fact, read at a glance.
             if repeated[index] > 0 {
-                corrections += "\n\n" + (repeated[index] == 1
-                    ? String(localized: "1 repeated row collapsed.")
-                    : String(localized: "\(repeated[index]) repeated rows collapsed."))
+                corrections += "\n\n" + String(localized: "\(repeated[index]) repeated rows collapsed.")
             }
             confirmImport(group: group, sender: payload.sender, corrections: corrections)
         }
@@ -835,8 +831,7 @@ final class AppModel: ObservableObject {
             // file, so the sections are named instead of left unsaid.
             let sections = group.displayedSections.count
             alert.messageText = group.hosts.isEmpty && sections > 0
-                ? (sections == 1 ? String(localized: "Import “\(group.name)” (1 section)?")
-                                 : String(localized: "Import “\(group.name)” (\(sections) sections)?"))
+                ? String(localized: "Import “\(group.name)” (\(sections) sections)?")
                 : String(localized: "Import “\(group.name)” (\(group.hosts.count) hosts)?")
             alert.informativeText = String(localized: "From \(sender). Passwords are not included.") + corrections
             alert.addButton(withTitle: String(localized: "Import"))
@@ -859,7 +854,7 @@ final class AppModel: ObservableObject {
         // the sections it is bringing.
         let incomingSections = group.displayedSections.count
         let theirs = group.hosts.isEmpty && incomingSections > 0
-            ? (incomingSections == 1 ? String(localized: "1 section") : String(localized: "\(incomingSections) sections"))
+            ? String(localized: "\(incomingSections) sections")
             : "\(group.hosts.count)"
         alert.informativeText = String(localized: "Yours: \(existing.hosts.count) hosts. The file from \(sender): \(theirs).")
             + corrections
@@ -1208,7 +1203,6 @@ final class AppModel: ObservableObject {
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Remove command history for “\(tab.title)”?")
         alert.informativeText = count == 0 ? String(localized: "There is nothing saved for this host.")
-            : count == 1 ? String(localized: "1 saved command for this host will be removed. Other hosts are not touched.")
             : String(localized: "\(count) saved commands for this host will be removed. Other hosts are not touched.")
         // Cancel first, so Return cannot remove the history by accident (the
         // rule every other delete alert here follows).

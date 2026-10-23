@@ -3,9 +3,26 @@ import Foundation
 /// The system language remains the default. AppleLanguages is the supported
 /// per-app override, read by both SwiftUI and AppKit on the next launch.
 enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
-    case system, english = "en", simplifiedChinese = "zh-Hans"
+    case system, english = "en", german = "de", spanish = "es", french = "fr", brazilianPortuguese = "pt-BR",
+         russian = "ru", japanese = "ja", korean = "ko", simplifiedChinese = "zh-Hans"
 
     var id: String { rawValue }
+
+    /// Each language in its own name, as macOS lists them (never translated).
+    var nativeName: String? {
+        switch self {
+        case .system: nil
+        case .english: "English"
+        case .german: "Deutsch"
+        case .spanish: "Español"
+        case .french: "Français"
+        case .brazilianPortuguese: "Português (Brasil)"
+        case .russian: "Русский"
+        case .japanese: "日本語"
+        case .korean: "한국어"
+        case .simplifiedChinese: "简体中文"
+        }
+    }
 
     static let launchLanguage = current()
 

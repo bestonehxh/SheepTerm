@@ -20,14 +20,17 @@ struct AIPanelToggleButton: View {
     @ObservedObject private var ai = AIPanelChrome.shared
 
     var body: some View {
-        Button {
-            ai.toggle()
-        } label: {
-            PanelToggleGlyph(trailing: true, open: ai.shown)
+        // View ▸ AI Assistant off: no button at all.
+        if ai.enabled {
+            Button {
+                ai.toggle()
+            } label: {
+                PanelToggleGlyph(trailing: true, open: ai.shown)
+            }
+            // Accent while the panel is open (the user likes it there).
+            .buttonStyle(ChromeIconButtonStyle(tint: ai.shown ? Theme.accent : nil))
+            .accessibilityLabel("Show AI Panel")
         }
-        // Accent while the panel is open (the user likes it there).
-        .buttonStyle(ChromeIconButtonStyle(tint: ai.shown ? Theme.accent : nil))
-        .accessibilityLabel("Show AI Panel")
     }
 }
 
@@ -35,7 +38,7 @@ struct AIPanelColumn: View {
     @ObservedObject private var ai = AIPanelChrome.shared
 
     var body: some View {
-        if ai.shown {
+        if ai.enabled && ai.shown {
             HStack(spacing: 0) {
                 AIPanelResizeHandle()
                 AIPanelView()
@@ -341,10 +344,7 @@ enum AIFailureText {
 
     /// `AIAttachment.summary` ("N lines · K secrets removed"), in words.
     static func summary(of attachment: AIAttachment) -> String {
-        let lines = attachment.lineCount == 1 ? String(localized: "1 line") : String(localized: "\(attachment.lineCount) lines")
-        let secrets = attachment.removed == 1 ? String(localized: "1 secret removed")
-            : String(localized: "\(attachment.removed) secrets removed")
-        return "\(lines) · \(secrets)"
+        String(localized: "\(attachment.lineCount) lines · \(attachment.removed) secrets removed")
     }
 }
 

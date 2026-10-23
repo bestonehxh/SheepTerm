@@ -41,8 +41,9 @@ struct CenteredUpdatePresenter: UpdateAlertPresenting {
 @MainActor
 final class UpdateAlertPanel: NSObject {
     static let contentWidth: CGFloat = 288
-    /// Titles Escape answers, first match wins.
-    static let escapeTitles = ["Later", "Back", "Close", "OK"]
+    /// Titles Escape answers, first match wins — in the language the buttons are built in.
+    static let escapeTitles = [String(localized: "Later"), String(localized: "Back"),
+                               String(localized: "Close"), String(localized: "OK")]
 
     private let panel: Panel
     private var buttons: [NSButton] = []
@@ -112,7 +113,7 @@ final class UpdateAlertPanel: NSObject {
             rows.append(accessory)
         }
 
-        for (index, title) in (titles.isEmpty ? ["OK"] : titles).enumerated() {
+        for (index, title) in (titles.isEmpty ? [String(localized: "OK")] : titles).enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(pressed(_:)))
             button.bezelStyle = .push
             button.controlSize = .large

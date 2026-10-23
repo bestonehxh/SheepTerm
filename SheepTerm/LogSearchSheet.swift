@@ -108,7 +108,7 @@ struct LogSearchSheet: View {
                 }
             }
         } else {
-            emptyText("Type to search.")
+            emptyText(String(localized: "Type to search."))
         }
     }
 
@@ -127,9 +127,7 @@ struct LogSearchSheet: View {
     }
 
     private func statusText(_ o: LogSearch.Outcome) -> String {
-        let hits = o.total == 1 ? String(localized: "1 hit") : String(localized: "\(o.total) hits")
-        var parts = [o.filesSearched == 1 ? String(localized: "\(hits) in \(o.results.count) of 1 log")
-                                          : String(localized: "\(hits) in \(o.results.count) of \(o.filesSearched) logs")]
+        var parts = [String(localized: "\(o.total) hits in \(o.results.count) of \(o.filesSearched) logs")]
         if o.truncated { parts.append(String(localized: "stopped at \(LogSearch.maxHits) — narrow the search")) }
         if o.unreadable > 0 { parts.append(String(localized: "\(o.unreadable) unreadable")) }
         return parts.joined(separator: " · ")

@@ -260,8 +260,6 @@ struct SidebarView: View {
                         message: String(localized: "Delete “\(original.name)”?"),
                         detail: original.hosts.isEmpty
                             ? String(localized: "The group is empty.")
-                            : original.hosts.count == 1
-                            ? String(localized: "1 host goes with it. This cannot be undone.")
                             : String(localized: "\(original.hosts.count) hosts go with it. This cannot be undone.")
                     ) else { return }
                     // Forget its collapsed state too — a stale id would
@@ -437,7 +435,7 @@ struct SidebarView: View {
                     }
                 } label: {
                     // The glyph and the words flip with the state.
-                    Label(everythingCollapsed ? "Expand All" : "Collapse All",
+                    Label(everythingCollapsed ? String(localized: "Expand All") : String(localized: "Collapse All"),
                           systemImage: everythingCollapsed
                               ? "arrow.up.left.and.arrow.down.right"
                               : "arrow.down.right.and.arrow.up.left")

@@ -114,7 +114,7 @@ final class ShareLinks: ObservableObject {
     func importShare(_ content: ShareContent) throws -> Imported {
         let model = AppModel.shared
         var groups = [try ShareLinkPlan.decode(document: content.group)]
-        _ = ConfigurationHygiene.sanitize(&groups, emptyGroupName: "Shared group")
+        _ = ConfigurationHygiene.sanitize(&groups, emptyGroupName: String(localized: "Shared group"))
         var group = groups[0]
         group.name = ShareNaming.importName(HostStore.cleanGroupName(group.name), taken: model.store.groups.map(\.name))
         group = ShareLinkPlan.landing(group)
@@ -122,8 +122,8 @@ final class ShareLinks: ObservableObject {
         let entries = content.credentials?.entries ?? []
         let logins = entries.map { ShareLogin(name: $0.name, username: $0.username, password: $0.password, hostIDs: $0.hosts) }
         let credentials = entries.map { entry -> Credential in
-            let cleaned = ConfigurationHygiene.cleanedName(existing.contains(entry.name) ? "\(entry.name) (shared)" : entry.name)
-            return Credential(name: cleaned.isEmpty ? "Unnamed Credential" : cleaned, username: entry.username)
+            let cleaned = ConfigurationHygiene.cleanedName(existing.contains(entry.name) ? String(localized: "\(entry.name) (shared)") : entry.name)
+            return Credential(name: cleaned.isEmpty ? String(localized: "Unnamed Credential") : cleaned, username: entry.username)
         }
         let ids = credentials.map(\.id)
         // All or nothing: passwords first (a refusal leaves no trace), then the credentials in one save, then the group.

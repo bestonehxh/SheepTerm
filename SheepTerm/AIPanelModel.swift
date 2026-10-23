@@ -23,18 +23,31 @@ final class AIPanelChrome: ObservableObject {
     @Published var shown: Bool {
         didSet { UserDefaults.standard.set(shown, forKey: AIPanelModel.shownKey) }
     }
+    /// View ▸ AI Assistant (`AIFeature`). Off closes the panel and hides
+    /// every way to open it.
+    @Published var enabled: Bool {
+        didSet {
+            UserDefaults.standard.set(enabled, forKey: AIFeature.enabledKey)
+            if !enabled && shown {
+                withAnimation(AppModel.sidebarAnimation) { shown = false }
+                AppModel.shared.focusActiveTerminal()
+            }
+        }
+    }
     /// Persisted by the resize handle when a drag ends.
     @Published var width: CGFloat
 
     private init() {
         let defaults = UserDefaults.standard
-        shown = defaults.bool(forKey: AIPanelModel.shownKey)
+        enabled = AIFeature.isEnabled(defaults)
+        shown = AIFeature.panelShown(stored: defaults.bool(forKey: AIPanelModel.shownKey), enabled: AIFeature.isEnabled(defaults))
         let saved = defaults.double(forKey: AIPanelModel.widthKey)
         width = saved == 0 ? 360 : min(max(saved, AIPanelModel.widthRange.lowerBound), AIPanelModel.widthRange.upperBound)
     }
 
     /// Slides like the left sidebar (the user: the two must feel the same).
     func toggle() {
+        guard enabled || shown else { return }
         withAnimation(AppModel.sidebarAnimation) { shown.toggle() }
         if !shown { AppModel.shared.focusActiveTerminal() }
     }
@@ -164,7 +177,7 @@ final class AIPanelModel: ObservableObject {
         guard let view = AppModel.shared.terminalHost(ofSession: session)?.terminalView, view.hasSelection else {
             NSSound.beep(); return
         }
-        attach(view.selectedText, title: "Selection", to: session)
+        attach(view.selectedText, title: String(localized: "Selection"), to: session)
     }
 
     func attachTail(for session: UUID) {
@@ -182,10 +195,10 @@ final class AIPanelModel: ObservableObject {
             showNotice(String(localized: "No new output since the last attach"), for: session)
         case .recent(let lines, let mark):
             update(session) { $0.attachMark = mark; $0.notice = nil }
-            attach(lines.joined(separator: "\n"), title: "Last \(lines.count) lines", to: session)
+            attach(lines.joined(separator: "\n"), title: String(localized: "Last \(lines.count) lines"), to: session)
         case .new(let lines, let mark):
             update(session) { $0.attachMark = mark; $0.notice = nil }
-            attach(lines.joined(separator: "\n"), title: "New output · \(lines.count) lines", to: session)
+            attach(lines.joined(separator: "\n"), title: String(localized: "New output · \(lines.count) lines"), to: session)
         }
     }
 

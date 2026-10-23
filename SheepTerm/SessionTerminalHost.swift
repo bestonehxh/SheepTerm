@@ -954,9 +954,7 @@ final class SessionTerminalHost {
         } ?? String(localized: "Review all \(plan.lines.count) lines (\(size)) before sending."))
             // `CommandGuard.reviewNote`, in words (that one is shared with
             // the Windows build and compared by the harness).
-            + (dangerous.isEmpty ? "" : " " + (dangerous.count == 1
-                ? String(localized: "One of them can restart or erase the device.")
-                : String(localized: "\(dangerous.count) of them can restart or erase the device.")))
+            + (dangerous.isEmpty ? "" : " " + String(localized: "\(dangerous.count) of them can restart or erase the device."))
         alert.addButton(withTitle: String(localized: "Send Line by Line"))
         if allowImmediate { alert.markCaution(alert.addButton(withTitle: String(localized: "Paste Immediately"))) }
         alert.addButton(withTitle: String(localized: "Cancel"))
@@ -1274,7 +1272,7 @@ final class SessionTerminalHost {
     }
 
     private static func delayTitle(_ milliseconds: Int) -> String {
-        milliseconds >= 1_000 ? "\(milliseconds / 1_000) s" : "\(milliseconds) ms"
+        milliseconds >= 1_000 ? String(localized: "\(milliseconds / 1_000) s") : String(localized: "\(milliseconds) ms")
     }
 
     private static func byteCountText(_ count: Int) -> String {

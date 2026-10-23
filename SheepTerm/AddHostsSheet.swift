@@ -588,7 +588,7 @@ struct AddHostsSheet: View {
 
     private var addLabel: String {
         let count = usableRows.count
-        return count == 1 ? String(localized: "Add 1 Host") : String(localized: "Add \(count) Hosts")
+        return String(localized: "Add \(count) Hosts")
     }
 
     private var isValid: Bool {
@@ -797,13 +797,13 @@ struct AddHostsSheet: View {
         // "cleared" counts CELLS (a row that got a name while its old address
         // was emptied reports both), so the wording says cells.
         let filled = outcome.filled, cleared = outcome.cleared
-        let clearedCells = cleared == 1 ? String(localized: "1 cell cleared") : String(localized: "\(cleared) cells cleared")
+        let clearedCells = String(localized: "\(cleared) cells cleared")
         let pasted: String
         if filled > 0 {
-            pasted = (filled == 1 ? String(localized: "Pasted 1 row") : String(localized: "Pasted \(filled) rows"))
+            pasted = String(localized: "Pasted \(filled) rows")
                 + (cleared > 0 ? " · " + clearedCells : "")
         } else if cleared > 0 {
-            pasted = cleared == 1 ? String(localized: "Cleared 1 cell") : String(localized: "Cleared \(cleared) cells")
+            pasted = String(localized: "Cleared \(cleared) cells")
         } else {
             pasted = String(localized: "Nothing changed")
         }
@@ -944,15 +944,15 @@ struct AddHostsSheet: View {
         switch placed {
         case .rows(let count):
             if imported {
-                return count == 1 ? String(localized: "Imported 1 row") : String(localized: "Imported \(count) rows")
+                return String(localized: "Imported \(count) rows")
             }
-            return count == 1 ? String(localized: "Pasted 1 row") : String(localized: "Pasted \(count) rows")
+            return String(localized: "Pasted \(count) rows")
         case .column(let column, let count):
             let label = columnLabel(column)
             if imported {
-                return count == 1 ? String(localized: "Imported 1 \(label) value") : String(localized: "Imported \(count) \(label) values")
+                return String(localized: "Imported \(count) \(label) values")
             }
-            return count == 1 ? String(localized: "Pasted 1 \(label) value") : String(localized: "Pasted \(count) \(label) values")
+            return String(localized: "Pasted \(count) \(label) values")
         }
     }
 
@@ -1294,7 +1294,7 @@ struct AddHostsSheet: View {
         // reason used to be layout — NSAlert left-aligned long text; since
         // 4.2 (2) every alert is a SheepAlert that stays centred, so it is
         // only readability now.)
-        let message = group.map { added == 1 ? String(localized: "Added 1 host to “\($0)”.") : String(localized: "Added \(added) hosts to “\($0)”.") }
+        let message = group.map { String(localized: "Added \(added) hosts to “\($0)”.") }
             ?? String(localized: "No hosts were added.")
         // ONE line for everything, zeros left out, and the words kept short:
         // "4 filed · 2 existed · 1 repeated · 1 skipped." reads at a glance;
@@ -1305,8 +1305,7 @@ struct AddHostsSheet: View {
             // stays two words so the line stays one line.
             let alone = existed == 0 && repeated == 0 && skipped == 0
             counts.append(alone
-                          ? (filed.sections == 1 ? String(localized: "\(filed.hosts) filed under 1 section")
-                                                 : String(localized: "\(filed.hosts) filed under \(filed.sections) sections"))
+                          ? String(localized: "\(filed.hosts) filed under \(filed.sections) sections")
                           : String(localized: "\(filed.hosts) filed"))
         }
         if existed > 0 { counts.append(String(localized: "\(existed) existed")) }

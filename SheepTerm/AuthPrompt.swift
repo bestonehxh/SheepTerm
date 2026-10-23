@@ -213,7 +213,7 @@ struct AuthPromptView: View {
                     .keyboardShortcut(.cancelAction)
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
-                Button(secure ? "Connect" : "Continue") { completion(answer) }
+                Button(secure ? String(localized: "Connect") : String(localized: "Continue")) { completion(answer) }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)

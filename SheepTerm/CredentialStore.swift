@@ -195,7 +195,7 @@ final class CredentialStore: ObservableObject {
         // stores refuses instead, so this one does too.
         let sites = WebLoginKey.cleanedSites(websites)
         let credential = Credential(
-            name: cleaned.isEmpty ? "Unnamed Credential" : cleaned,
+            name: cleaned.isEmpty ? String(localized: "Unnamed Credential") : cleaned,
             username: username, websites: sites.isEmpty ? nil : sites)
         noteUserMutation()
         credentials.append(credential)

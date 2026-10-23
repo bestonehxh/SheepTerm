@@ -11,6 +11,7 @@ struct SettingsView: View {
     private enum Tab: Hashable { case general, ai }
     /// Always opens on General (the window keeps its view between openings).
     @State private var tab = Tab.general
+    @ObservedObject private var aiChrome = AIPanelChrome.shared
 
     var body: some View {
         TabView(selection: $tab) {
@@ -19,12 +20,14 @@ struct SettingsView: View {
                 .frame(width: 700, height: 500)
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(Tab.general)
-            // AI sizes to its content.
-            AISettingsView()
-                .frame(width: 700)
-                .fixedSize(horizontal: false, vertical: true)
-                .tabItem { Label("AI", systemImage: "sparkles") }
-                .tag(Tab.ai)
+            // AI sizes to its content. Gone with View ▸ AI Assistant off.
+            if aiChrome.enabled {
+                AISettingsView()
+                    .frame(width: 700)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .tabItem { Label("AI", systemImage: "sparkles") }
+                    .tag(Tab.ai)
+            }
         }
         .onAppear { tab = .general }
         .onDisappear { tab = .general }
@@ -48,8 +51,9 @@ struct GeneralSettingsView: View {
             Section("Language") {
                 Picker("App Language", selection: $appLanguage) {
                     Text("System Default").tag(AppLanguage.system)
-                    Text(verbatim: "English").tag(AppLanguage.english)
-                    Text(verbatim: "简体中文").tag(AppLanguage.simplifiedChinese)
+                    ForEach(AppLanguage.allCases.filter { $0 != .system }) { language in
+                        Text(verbatim: language.nativeName ?? language.rawValue).tag(language)
+                    }
                 }
                 .onChange(of: appLanguage) { _, language in
                     language.apply()

@@ -60,7 +60,13 @@ enum ShareLinkPlan {
 
     /// The share sheet's line for `jumpHostCount` (same words as SheepTerm for Windows); nil when no host uses one.
     static func jumpHostNote(_ count: Int) -> String? {
-        count == 0 ? nil : "\(count) host\(count == 1 ? " uses" : "s use") a jump host \u{2014} it is not shared."
+        // Two keys, not one plural key: the harness compares the singular
+        // wording and runs without the string catalog.
+        switch count {
+        case 0: return nil
+        case 1: return String(localized: "1 host uses a jump host \u{2014} it is not shared.")
+        default: return String(localized: "\(count) hosts use a jump host \u{2014} it is not shared.")
+        }
     }
 
     /// All or nothing, like SheepTerm for Windows: every password is stored BEFORE any credential exists; one refusal removes the

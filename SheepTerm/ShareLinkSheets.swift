@@ -114,7 +114,6 @@ struct ShareLinkSheet: View {
                 .disabled(logins == 0)
                 .help(logins == 0
                       ? String(localized: "None of the hosts in this group has a saved credential.")
-                      : logins == 1 ? String(localized: "Sends 1 saved login (username and password) with the group.")
                       : String(localized: "Sends \(logins) saved logins (username and password) with the group."))
             RevealableSecureField(title: "Share passphrase", text: $passphrase)
                 .help("At least \(ShareService.minimumPassphraseLength) characters. The link opens nothing without it. Tell the recipients by another route (phone, LINE) \u{2014} never together with the link.")
@@ -132,8 +131,7 @@ struct ShareLinkSheet: View {
         if let note = group.flatMap({ ShareLinkPlan.jumpHostNote(ShareLinkPlan.jumpHostCount($0)) }) {
             // The note is shared with Windows and compared by the harness; said here in words.
             let count = group.map { ShareLinkPlan.jumpHostCount($0) } ?? 0
-            Text(count == 1 ? String(localized: "1 host uses a jump host — it is not shared.")
-                            : String(localized: "\(count) hosts use a jump host — it is not shared."))
+            Text(String(localized: "\(count) hosts use a jump host — it is not shared."))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
         }
         if let error {
@@ -169,7 +167,7 @@ struct ShareLinkSheet: View {
             .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.warn).fixedSize(horizontal: false, vertical: true)
         HStack {
             Spacer()
-            Button(copied ? "Copied" : "Copy Link") {
+            Button(copied ? String(localized: "Copied") : String(localized: "Copy Link")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(link.url, forType: .string)
                 copied = true
@@ -277,8 +275,8 @@ struct ImportLinkSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             // Counted from the decoded group, not the envelope (the envelope is only the sender's claim).
             Text(name).font(.system(size: 14, weight: .semibold))
-            Text((hostCount == 1 ? String(localized: "1 host") : String(localized: "\(hostCount) hosts")) + " \u{00B7} "
-                 + (content.credentials == nil ? String(localized: "credentials not included") : String(localized: "credentials included")))
+            Text(content.credentials == nil ? String(localized: "\(hostCount) hosts · credentials not included")
+                                            : String(localized: "\(hostCount) hosts · credentials included"))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             Text("From \(content.sender)").font(.system(size: 12)).foregroundStyle(.secondary)
         }
@@ -296,10 +294,8 @@ struct ImportLinkSheet: View {
     }
 
     private static func importedText(_ done: ShareLinks.Imported) -> String {
-        let hosts = done.hostCount == 1 ? String(localized: "1 host") : String(localized: "\(done.hostCount) hosts")
-        guard done.loginCount > 0 else { return String(localized: "Imported “\(done.name)” — \(hosts).") }
-        let logins = done.loginCount == 1 ? String(localized: "1 credential") : String(localized: "\(done.loginCount) credentials")
-        return String(localized: "Imported “\(done.name)” — \(hosts), \(logins).")
+        guard done.loginCount > 0 else { return String(localized: "Imported “\(done.name)” — \(done.hostCount) hosts.") }
+        return String(localized: "Imported “\(done.name)” — \(done.hostCount) hosts, \(done.loginCount) credentials.")
     }
 
     @ViewBuilder private func importedView(_ done: ShareLinks.Imported) -> some View {
@@ -408,7 +404,7 @@ struct SharedLinksSheet: View {
 
     /// "3 hosts · with credentials · expires …" under a record.
     private static func summary(of record: ShareRecord) -> String {
-        var parts = [record.hostCount == 1 ? String(localized: "1 host") : String(localized: "\(record.hostCount) hosts")]
+        var parts = [String(localized: "\(record.hostCount) hosts")]
         if record.includesCredentials { parts.append(String(localized: "with credentials")) }
         parts.append(ShareLinkSheet.expiryText(record.expires))
         return parts.joined(separator: " \u{00B7} ")

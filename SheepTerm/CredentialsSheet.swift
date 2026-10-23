@@ -42,7 +42,7 @@ struct CredentialsSheet: View {
 
             let rows = PasswordsPlan.rows(credentialStore.credentials, query: query)
             if rows.isEmpty {
-                Text(credentialStore.credentials.isEmpty ? "No saved passwords yet" : "No match")
+                Text(credentialStore.credentials.isEmpty ? String(localized: "No saved passwords yet") : String(localized: "No match"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -175,8 +175,6 @@ struct CredentialsSheet: View {
         alert.messageText = String(localized: "Delete “\(credential.name)”?")
         alert.informativeText = count == 0
             ? String(localized: "It is not used by any saved host.")
-            : count == 1
-            ? String(localized: "1 saved host uses it — that host will ask for the password when connecting.")
             : String(localized: "\(count) saved hosts use it — those hosts will ask for the password when connecting.")
         alert.addButton(withTitle: String(localized: "Cancel"))
         alert.addButton(withTitle: String(localized: "Delete"))
@@ -225,12 +223,12 @@ struct CredentialEditSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(isNew ? "Add Password" : "Edit Password").font(.headline)
+            Text(isNew ? String(localized: "Add Password") : String(localized: "Edit Password")).font(.headline)
             Form {
                 TextField("Name", text: $name, prompt: Text("Lab FortiGate"))
                 TextField("Username", text: $username, prompt: Text("admin"))
                 RevealableSecureField(title: "Password", text: $password)
-                    .help(isNew ? "" : "Leave empty to keep the saved password")
+                    .help(isNew ? "" : String(localized: "Leave empty to keep the saved password"))
                 TextField("Websites", text: $sites, prompt: Text("192.168.225.39"), axis: .vertical)
                     .lineLimit(1...4)
                     .help("One per line — a bare address means https")

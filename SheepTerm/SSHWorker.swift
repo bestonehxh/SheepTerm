@@ -1721,22 +1721,22 @@ nonisolated final class SSHWorker: Sendable {
         let fd = open(path, O_RDWR | O_CLOEXEC)
         guard fd >= 0 else {
             let e = errno
-            return .failed(e == ENOENT ? "\(name) no longer exists — nothing was changed."
-                : "cannot open \(name) for writing (\(String(cString: strerror(e)))) — nothing was changed.")
+            return .failed(e == ENOENT ? String(localized: "\(name) no longer exists — nothing was changed.")
+                : String(localized: "cannot open \(name) for writing (\(String(cString: strerror(e)))) — nothing was changed."))
         }
         defer { close(fd) }
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
-            return .failed("\(name) is not a regular file — nothing was changed.")
+            return .failed(String(localized: "\(name) is not a regular file — nothing was changed."))
         }
         let (locked, timedOut) = lockKnownHostsFile(fd)
         defer { if locked { _ = flock(fd, LOCK_UN) } }
         guard !timedOut else {
-            return .failed("another program holds \(name) locked — nothing was changed. Try again in a moment.")
+            return .failed(String(localized: "another program holds \(name) locked — nothing was changed. Try again in a moment."))
         }
         return pinLock.withLock { _ -> KnownHostsRemoval in
             guard let original = readKnownHosts(fd, from: 0) else {
-                return .failed("cannot read \(name) — nothing was changed.")
+                return .failed(String(localized: "cannot read \(name) — nothing was changed."))
             }
             let doomed = KnownHostsEditor.lineIndices(holding: identities, in: original)
             guard !doomed.isEmpty else { return .removed(0) }
@@ -1745,10 +1745,10 @@ nonisolated final class SSHWorker: Sendable {
             let backupPath = path + knownHostsBackupSuffix
             let backupName = (backupPath as NSString).abbreviatingWithTildeInPath
             if let why = writeKnownHostsBackup(original, to: backupPath) {
-                return .failed("could not write the backup \(backupName) (\(why)) — nothing was changed.")
+                return .failed(String(localized: "could not write the backup \(backupName) (\(why)) — nothing was changed."))
             }
             if let why = writeKnownHosts(fd, updated, at: 0) {
-                return .failed("writing \(name) failed (\(why)); its previous contents are in \(backupName).")
+                return .failed(String(localized: "writing \(name) failed (\(why)); its previous contents are in \(backupName)."))
             }
             // OpenSSH's ssh appends without flock: bytes it added after our
             // read sit past `original.count`, untouched by the shorter write
@@ -1757,13 +1757,12 @@ nonisolated final class SSHWorker: Sendable {
             if fstat(fd, &now) == 0, Int(now.st_size) > original.count,
                let tail = readKnownHosts(fd, from: original.count), !tail.isEmpty {
                 if let why = writeKnownHosts(fd, tail, at: updated.count) {
-                    return .failed("writing \(name) failed (\(why)); its previous contents are in \(backupName).")
+                    return .failed(String(localized: "writing \(name) failed (\(why)); its previous contents are in \(backupName)."))
                 }
                 updated += tail
             }
             guard ftruncate(fd, off_t(updated.count)) == 0 else {
-                return .failed("truncating \(name) failed (\(String(cString: strerror(errno)))); "
-                    + "its previous contents are in \(backupName).")
+                return .failed(String(localized: "truncating \(name) failed (\(String(cString: strerror(errno)))); its previous contents are in \(backupName)."))
             }
             _ = fsync(fd)
             return .removed(doomed.count)
@@ -2200,7 +2199,7 @@ nonisolated final class SSHWorker: Sendable {
                             } else if passwordToSave != nil {
                                 // A round already failed with it: this prompt
                                 // wants something else (a second backend).
-                                let display = prompt.text.isEmpty ? "Password for \(config.username)@\(config.host)" : prompt.text
+                                let display = prompt.text.isEmpty ? String(localized: "Password for \(config.username)@\(config.host)") : prompt.text
                                 guard let entered = askChallenge(display, secure: true) else {
                                     authCancelled = true
                                     return false
@@ -2213,7 +2212,7 @@ nonisolated final class SSHWorker: Sendable {
                             }
                         } else {
                             let display = prompt.text.isEmpty
-                                ? "Authentication challenge for \(config.username)@\(config.host)"
+                                ? String(localized: "Authentication challenge for \(config.username)@\(config.host)")
                                 : prompt.text
                             guard let entered = askChallenge(display, secure: !prompt.echo) else {
                                 authCancelled = true

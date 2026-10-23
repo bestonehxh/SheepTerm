@@ -298,30 +298,48 @@ nonisolated enum CommandHistoryFile {
             raw = try Data(contentsOf: url)
         } catch {
             if (error as? CocoaError)?.code == .fileReadTooLarge {
-                return quarantine(url, reason: String(localized: "was larger than \(CommandHistory.maxFileBytes / 1_048_576) MB"), stamp: stamp)
+                return quarantine(url, reason: .tooLarge(CommandHistory.maxFileBytes / 1_048_576), stamp: stamp)
             }
-            let warning = String(localized: "\(url.lastPathComponent) could not be read (\(error.localizedDescription)).") + " "
-                + String(localized: "Command history starts empty and the file will not be overwritten until you clear history.")
+            let warning = String(localized: "\(url.lastPathComponent) could not be read (\(error.localizedDescription)). Command history starts empty and the file will not be overwritten until you clear history.")
             return Loaded(data: .init(), warning: warning, suppressWrites: true)
         }
         guard let decoded = try? JSONDecoder.history.decode(CommandHistoryData.self, from: raw) else {
-            return quarantine(url, reason: String(localized: "was unreadable"), stamp: stamp)
+            return quarantine(url, reason: .unreadable, stamp: stamp)
         }
         return Loaded(data: CommandHistory.normalised(decoded), warning: nil, suppressWrites: false)
     }
 
-    private static func quarantine(_ url: URL, reason: String, stamp: () -> String) -> Loaded {
+    private enum QuarantineReason {
+        case tooLarge(Int)   // the cap, in MB
+        case unreadable
+    }
+
+    // One whole sentence per reason, so a translator never sees a fragment.
+    private static func quarantine(_ url: URL, reason: QuarantineReason, stamp: () -> String) -> Loaded {
         let aside = url.appendingPathExtension("corrupt-\(stamp())")
+        let name = url.lastPathComponent
         do {
             try FileManager.default.moveItem(at: url, to: aside)
         } catch {
-            let warning = String(localized: "\(url.lastPathComponent) \(reason) and could not be moved aside (\(error.localizedDescription)).") + " "
-                + String(localized: "Command history starts empty and the file will not be overwritten until you clear history.")
+            let why = error.localizedDescription
+            let warning: String
+            switch reason {
+            case .tooLarge(let mb):
+                warning = String(localized: "\(name) was larger than \(mb) MB and could not be moved aside (\(why)). Command history starts empty and the file will not be overwritten until you clear history.")
+            case .unreadable:
+                warning = String(localized: "\(name) was unreadable and could not be moved aside (\(why)). Command history starts empty and the file will not be overwritten until you clear history.")
+            }
             return Loaded(data: .init(), warning: warning, suppressWrites: true)
         }
-        return Loaded(data: .init(),
-                      warning: String(localized: "history.json \(reason); the original was preserved as \(aside.lastPathComponent) and command history starts empty."),
-                      suppressWrites: false)
+        let kept = aside.lastPathComponent
+        let warning: String
+        switch reason {
+        case .tooLarge(let mb):
+            warning = String(localized: "history.json was larger than \(mb) MB; the original was preserved as \(kept) and command history starts empty.")
+        case .unreadable:
+            warning = String(localized: "history.json was unreadable; the original was preserved as \(kept) and command history starts empty.")
+        }
+        return Loaded(data: .init(), warning: warning, suppressWrites: false)
     }
 
     /// Atomic write. With `backup`, the file on disk is first copied to `.bak`.

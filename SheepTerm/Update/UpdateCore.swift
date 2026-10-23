@@ -216,7 +216,7 @@ nonisolated enum UpdateCore {
     /// "3.2 of 9.8 MB" for the progress panel; "3.2 MB" when the total is unknown.
     static func megabytes(_ got: Int64, of total: Int64) -> String {
         func mb(_ n: Int64) -> String { String(format: "%.1f", Double(n) / 1_048_576) }
-        return total > 0 ? "\(mb(got)) of \(mb(total)) MB" : "\(mb(got)) MB"
+        return total > 0 ? String(localized: "\(mb(got)) of \(mb(total)) MB") : String(localized: "\(mb(got)) MB")
     }
 
     // MARK: UserDefaults keys (the app's own domain, so no prefix is needed)
@@ -444,7 +444,7 @@ nonisolated enum UpdateCore {
         if lines.count > maxLines { lines = Array(lines.prefix(maxLines)); truncated = true }
         var text = lines.joined(separator: "\n")
         if text.count > maxCharacters { text = String(text.prefix(maxCharacters)); truncated = true }
-        if truncated { text += "\n… (the full notes are on the release page)" }
+        if truncated { text += "\n" + String(localized: "… (the full notes are on the release page)") }
         return text
     }
 
@@ -492,39 +492,39 @@ nonisolated enum UpdateCore {
                                  current: UpdateVersion, advertised: UpdateVersion,
                                  fileManager: FileManager = .default) throws(UpdateError) -> URL {
         guard let entries = try? fileManager.contentsOfDirectory(atPath: dir.path) else {
-            throw .badArchive("it could not be unpacked")
+            throw .badArchive(String(localized: "it could not be unpacked"))
         }
         let expected = config.appName + ".app"
         guard entries == [expected] else {
-            throw .badArchive("expected only \(expected) inside, found \(entries.sorted().prefix(5).joined(separator: ", "))")
+            throw .badArchive(String(localized: "expected only \(expected) inside, found \(entries.sorted().prefix(5).joined(separator: ", "))"))
         }
         let app = dir.appendingPathComponent(expected, isDirectory: true)
         guard let type = try? fileManager.attributesOfItem(atPath: app.path)[.type] as? FileAttributeType,
               type == .typeDirectory else {
-            throw .badArchive("\(expected) is not a folder")
+            throw .badArchive(String(localized: "\(expected) is not a folder"))
         }
         let plistURL = app.appendingPathComponent("Contents/Info.plist")
         guard let plistData = try? Data(contentsOf: plistURL),
               let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
-        else { throw .badArchive("it has no readable Info.plist") }
+        else { throw .badArchive(String(localized: "it has no readable Info.plist")) }
         guard plist["CFBundleIdentifier"] as? String == bundleIdentifier else {
-            throw .badArchive("it is a different app (\(plist["CFBundleIdentifier"] as? String ?? "no identifier"))")
+            throw .badArchive(String(localized: "it is a different app (\(plist["CFBundleIdentifier"] as? String ?? String(localized: "no identifier")))"))
         }
         guard let version = currentVersion(shortVersion: plist["CFBundleShortVersionString"] as? String,
                                            bundleVersion: plist["CFBundleVersion"] as? String,
                                            scheme: config.tagScheme)
-        else { throw .badArchive("its version cannot be read") }
+        else { throw .badArchive(String(localized: "its version cannot be read")) }
         guard isNewer(version, than: current, scheme: config.tagScheme) else {
-            throw .badArchive("it is \(version), not newer than \(current)")
+            throw .badArchive(String(localized: "it is \(version.description), not newer than \(current.description)"))
         }
         var sameAsAdvertised = compareDotted(version.marketing, advertised.marketing) == .orderedSame
         if config.tagScheme == .build { sameAsAdvertised = sameAsAdvertised && version.build == advertised.build }
         guard sameAsAdvertised else {
-            throw .badArchive("it is \(version), but the release says \(advertised)")
+            throw .badArchive(String(localized: "it is \(version.description), but the release says \(advertised.description)"))
         }
         guard let exe = plist["CFBundleExecutable"] as? String,
               fileManager.isExecutableFile(atPath: app.appendingPathComponent("Contents/MacOS/\(exe)").path)
-        else { throw .badArchive("it has no executable") }
+        else { throw .badArchive(String(localized: "it has no executable")) }
         return app
     }
 

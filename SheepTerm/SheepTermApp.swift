@@ -167,9 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !live.isEmpty else { return .nothingToAsk }
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = live.count == 1
-            ? String(localized: "Quit SheepTerm? One session is still open.")
-            : String(localized: "Quit SheepTerm? \(live.count) sessions are still open.")
+        alert.messageText = String(localized: "Quit SheepTerm? \(live.count) sessions are still open.")
         let names = live.prefix(8).map { "• \($0.title)" }.joined(separator: "\n")
         let more = live.count > 8 ? "\n• " + String(localized: "and \(live.count - 8) more") : ""
         alert.informativeText = (live.count == 1 ? String(localized: "Quitting closes it right away.")
@@ -472,10 +470,16 @@ struct SheepTermCommands: Commands {
                 Label("Toggle Sidebar", systemImage: "sidebar.leading")
             }
             .keyboardShortcut("0", modifiers: .command)
-            Toggle(isOn: Binding(get: { aiPanel.shown }, set: { _ in aiPanel.toggle() })) {
-                Label("Show AI Panel", systemImage: "sidebar.trailing")
+            // AI Assistant off: no panel item and no ⌥⌘A at all.
+            if aiPanel.enabled {
+                Toggle(isOn: Binding(get: { aiPanel.shown }, set: { _ in aiPanel.toggle() })) {
+                    Label("Show AI Panel", systemImage: "sidebar.trailing")
+                }
+                .keyboardShortcut("a", modifiers: [.command, .option])
             }
-            .keyboardShortcut("a", modifiers: [.command, .option])
+            Toggle(isOn: $aiPanel.enabled) {
+                Label("AI Assistant", systemImage: "sparkles")
+            }
             Button {
                 model.showReorderGroups = true
             } label: {
@@ -591,7 +595,7 @@ struct SheepTermCommands: Commands {
                 Button("Smaller") { model.stepSize(-1) }
                     .keyboardShortcut("-", modifiers: .command)
                 // On a web tab these three zoom the page (Safari's), so the last one says so.
-                Button(model.selectedWebController != nil ? "Actual Size" : "Default Size (\(Int(Theme.defaultFontSize)) pt)") {
+                Button(model.selectedWebController != nil ? String(localized: "Actual Size") : String(localized: "Default Size (\(Int(Theme.defaultFontSize)) pt)")) {
                     model.stepSize(0)
                 }
                 Divider()

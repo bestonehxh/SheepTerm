@@ -96,7 +96,7 @@ struct RevealableSecureField: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help(revealed ? "Hide password" : "Show password")
+                .help(revealed ? String(localized: "Hide password") : String(localized: "Show password"))
             }
             if hasNonASCII {
                 // The value is kept as pasted — only warned about, never

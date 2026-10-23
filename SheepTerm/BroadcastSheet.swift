@@ -137,7 +137,7 @@ struct BroadcastSheet: View {
     }
 
     private static func sentReport(_ count: Int) -> String {
-        count == 1 ? String(localized: "Sent to 1 tab") : String(localized: "Sent to \(count) tabs")
+        String(localized: "Sent to \(count) tabs")
     }
 
     /// Confirm Dangerous Commands, once for every ticked tab instead of a
@@ -153,7 +153,7 @@ struct BroadcastSheet: View {
               CommandGuard.isDangerous(line, anyOf: vendors.isEmpty ? [.auto] : vendors) else { return false }
         let alert = SheepAlert()
         alert.alertStyle = .warning
-        alert.messageText = tabs == 1 ? String(localized: "Send to 1 tab?") : String(localized: "Send to \(tabs) tabs?")
+        alert.messageText = String(localized: "Send to \(tabs) tabs?")
         alert.informativeText = line
         alert.addButton(withTitle: String(localized: "Cancel"))   // default: Return cancels
         alert.addButton(withTitle: String(localized: "Send")).hasDestructiveAction = true

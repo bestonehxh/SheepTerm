@@ -82,7 +82,7 @@ struct WebHostSheet: View {
                 HostKindSwitch(kind: kindSwitch)
             }
             Form {
-                TextField("Name", text: $name, prompt: Text(isEditing ? "" : "optional"))
+                TextField("Name", text: $name, prompt: Text(isEditing ? "" : String(localized: "optional")))
                     .formRow("Name")
                 TextField("URL", text: $url, prompt: Text(verbatim: "https://10.0.0.1"))
                     .formRow("URL")

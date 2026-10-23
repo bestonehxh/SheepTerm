@@ -426,6 +426,16 @@ struct TopBarView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
             healFullScreen(from: note)
         }
+        // The spacer only shows with the sidebar closed, so a fullscreen flag
+        // left stale by a transition that never finished (no did*/resize
+        // after it) put the tab bar under the traffic lights exactly when the
+        // sidebar folded (a user report, 5.0 (46); not reproduced here).
+        // Re-read the window itself at that moment.
+        .onChange(of: model.sidebarShown) { _, _ in
+            guard let hostWindow else { return }
+            let actual = hostWindow.styleMask.contains(.fullScreen)
+            if actual != isFullScreen { isFullScreen = actual }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { note in
             healFullScreen(from: note)
         }

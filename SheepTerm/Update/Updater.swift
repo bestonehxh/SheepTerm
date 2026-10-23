@@ -542,13 +542,16 @@ final class Updater {
     /// soon as it has started, while the helper waits for this app to quit.
     /// 0 = started; anything else = cancelled or refused.
     nonisolated private static func runAsAdmin(_ arguments: [String], uid: uid_t, appName: String) async -> Int32 {
+        // The prompt goes inside an AppleScript string literal: a translation's own quotes are escaped.
+        let prompt = String(localized: "\(appName) wants to install its update in Applications.")
+            .replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         let source = """
         on run argv
             set cmd to "SHEEP_UPDATE_AS_USER=\(uid) PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh"
             repeat with a in argv
                 set cmd to cmd & " " & quoted form of (a as text)
             end repeat
-            do shell script cmd & " </dev/null >/dev/null 2>&1 &" with prompt "\(appName) wants to install its update in Applications." with administrator privileges
+            do shell script cmd & " </dev/null >/dev/null 2>&1 &" with prompt "\(prompt)" with administrator privileges
         end run
         """
         return await run("/usr/bin/osascript", ["-e", source] + arguments)

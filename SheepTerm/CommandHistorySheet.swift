@@ -48,7 +48,7 @@ struct CommandHistorySheet: View {
                 .onChange(of: query) { selection = 0 }
 
             if lines.isEmpty {
-                Text(all.isEmpty ? "Nothing recorded for this host yet" : "No match")
+                Text(all.isEmpty ? String(localized: "Nothing recorded for this host yet") : String(localized: "No match"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)

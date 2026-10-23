@@ -66,7 +66,7 @@ nonisolated struct PlantedClipboard: Equatable, Sendable {
             }
             if shown >= limit {
                 let rest = scalars[index...].count
-                out += "… (+\(rest) more)"
+                out += String(localized: "… (+\(rest) more)")
                 return out
             }
             out += piece

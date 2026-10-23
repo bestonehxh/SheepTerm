@@ -40,7 +40,7 @@ struct SnippetsSheet: View {
 
             Divider()
 
-            Text(editing == nil ? "Add Snippet" : "Edit “\(editing!.name)”")
+            Text(editing == nil ? String(localized: "Add Snippet") : String(localized: "Edit “\(editing!.name)”"))
                 .font(.subheadline.weight(.semibold))
             Form {
                 TextField("Name", text: $name, prompt: Text("Interface summary"))
@@ -56,7 +56,7 @@ struct SnippetsSheet: View {
                     Button("Cancel Edit") { clearForm() }
                 }
                 Spacer()
-                Button(editing == nil ? "Add" : "Save") { commit() }
+                Button(editing == nil ? String(localized: "Add") : String(localized: "Save")) { commit() }
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
