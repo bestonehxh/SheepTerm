@@ -58,6 +58,14 @@ All translations live in one Xcode String Catalog (`SheepTerm/Localization/Local
 
 ## Install
 
+**Homebrew:**
+
+```bash
+brew install --cask bestonehxh/tap/sheepterm
+```
+
+**Or manually:**
+
 1. Download `SheepTerm-5.0-47.dmg`, open it and drag **SheepTerm** onto **Applications** (already installed? choose **Replace**).
 2. Signed with Developer ID and notarized by Apple: it opens like any other app.
 3. Updates are built in and verified with an Ed25519 signature.
