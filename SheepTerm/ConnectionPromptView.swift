@@ -167,6 +167,9 @@ final class ConnectionCardModel: ObservableObject {
 
     /// The stage track: SSH's five nodes, or a web tab's three (`webTrack`).
     @Published var webTrack = false
+    /// A Files tab's track (`FilesPlan.cardNodes`): the SSH nodes with
+    /// "Files" last, fewer for FTP / TFTP. nil = not a Files tab.
+    @Published var filesTrack: [FilesPlan.CardNode]?
 
     func escape() {
         switch page {
@@ -371,6 +374,9 @@ struct ConnectionCardContent: View {
                 .frame(minHeight: Self.titlesHeight, alignment: .top)
             if model.webTrack {
                 StageTrack(nodes: StageTrack.webNodes, current: model.stage == .connect ? 0 : 1, failed: isFailure)
+            } else if let nodes = model.filesTrack {
+                StageTrack(nodes: nodes.map(StageTrack.node(for:)),
+                           current: FilesPlan.cardIndex(model.stage, in: nodes), failed: isFailure)
             } else {
                 StageTrack(current: model.stage, failed: isFailure)
             }
@@ -888,6 +894,19 @@ struct StageTrack: View {
                            Node(label: String(localized: "Certificate"), symbol: "key.fill"),
                            Node(label: String(localized: "Page"), symbol: "globe")]
 
+    /// A Files tab's node: the SSH stage's own, "Files" for the last.
+    static func node(for files: FilesPlan.CardNode) -> Node {
+        let stage: ConnectionStage
+        switch files {
+        case .connect: stage = .connect
+        case .hostKey: stage = .hostKey
+        case .user: stage = .user
+        case .password: stage = .password
+        case .files: return Node(label: String(localized: "Files"), symbol: "folder.fill")
+        }
+        return Node(label: stage.localizedLabel, symbol: stage.symbol)
+    }
+
     let nodes: [Node]
     let current: Int
     let failed: Bool
@@ -988,6 +1007,30 @@ final class ConnectionCardPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
+
+    /// While the card has the keyboard here, a click in the window it floats
+    /// over hands the keyboard back FIRST, so that click lands (a tab chip,
+    /// a button): it took two clicks — the first only made the window key
+    /// (the user, 6.0 (2)). Every tab that uses the panel (SSH, Telnet,
+    /// serial, Files) gets it here.
+    private var clickMonitor: Any?
+
+    override func becomeKey() {
+        super.becomeKey()
+        guard clickMonitor == nil else { return }
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            if let self, let target = event.window, target !== self, target === self.parent, !target.isKeyWindow {
+                target.makeKey()
+            }
+            return event
+        }
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        clickMonitor = nil
+    }
 
     /// The close button is the card's Close (Escape), never a bare close.
     override func performClose(_ sender: Any?) { onClose?() }

@@ -1408,7 +1408,7 @@ extension TerminalView {
         guard let contents else { return nil }
         let object = contents as AnyObject
         guard CFGetTypeID(object) == IOSurfaceGetTypeID() else { return nil }
-        let surface = unsafeBitCast(object, to: IOSurfaceRef.self) as IOSurface
+        let surface = unsafeDowncast(object, to: IOSurface.self)
         // The frames are BGRA in sRGB (the layer's `colorspace`): copied
         // byte for byte, tagged sRGB, never colour-managed in between.
         let w = surface.width, h = surface.height, row = surface.bytesPerRow

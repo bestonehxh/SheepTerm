@@ -19,6 +19,9 @@ struct SSHConfig: Sendable {
     /// Reach the host through this bastion (ProxyJump, `SheepJump`);
     /// nil = straight there.
     var jump: JumpHop? = nil
+    /// Port forwards opened once the shell is up (5.0 (49)): loopback
+    /// listeners whose connections ride this session (`PortForwarder`).
+    var forwards: [ForwardRule] = []
 }
 
 nonisolated extension JumpHop {
@@ -35,6 +38,13 @@ nonisolated extension JumpHop {
 /// every call into them happens on that queue; the UI talks to this class
 /// only through the locked buffers and the callback closures.
 nonisolated final class SSHWorker: Sendable {
+    /// The terminal's input moves into its channel while the backlog is
+    /// under this (see the ioLoop).
+    static let channelHighWater = 256 * 1024
+    /// What Files-tab bridges may leave unsent on the shared socket: two
+    /// packets below the terminal's line, so typing always has room.
+    static let bridgeUnsentLimit = channelHighWater - 2 * SSHConnection.maxPacket
+
     private let queue = DispatchQueue(label: "sheepterm.ssh.session")
     private struct State: Sendable {
         var pendingWrites = ByteQueue()
@@ -50,6 +60,10 @@ nonisolated final class SSHWorker: Sendable {
         var running = false
         /// Write end of the self-pipe; -1 when the loop isn't up.
         var wakeFD: Int32 = -1
+        /// True while the interactive loop runs: only then can a Files tab
+        /// ride this connection (`openChannelBridge`).
+        var interactive = false
+        var bridges: [SSHChannelBridge] = []
         /// Set when input was discarded because the buffer is full; cleared
         /// by the next accepted write, so one stall produces one notice.
         var writeOverflowNotified = false
@@ -61,6 +75,10 @@ nonisolated final class SSHWorker: Sendable {
         var onInputDiscarded: (@Sendable () -> Void)?
         var onStatus: (@Sendable (String) -> Void)?
         var onClosed: (@Sendable (String) -> Void)?
+        /// Each port forward's state, whenever it changes (5.0 (53)).
+        var onForwards: (@Sendable ([ForwardStatus]) -> Void)?
+        /// Forwards to stop or restart, asked from the status bar menu.
+        var pendingForwardToggles: [(ForwardRule, Bool)] = []
         var passwordPrompt: PasswordPrompt?
         var challengePrompt: ChallengePrompt?
         var usernamePrompt: (@Sendable (String) -> String?)?
@@ -142,6 +160,25 @@ nonisolated final class SSHWorker: Sendable {
     var onStatus: (@Sendable (String) -> Void)? {
         get { state.withLock { $0.onStatus } }
         set { state.withLock { $0.onStatus = newValue } }
+    }
+    /// Every forward's state (listening, live connections) when it changes;
+    /// an empty list once the session is over. Worker queue.
+    var onForwards: (@Sendable ([ForwardStatus]) -> Void)? {
+        get { state.withLock { $0.onForwards } }
+        set { state.withLock { $0.onForwards = newValue } }
+    }
+
+    /// Stops or restarts one forward of the live session (taken by the I/O
+    /// loop on its next pass). A no-op when no session is up.
+    func setForward(_ rule: ForwardRule, enabled: Bool) {
+        state.withLock { state in
+            guard state.running else { return }
+            state.pendingForwardToggles.append((rule, enabled))
+            if state.wakeFD >= 0 {
+                var byte: UInt8 = 0
+                _ = Darwin.write(state.wakeFD, &byte, 1)
+            }
+        }
     }
     var onClosed: (@Sendable (String) -> Void)? {
         get { state.withLock { $0.onClosed } }
@@ -313,6 +350,23 @@ nonisolated final class SSHWorker: Sendable {
         }
     }
 
+    /// The shell is up and a Files tab may ride this connection.
+    var isInteractive: Bool { state.withLock { $0.running && $0.interactive } }
+
+    /// A Files tab's way onto this session's connection (SFTP / SCP as a
+    /// second channel — no second login). Nil unless the session is up.
+    /// Opens nothing by itself: the engine asks for every channel.
+    func openChannelBridge() -> SSHChannelBridge? {
+        state.withLock { s in
+            guard s.running, s.interactive, s.wakeFD >= 0 else { return nil }
+            s.bridges.removeAll { $0.lost != nil }
+            guard s.bridges.count < 4 else { return nil }
+            let bridge = SSHChannelBridge(workerWake: s.wakeFD)
+            s.bridges.append(bridge)
+            return bridge
+        }
+    }
+
     /// False once `stop()` was called (tab closed, quit) or the session
     /// ended. The app's in-tab prompts poll it so a worker blocked on a
     /// question is freed even if no card ever answers (`PromptBridge`).
@@ -413,7 +467,8 @@ nonisolated final class SSHWorker: Sendable {
 
     /// Why the handshake (TCP, key exchange, host key) did not produce a
     /// session. `.stopped` means the tab closed — nothing is reported.
-    nonisolated private enum HandshakeFailure: Error {
+    /// Internal, not private: TelnetWorker connects through `openTCP` too.
+    nonisolated enum HandshakeFailure: Error {
         case stopped
         case negotiation(String)
         case message(String)
@@ -628,6 +683,24 @@ nonisolated final class SSHWorker: Sendable {
             return
         }
 
+        // Port forwards: listeners on 127.0.0.1 only, bound once the shell is
+        // up (a refused login must not have opened ports). A port that will
+        // not bind is said in the tab; the others still start.
+        // Remote forwards (-R) are asked of the server here too; its answers
+        // arrive in the I/O loop and are said there.
+        var portForwarder: PortForwarder?
+        if !config.forwards.isEmpty {
+            let forwarder = PortForwarder(rules: config.forwards)
+            let started = forwarder.start()
+            for message in forwarder.takeNotices() { notice(message) }
+            if !started.isEmpty {
+                notice("forwarding " + started.map(\.label).joined(separator: ", ") + " (127.0.0.1)")
+            }
+            let asked = (try? forwarder.requestRemote(connection: connection)) ?? []
+            if !started.isEmpty || !asked.isEmpty { portForwarder = forwarder }
+        }
+        defer { portForwarder?.closeAll() }
+
         // Only now is the session actually usable — reporting "Connected"
         // before the shell is granted would lie on VTY-full devices.
         let negotiated = link.transport.negotiated
@@ -637,13 +710,20 @@ nonisolated final class SSHWorker: Sendable {
         if let hop = config.jump { status += " · via \(hop.label)" }
         if usedLegacy { status += " · LEGACY" }
         if forwarder != nil { status += " · agent" }
+        // Local listeners now, plus every -R asked (the server's answer is a notice).
+        if let portForwarder {
+            status += " · fwd \(portForwarder.listening.count + portForwarder.rules.filter(\.isRemote).count)"
+        }
+        // From "Connected" on a Files tab may ride this connection; its
+        // commands wait for the I/O loop (and hear the end if it never runs).
+        state.withLock { $0.interactive = true }
         onStatus?(status)
 
         // Output that arrived while the pty/shell replies were awaited (a
         // device that prints its prompt before answering) is not lost.
         var endedDuringSetup = false
         for event in pending {
-            deliver(event, channel: channel, forwarder: forwarder, connection: connection)
+            deliver(event, channel: channel, forwarder: forwarder, ports: portForwarder, connection: connection)
             // A VTY-full device can grant the shell, print "All lines busy"
             // and close in the same read: that is a normal end, not a drop.
             switch event {
@@ -664,7 +744,15 @@ nonisolated final class SSHWorker: Sendable {
 
         let failure = endedDuringSetup ? nil
             : ioLoop(link: link, connection: connection, channel: channel, pipeRead: pipeRead,
-                     forwarder: forwarder, watcher: pathWatcher)
+                     forwarder: forwarder, ports: portForwarder, watcher: pathWatcher)
+        // Files tabs riding this connection hear it is over — before the
+        // self-pipe they poke is closed (an earlier defer).
+        let bridges = state.withLock { s -> [SSHChannelBridge] in
+            s.interactive = false
+            defer { s.bridges.removeAll() }
+            return s.bridges
+        }
+        for bridge in bridges { bridge.end("the terminal session ended") }
 
         if connection.isOpen(channel) {
             try? connection.sendEOF(channel)
@@ -906,7 +994,7 @@ nonisolated final class SSHWorker: Sendable {
             case .success(let socket): fd = socket
             case .failure(let failure): return .failure(failure)
             }
-            enableTCPKeepalive(on: fd)
+            Self.enableTCPKeepalive(on: fd)
         }
 
         let refusal = RefusalBox()
@@ -1105,7 +1193,22 @@ nonisolated final class SSHWorker: Sendable {
         }
     }
 
-    private static func openTCP(host: String, port: Int, deadline: ContinuousClock.Instant,
+    /// `openTCP` for the app's other SSH clients (the Files tab's
+    /// `SFTPClient`): the same resolver, address walk and deadline, with the
+    /// failure as plain text — nil = stopped (`isRunning` went false).
+    nonisolated struct TCPOpenFailure: Error, Sendable { let message: String? }
+    static func openTCPSocket(host: String, port: Int, deadline: ContinuousClock.Instant,
+                              isRunning: () -> Bool) -> Result<Int32, TCPOpenFailure> {
+        switch openTCP(host: host, port: port, deadline: deadline, isRunning: isRunning) {
+        case .success(let fd): return .success(fd)
+        case .failure(.message(let why)), .failure(.negotiation(let why)), .failure(.hostKey(let why)):
+            return .failure(TCPOpenFailure(message: why))
+        case .failure(.stopped): return .failure(TCPOpenFailure(message: nil))
+        }
+    }
+
+    /// Shared with `TelnetWorker` — one connect path for every TCP session.
+    static func openTCP(host: String, port: Int, deadline: ContinuousClock.Instant,
                                 isRunning: () -> Bool) -> Result<Int32, HandshakeFailure> {
         let list: UnsafeMutablePointer<addrinfo>
         switch resolve(host: host, port: port, deadline: deadline, isRunning: isRunning) {
@@ -2374,7 +2477,42 @@ nonisolated final class SSHWorker: Sendable {
 
     // MARK: Interactive phase
 
-    private func deliver(_ event: SSHConnection.Event, channel: UInt32, forwarder: AgentForwarder?, connection: SSHConnection) {
+    private func deliver(_ event: SSHConnection.Event, channel: UInt32, forwarder: AgentForwarder?,
+                         ports: PortForwarder?, connection: SSHConnection) {
+        // A Files tab's channel events are its bridge's.
+        if let id = SSHChannelBridge.channel(of: event), id != channel,
+           let bridge = state.withLock({ $0.bridges.first { $0.owns(id) } }) {
+            bridge.deliver(event, connection: connection)
+            return
+        }
+        // A port-forward channel's events are the port forwarder's.
+        if let ports {
+            switch event {
+            case .channelOpened(let id) where ports.owns(id):
+                try? ports.channelOpened(id, connection: connection)
+                return
+            case .channelOpenFailed(let id, let reason, let description) where ports.owns(id):
+                ports.channelOpenFailed(id, reason: reason, description: description)
+                return
+            case .data(let id, let bytes) where ports.owns(id):
+                try? ports.received(id, bytes, connection: connection)
+                return
+            case .remoteForwardReply(let token, let success, let port):
+                ports.remoteForwardReply(token: token, success: success, port: port)
+                return
+            case .forwardedChannelOpened(let id, _, let port, _, _):
+                try? ports.forwardedChannelOpened(id, port: port, connection: connection)
+                return
+            case .eof(let id) where ports.owns(id):
+                ports.channelEOF(id)
+                return
+            case .closed(let id) where ports.owns(id):
+                ports.channelClosed(id)
+                return
+            default:
+                break
+            }
+        }
         switch event {
         case .data(let id, let bytes) where id == channel:
             onData?(bytes)
@@ -2414,7 +2552,7 @@ nonisolated final class SSHWorker: Sendable {
     /// sockets, so typing has zero added latency while idle wakeups stay at
     /// 1/sec.
     private func ioLoop(link: SSHLink, connection: SSHConnection, channel: UInt32, pipeRead: Int32,
-                        forwarder: AgentForwarder?, watcher: SessionPathWatcher) -> LoopFailure? {
+                        forwarder: AgentForwarder?, ports: PortForwarder?, watcher: SessionPathWatcher) -> LoopFailure? {
         // ContinuousClock, not Date: these are internal deadlines, and a wall
         // clock can jump (NTP, time zone, a laptop lid closed and reopened).
         let clock = ContinuousClock()
@@ -2470,7 +2608,7 @@ nonisolated final class SSHWorker: Sendable {
         /// the worker's (bounded) queue into the channel only while this is
         /// small, so a stalled link fills the bounded queue — and the user is
         /// told — instead of an unbounded one.
-        let channelHighWater = 256 * 1024
+        let channelHighWater = Self.channelHighWater
         var lastProgress = clock.now
         /// Bytes the socket has accepted: progress is this moving, not the
         /// channel backlog shrinking (the backlog is refilled to the
@@ -2482,12 +2620,16 @@ nonisolated final class SSHWorker: Sendable {
         /// count, or they reset the clock just before it runs out.
         var lastWindowProgress = clock.now
         var lastDataSent = connection.dataSent(channel)
+        /// What the UI was last told about the forwards.
+        var lastForwardStatus: [ForwardStatus] = []
+        // The UI's list goes when the session does, however it ends.
+        defer { if !lastForwardStatus.isEmpty { onForwards?([]) } }
         /// Delivers every pending connection event; true when the session
         /// channel reached EOF or CLOSE.
         func drainEvents() -> Bool {
             var ended = false
             for event in connection.takeEvents() {
-                deliver(event, channel: channel, forwarder: forwarder, connection: connection)
+                deliver(event, channel: channel, forwarder: forwarder, ports: ports, connection: connection)
                 switch event {
                 case .eof(channel), .closed(channel): ended = true
                 default: break
@@ -2574,14 +2716,52 @@ nonisolated final class SSHWorker: Sendable {
 
                 // Agent traffic rides the same session.
                 try forwarder?.pump(connection: connection, unsentBytes: { link.unsentBytes })
+                // So do port forwards — after the session's own input, which
+                // they never starve (their budget stops above its 256 KiB).
+                if let ports {
+                    let toggles = state.withLock { s -> [(ForwardRule, Bool)] in
+                        defer { s.pendingForwardToggles.removeAll() }
+                        return s.pendingForwardToggles
+                    }
+                    for (rule, enabled) in toggles {
+                        try ports.setEnabled(rule, enabled, connection: connection)
+                        notice((enabled ? "forward started: " : "forward stopped: ") + rule.label)
+                    }
+                    try ports.pump(connection: connection, unsentBytes: { link.unsentBytes })
+                    for message in ports.takeNotices() { notice(message) }
+                    let status = ports.status
+                    if status != lastForwardStatus {
+                        lastForwardStatus = status
+                        onForwards?(status)
+                    }
+                }
+
+                // Files tabs on this connection: after the session's input
+                // and the forwards, and always BELOW the line the terminal's
+                // own input needs (room ≥ one packet): with the old 512 KiB
+                // budget an upload over a slow link kept the backlog above it
+                // and typing in the tab waited for the whole upload (review
+                // 5.0 (58): 35.7 s for one echo at 1 MB/s).
+                let bridges = state.withLock { s -> [SSHChannelBridge] in
+                    s.bridges.removeAll { $0.isFinished }
+                    return s.bridges
+                }
+                for bridge in bridges {
+                    bridge.service(connection: connection, unsentBytes: { link.unsentBytes },
+                                   unsentLimit: Self.bridgeUnsentLimit)
+                }
 
                 // Liveness counts whole authenticated packets, not bytes: a
                 // corrupted stream being discarded must not look alive.
                 let before = link.transport.packetsReceived
                 // An agent tunnel held back by the unsent budget is not
                 // polled, and step's own flush may free it: look again soon.
-                try link.step(timeoutMS: forwarder?.isThrottledByUnsent == true ? 50 : 1000, wake: pipeRead,
-                              extra: forwarder?.descriptors ?? [])
+                // A forward waiting on a full client socket (its writability
+                // is not in the poll set) or on the unsent budget: the same.
+                let prompt = forwarder?.isThrottledByUnsent == true || ports?.wantsPromptPump == true
+                    || bridges.contains { $0.wantsPromptPump }
+                try link.step(timeoutMS: prompt ? 50 : 1000, wake: pipeRead,
+                              extra: (forwarder?.descriptors ?? []) + (ports?.descriptors ?? []))
                 if link.transport.packetsReceived > before { noteInbound() }
             } catch SSHLink.Failure.closedByPeer {
                 // Output that came with the hang-up is delivered; a hang-up
@@ -2623,7 +2803,7 @@ nonisolated final class SSHWorker: Sendable {
     /// is under the SSH-level deadline on purpose: whichever notices first is
     /// right, and this one is the one that works on gear that ignores global
     /// requests.
-    private func enableTCPKeepalive(on fd: Int32) {
+    static func enableTCPKeepalive(on fd: Int32) {
         guard fd >= 0 else { return }
         var on: Int32 = 1
         var idle: Int32 = 60

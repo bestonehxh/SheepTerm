@@ -171,8 +171,8 @@ struct WebHostSheet: View {
     }
 }
 
-/// Add Host…: the SSH form or the web form, switched by the segmented
-/// control at the top of either.
+/// Add Host…: the SSH, telnet or web form, switched by the segmented
+/// control at the top of each.
 struct AddHostSheet: View {
     @State var kind: ConnectionKind
     var webPrefill: (name: String, url: String)? = nil
@@ -185,7 +185,10 @@ struct AddHostSheet: View {
         if kind == .web {
             WebHostSheet(mode: .add, kindSwitch: $kind, prefill: webPrefill, groupName: groupName)
         } else {
-            QuickConnectSheet(kind: .ssh, addOnly: true, kindSwitch: $kind, initialGroup: groupName, prefill: sshPrefill)
+            // A fresh form per kind (`.id`): the telnet one starts on port 23.
+            QuickConnectSheet(kind: kind == .telnet ? .telnet : .ssh, addOnly: true, kindSwitch: $kind,
+                              initialGroup: groupName, prefill: sshPrefill?.kind == kind ? sshPrefill : nil)
+                .id(kind)
         }
     }
 }

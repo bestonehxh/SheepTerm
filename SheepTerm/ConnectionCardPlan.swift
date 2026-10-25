@@ -42,6 +42,18 @@ public nonisolated enum ConnectionStage: Int, CaseIterable, Sendable {
 }
 
 public nonisolated enum ConnectionCardPlan {
+    /// The pane keeps this much around the card.
+    public static let cardMargin: CGFloat = 24
+    /// A pane lower than this never holds the card.
+    public static let minPaneHeight: CGFloat = 260
+
+    /// Whether the card (one size, every stage) fits in a pane of `pane`;
+    /// if not it goes to the window-centred panel. One rule for every tab
+    /// that shows the card (SSH, Files).
+    public static func cardFits(card: CGSize, in pane: CGSize) -> Bool {
+        pane.width >= card.width + cardMargin && pane.height >= max(minPaneHeight, card.height + cardMargin)
+    }
+
     /// Whether a question from the worker may put a card up. Not after the tab stopped, and not after the user
     /// cancelled the connection: a reply that raced the Cancel click would raise a card for a stopped worker that
     /// nothing ever takes down (review 5.0 (20)). The same rule on Windows.

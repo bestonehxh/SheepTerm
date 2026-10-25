@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CryptoKit
+import SheepWeb
 import SwiftUI
 import WebKit
 
@@ -32,6 +33,9 @@ final class WebTabController: NSObject {
     var onFirstLoad: (() -> Void)?
     /// Context menu → Open Link in New Tab: a web tab right after this one.
     var onOpenInNewTab: ((URL) -> Void)?
+    /// The site's icon (`WebFavicon`), nil = the globe.
+    var onFavicon: ((NSImage?) -> Void)?
+    private var faviconSite: String?
 
     private var observations: [NSKeyValueObservation] = []
     private var didFirstLoad = false
@@ -57,6 +61,28 @@ final class WebTabController: NSObject {
     private var cardAnswer: CheckedContinuation<ConnectionPromptReply, Never>?
     private var card: ConnectionCardView?
     private var overlay: ConnectionOverlayView?
+
+    // MARK: error page (5.0 (53), `WebErrorPage`)
+
+    /// The error page's own load: its commit is not a page of the site.
+    /// Matched by identity, so a cancelled error page never marks the next real page as one.
+    private var errorNavigation: WKNavigation?
+    /// The address the error page on screen stands in for (nil while a real page shows):
+    /// Reload / Return load it again instead of the stand-in.
+    private(set) var errorPageURL: URL?
+    /// History entries that are error pages (Back onto one is still one).
+    private var errorItems: [WKBackForwardListItem] = []
+    /// Web content process crashes: a page that kills it on every load is not reloaded forever.
+    private var crashes: [Date] = []
+    /// An error page is on screen or on its way.
+    var showsErrorPage: Bool { errorPageURL != nil || errorNavigation != nil }
+    /// Written into every error page this app run makes (`WebErrorPage.html(marker:)`): Back onto an error
+    /// page's history entry that WebKit loads afresh (not from its cache) is the REAL page — it lacks this.
+    private static let errorMarker = UUID().uuidString
+    /// The page committed at an error page's history entry and is not yet known to be ours (`errorMarker`).
+    private var errorUnverified = false
+    /// The web process died while this tab was hidden: it reloads when shown (never on its own off screen).
+    private var reloadWhenShown = false
 
     // MARK: login key + Save login (5.0 (23))
 
@@ -84,6 +110,9 @@ final class WebTabController: NSObject {
     private var credentialsWatch: AnyCancellable?
     /// When the pending login was sent: it is given up after a minute.
     private var pendingSince = Date.distantPast
+    /// A two-step sign-in's first step: the user name the user sent, for the
+    /// password step that shows none (`WebLoginKey.userForSave`). Memory only.
+    private var stepUser: (site: String, user: String, at: Double)?
 
     private static func digest(_ username: String, _ password: String) -> SHA256.Digest {
         SHA256.hash(data: Data((username + "\u{0}" + password).utf8))
@@ -97,7 +126,7 @@ final class WebTabController: NSObject {
 
     /// "Save as Host…": what the Add Host form starts with (nil = nothing to save).
     var saveAsHostPrefill: (name: String, url: String)? {
-        Host.saveAsHostPrefill(pageURL: webView.url?.absoluteString, title: webView.title)
+        Host.saveAsHostPrefill(pageURL: webView.url?.absoluteString, title: showsErrorPage ? nil : webView.title)
     }
 
     init(host: Host) {
@@ -139,6 +168,10 @@ final class WebTabController: NSObject {
         loginProxy.controller = self
         view.onKey = { [weak self] button in self?.showLoginMenu(from: button) }
         view.onLayout = { [weak self] in self?.placeKeys() }
+        view.onWindow = { [weak self] in
+            guard let self, !self.closed, self.reloadWhenShown, self.view.window != nil else { return }
+            self.recoverAfterCrash()
+        }
         credentialsWatch = AppModel.shared.credentialStore.$credentials
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in MainActor.assumeIsolated { self?.placeKeys() } }
@@ -171,6 +204,7 @@ final class WebTabController: NSObject {
     /// The tab is closing: stop, answer any waiting question, let go.
     func close() {
         closed = true
+        view.bar.hideSuggestions()
         settleCard(.cancel)
         // A page dialog still up: end it (its handler answers Cancel).
         if let sheet = dialogSheet, let parent = sheet.sheetParent { parent.endSheet(sheet, returnCode: .abort) }
@@ -189,6 +223,7 @@ final class WebTabController: NSObject {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "sheepLogin", contentWorld: Self.loginWorld)
         loginProxy.controller = nil
         pendingLogin = nil
+        stepUser = nil
         filledFromKey = nil
         keyFills.removeAll()
         keyBoxes = []
@@ -213,7 +248,8 @@ final class WebTabController: NSObject {
         // recent was written with the bare address): rename the recent once
         // it is known, and only when the name actually changes.
         let entry = recentEntry
-        if didFirstLoad, WebRecentRename.shouldRename(notedName: notedRecentName, alreadyRenamed: recentRenamed,
+        // The error page's title ("Can’t Connect to the Server") never names a recent.
+        if didFirstLoad, !showsErrorPage, WebRecentRename.shouldRename(notedName: notedRecentName, alreadyRenamed: recentRenamed,
                                                       newName: entry.name, pageURL: webView.url?.absoluteString,
                                                       recentAddress: entry.address) {
             recentRenamed = true
@@ -227,6 +263,30 @@ final class WebTabController: NSObject {
     private var recentRenamed = false
     /// The recent's name changed (`Host.recentEntry`): write it again.
     var onRecentRename: (() -> Void)?
+
+    // MARK: - favicon (5.0 (53))
+
+    /// Asks the page for its icon (`WebFavicon`): drawn by the page, same origin only,
+    /// once per site per 10 minutes.
+    private func fetchFavicon() {
+        guard let page = webView.url, let site = WebLoginKey.siteKey(page.absoluteString), site == faviconSite,
+              WebFavicon.shouldAsk(site) else { return }
+        let generation = WebFavicon.generation
+        webView.callAsyncJavaScript(WebFaviconRules.linksScript, arguments: [:], in: nil, in: Self.loginWorld) { [weak self] result in
+            guard let self, !self.closed, self.faviconSite == site else { return }
+            var links: [(href: String, sizes: String)] = []
+            if case .success(let value) = result, let rows = value as? [[String]] {
+                links = rows.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
+            }
+            let urls = WebFaviconRules.candidates(links: links, page: page)
+            self.webView.callAsyncJavaScript(WebFaviconRules.pageScript, arguments: ["urls": urls], in: nil, in: Self.loginWorld) { [weak self] result in
+                guard let self, !self.closed, self.faviconSite == site,
+                      case .success(let value as String) = result, let png = WebFaviconRules.png(fromDataURL: value),
+                      let image = WebFavicon.store(site: site, png: png, generation: generation) else { return }
+                self.onFavicon?(image)
+            }
+        }
+    }
 
     // MARK: - bar actions
 
@@ -257,9 +317,14 @@ final class WebTabController: NSObject {
         UserDefaults.standard.set(WebZoom.remember(next, for: site, in: Self.zoomTable), forKey: Self.zoomKey)
     }
     func reloadOrStop() {
-        if webView.isLoading { webView.stopLoading() } else { webView.reload() }
+        if webView.isLoading { webView.stopLoading() } else { reload() }
     }
-    func reload() { webView.reload() }
+    /// On an error page: a fresh load of the address it stands in for (reloading
+    /// would only show the stand-in again). `errorPageURL` stays until a real page
+    /// commits, so a stopped retry can be retried again.
+    func reload() {
+        if let failed = errorPageURL { webView.load(URLRequest(url: failed)) } else { webView.reload() }
+    }
 
     /// The URL field's Return: only http/https, normalised like the form.
     /// The URL field's Return: an address loads, anything else is a Google
@@ -329,10 +394,17 @@ final class WebTabController: NSObject {
                 return (x, y, w, h)
             }
             placeKeys()
+        case "user":
+            guard let user = body["user"] as? String, !user.isEmpty, user.count <= 256,
+                  let origin = committedURL, WebAddress.sameOrigin(origin, webView.url?.absoluteString ?? ""),
+                  let site = WebLoginKey.siteKey(origin) else { return }
+            stepUser = (site, user, ProcessInfo.processInfo.systemUptime)
         case "submit":
             guard let password = body["pass"] as? String, !password.isEmpty,
                   let origin = committedURL, WebAddress.sameOrigin(origin, webView.url?.absoluteString ?? "") else { return }
-            pendingLogin = (origin, body["user"] as? String ?? "", password)
+            let user = WebLoginKey.userForSave(typed: body["user"] as? String ?? "", step: stepUser,
+                                               site: WebLoginKey.siteKey(origin), now: ProcessInfo.processInfo.systemUptime)
+            pendingLogin = (origin, user, password)
             pendingSince = Date()
             loginCheckGeneration &+= 1
             let generation = loginCheckGeneration
@@ -471,7 +543,9 @@ final class WebTabController: NSObject {
         keyFills.insert(filledFromKey!)
         webView.callAsyncJavaScript(WebFillLogin.script,
                                     arguments: ["user": credential.username, "pass": password, "expected": expected],
-                                    in: nil, in: .defaultClient) { [weak self] result in
+                                    // The page script's world (5.0 (53)): the page cannot see the
+                                    // arguments, and the script's focus report stays quiet meanwhile.
+                                    in: nil, in: Self.loginWorld) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let value as String) where value == "other-origin":
@@ -758,7 +832,7 @@ extension WebTabController: PaneContent {
     var hasPrompt: Bool { hasCard }
     var promptHasKeyboard: Bool { cardHasKeyboard }
     func focusPrompt() -> Bool { focusCard() }
-    func paneDidHide() { view.bar.hideFind() }
+    func paneDidHide() { view.bar.hideFind(); view.bar.hideSuggestions() }
     func setPointerNeedsFocus(_ needsFocus: Bool) {}
     func refreshFocusAppearance() {}
 }
@@ -782,6 +856,12 @@ extension WebTabController: WKNavigationDelegate {
         // Subframes: also about:, blob:, data: — nothing that hands off to
         // another app or reads local files (`WebFramePolicy`).
         let isMain = navigationAction.targetFrame?.isMainFrame ?? true
+        // The error page's Return: load the real address again. Anything else
+        // asking for it (a subframe, another page) gets nothing.
+        if navigationAction.request.url?.scheme?.lowercased() == WebErrorPage.retryScheme {
+            if isMain, errorPageURL != nil { DispatchQueue.main.async { [weak self] in self?.reload() } }
+            return (.cancel, preferences)
+        }
         // A link clicked, Back/Forward or Reload is not where a login lands
         // (a form post, or the page's own script, is): a login sent before
         // and not settled is dropped — never offered on the next page.
@@ -822,6 +902,8 @@ extension WebTabController: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // The error page's own load keeps the failure in the status (review 5.0 (53) #6).
+        if navigation != nil && navigation === errorNavigation { return }
         // A new main-frame navigation: a refused certificate may be asked about again.
         refusals.newNavigation()
         blockedThisNavigation = 0
@@ -834,6 +916,22 @@ extension WebTabController: WKNavigationDelegate {
         // A new document: its dialogs start from zero.
         dialogGate.mainFrameNavigated()
         committedURL = webView.url?.absoluteString
+        // The error page, or Back/Forward onto one (restored from the cache: still one).
+        let isErrorPage = navigation != nil && navigation === errorNavigation
+        let list = webView.backForwardList
+        let live = list.backList + list.forwardList + [list.currentItem].compactMap { $0 }
+        errorItems.removeAll { item in !live.contains { $0 === item } }
+        let restoredError = !isErrorPage && list.currentItem.map { current in errorItems.contains { $0 === current } } == true
+        errorPageURL = isErrorPage || restoredError ? webView.url : nil
+        errorUnverified = restoredError
+        if isErrorPage, let item = list.currentItem { errorItems.append(item) }
+        errorNavigation = nil
+        // Another site (or an error page): its own icon if one is known, else the globe.
+        let site = errorPageURL == nil ? committedURL.flatMap(WebLoginKey.siteKey) : nil
+        if site != faviconSite {
+            faviconSite = site
+            onFavicon?(WebFavicon.image(for: site))
+        }
         mainTargetURL = nil
         // The zoom this site was left at (Safari remembers it per site).
         let zoom = WebZoom.zoom(for: committedURL.flatMap(WebLoginKey.siteKey), in: Self.zoomTable)
@@ -841,7 +939,36 @@ extension WebTabController: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // The error page is not a page of the site: no recent, no login check,
+        // and the status keeps saying what failed.
+        if errorPageURL != nil {
+            guard errorUnverified else { return }
+            // Back onto an error page's entry: ours only if it carries this run's marker.
+            errorUnverified = false
+            let item = webView.backForwardList.currentItem
+            webView.callAsyncJavaScript("return document.querySelector('meta[name=\"sheep-error\"]')?.content === m",
+                                        arguments: ["m": Self.errorMarker], in: nil, in: Self.loginWorld) { [weak self] result in
+                guard let self, !self.closed, self.webView.backForwardList.currentItem === item else { return }
+                if case .success(let ours as Bool) = result, ours { return }
+                self.errorPageURL = nil
+                self.errorItems.removeAll { $0 === item }
+                self.finishedRealPage()
+            }
+            return
+        }
+        finishedRealPage()
+    }
+
+    /// A real page finished loading (not the error page).
+    private func finishedRealPage() {
         onStatus?("web · \(WebAddress.displayHost(of: currentURL))")
+        // A real page restored where an error page was: its icon too.
+        let site = committedURL.flatMap(WebLoginKey.siteKey)
+        if site != faviconSite {
+            faviconSite = site
+            onFavicon?(WebFavicon.image(for: site))
+        }
+        fetchFavicon()
         if !didFirstLoad {
             didFirstLoad = true
             onFirstLoad?()
@@ -877,17 +1004,54 @@ extension WebTabController: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        report(error)
+        if navigation != nil && navigation === errorNavigation {
+            errorNavigation = nil   // the error page itself was cancelled (the user went elsewhere)
+            return
+        }
+        let ns = error as NSError
+        // The main frame could not load: the error page stands in for it, under
+        // the failing address (the bar keeps showing what was asked for).
+        if WebErrorPage.showsPage(for: ns), !closed,
+           let failing = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? webView.url, WebAddress.isLoadable(failing) {
+            onStatus?("failed — \(ns.localizedDescription)")
+            errorNavigation = webView.loadSimulatedRequest(URLRequest(url: failing),
+                                                           responseHTML: WebErrorPage.html(for: ns, url: failing, marker: Self.errorMarker))
+        } else {
+            report(error)
+        }
         // The login's own navigation failed (unreachable, certificate
         // refused): it did not go through.
-        if !webView.isLoading { pendingLogin = nil }
+        if !webView.isLoading || errorNavigation != nil { pendingLogin = nil }
         // The page on screen stayed: its key comes back.
         webView.callAsyncJavaScript("window.__sheepLoginReport && window.__sheepLoginReport()", arguments: [:],
                                     in: nil, in: Self.loginWorld) { _ in }
     }
 
+    /// The page's process died (memory pressure or a crash): reloaded, as Safari
+    /// does — but a page that keeps killing it gets the error page.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        onStatus?("failed — the page stopped; reload to try again")
+        guard !closed else { return }
+        let now = Date()
+        crashes = crashes.filter { now.timeIntervalSince($0) < 60 } + [now]
+        if crashes.count > 2, let failed = webView.url ?? URL(string: currentURL), WebAddress.isLoadable(failed) {
+            onStatus?("failed — the page stopped; reload to try again")
+            let error = NSError(domain: WebErrorPage.crashDomain, code: 1)
+            errorNavigation = webView.loadSimulatedRequest(URLRequest(url: failed),
+                                                           responseHTML: WebErrorPage.html(for: error, url: failed, marker: Self.errorMarker))
+            return
+        }
+        // Off screen: nothing is loaded until the tab is shown (the app never sends on its own).
+        guard view.window != nil else { reloadWhenShown = true; return }
+        recoverAfterCrash()
+    }
+
+    /// Loads the page again as a plain GET of its address — never a re-sent form (a device's
+    /// "apply" result page came from a POST).
+    private func recoverAfterCrash() {
+        reloadWhenShown = false
+        if let failed = errorPageURL { webView.load(URLRequest(url: failed)); return }
+        guard let url = webView.url ?? URL(string: currentURL), WebAddress.isLoadable(url) else { return }
+        webView.load(URLRequest(url: url))
     }
 
     private func report(_ error: Error) {
@@ -974,8 +1138,10 @@ extension WebTabController: WKUIDelegate {
     }
 
     /// Camera / microphone: never (a device's web UI has no use for them).
-    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
-                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
+    /// (The async spelling WebKit calls; the near-miss name before this was
+    /// never called, so a page fell back to the default prompt.)
+    func webView(_ webView: WKWebView, decideMediaCapturePermissionsFor origin: WKSecurityOrigin,
+                 initiatedBy frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
         .deny
     }
 
@@ -1086,6 +1252,13 @@ final class WebTabView: NSView {
     var onKey: ((NSView) -> Void)?
     /// Every layout (a pane resize moves the page under a key).
     var onLayout: (() -> Void)?
+    /// The tab came into (or left) a window — shown or hidden.
+    var onWindow: (() -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindow?()
+    }
     /// One key per login field on screen (user, password) — created as needed.
     private var keyButtons: [NSButton] = []
 
@@ -1202,6 +1375,15 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     private var queuedNotice: String?
     private var findShown = false
 
+    // URL field suggestions (5.0 (53), SheepWeb's list): what is typed, saved
+    // and recent web hosts, then Google's words (`WebSuggest`: never for a private address).
+    private let suggestions = SuggestionPanel()
+    private enum SuggestRow { case typed(String), site(name: String, url: String), search(String) }
+    private var suggestRows: [SuggestRow] = []
+    private var typedText = ""
+    private var suggestTask: URLSessionDataTask?
+    private var googleWords: [String] = []
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -1264,6 +1446,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         }
         promptLabel.isHidden = true
         addSubview(promptLabel)
+        suggestions.onPick = { [weak self] index in self?.commitSuggestion(index) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1482,10 +1665,127 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        if (obj.object as? NSTextField) === urlField { refresh() }
+        if (obj.object as? NSTextField) === urlField {
+            hideSuggestions()
+            refresh()
+        }
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSTextField) === urlField else { return }
+        // While an input method composes (Thai, Japanese, Chinese…) the text is not final.
+        guard let editor = urlField.currentEditor() as? NSTextView, !editor.hasMarkedText() else { return }
+        typedText = editor.string
+        fetchGoogle()
+        refreshSuggestions()
+    }
+
+    func hideSuggestions() {
+        suggestTask?.cancel()
+        suggestTask = nil
+        googleWords = []
+        suggestRows = []
+        suggestions.hide()
+    }
+
+    private func fetchGoogle() {
+        suggestTask?.cancel()
+        let query = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Saved and recent hosts' names and addresses never go to Google (customer device names).
+        let store = AppModel.shared.store
+        let known = (store.groups.flatMap(\.hosts) + store.recents).flatMap { host -> [String] in
+            [host.name, host.kind == .web ? WebAddress.displayHost(of: host.address) : host.address]
+        }
+        suggestTask = WebSuggest.fetch(query, known: known) { [weak self] words in
+            guard let self, self.urlField.currentEditor() != nil,
+                  self.typedText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            self.googleWords = words
+            // Not while the user is on a row (it would change under the selection).
+            guard (self.suggestions.selectedIndex ?? 0) == 0 else { return }
+            self.refreshSuggestions()
+        }
+        if suggestTask == nil { googleWords = [] }
+    }
+
+    private func refreshSuggestions() {
+        let text = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let window, urlField.currentEditor() != nil else {
+            suggestRows = []
+            suggestions.hide()
+            return
+        }
+        var rows: [SuggestRow] = [.typed(text)]
+        let needle = text.lowercased()
+        var seen = Set<String>()
+        let store = AppModel.shared.store
+        for host in store.groups.flatMap(\.hosts) + store.recents where host.kind == .web && !host.address.isEmpty {
+            guard host.name.lowercased().contains(needle) || WebAddress.displayURL(host.address).lowercased().contains(needle),
+                  seen.insert(host.address).inserted else { continue }
+            rows.append(.site(name: host.name, url: host.address))
+            if rows.count >= 5 { break }
+        }
+        rows += googleWords.filter { $0.lowercased() != needle }.prefix(max(0, 8 - rows.count)).map(SuggestRow.search)
+        suggestRows = rows
+        let items: [SuggestionItem] = rows.map { row in
+            switch row {
+            case .typed(let text):
+                if case .url(let url) = WebAddress.classifyTyped(text) {
+                    return SuggestionItem(symbol: "globe", image: WebFavicon.image(for: WebLoginKey.siteKey(url)),
+                                          title: WebAddress.displayURL(url))
+                }
+                return SuggestionItem(symbol: "magnifyingglass", title: text, detail: String(localized: "Google Search"))
+            case .site(let name, let url):
+                return SuggestionItem(symbol: "globe", image: WebFavicon.image(for: WebLoginKey.siteKey(url)),
+                                      title: name, detail: WebAddress.shortLabel(url))
+            case .search(let word):
+                return SuggestionItem(symbol: "magnifyingglass", title: word)
+            }
+        }
+        guard let back = subviews.first(where: { $0.identifier?.rawValue == "urlBack" }) else { return }
+        let anchor = window.convertToScreen(back.convert(back.bounds, to: nil))
+        suggestions.show(items, below: anchor, width: max(back.bounds.width, 320), parent: window, select: 0)
+    }
+
+    private func commitSuggestion(_ index: Int) {
+        guard index < suggestRows.count, let controller else { return }
+        let row = suggestRows[index]
+        hideSuggestions()
+        switch row {
+        case .typed(let text): controller.load(typed: text)
+        case .site(_, let url): controller.load(typed: url)
+        case .search(let word): controller.load(typed: WebAddress.searchURL(for: word))
+        }
+    }
+
+    /// While moving through rows, the field shows the row (as Chrome).
+    private func previewSuggestion() {
+        guard let index = suggestions.selectedIndex, index < suggestRows.count,
+              let editor = urlField.currentEditor() else { return }
+        switch suggestRows[index] {
+        case .typed(let text): editor.string = text
+        case .site(_, let url): editor.string = WebAddress.displayURL(url)
+        case .search(let word): editor.string = word
+        }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if control === urlField, suggestions.isShowing {
+            switch selector {
+            case #selector(NSResponder.moveDown(_:)):
+                suggestions.moveSelection(1); previewSuggestion(); return true
+            case #selector(NSResponder.moveUp(_:)):
+                suggestions.moveSelection(-1); previewSuggestion(); return true
+            case #selector(NSResponder.insertNewline(_:)):
+                // Row 0 is what was typed: the field's own Return loads it.
+                if let index = suggestions.selectedIndex, index > 0 { commitSuggestion(index); return true }
+                hideSuggestions()
+                return false
+            case #selector(NSResponder.cancelOperation(_:)):
+                hideSuggestions(); return true
+            default:
+                break
+            }
+        }
         guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
         if control === findField {
             hideFind()

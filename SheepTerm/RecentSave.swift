@@ -7,6 +7,7 @@ import Foundation
 enum RecentSave: Equatable {
     case web(name: String, url: String)
     case ssh(Host)
+    case telnet(Host)
     /// Serial and local recents: the Add Host form has no such kind.
     case unsupported
     /// The recent IS a saved host (same connection): no second copy.
@@ -35,6 +36,8 @@ enum RecentSave: Equatable {
             var host = recent
             if let id = host.credentialID, !credentialExists(id) { host.credentialID = nil }
             return .ssh(host)
+        case .telnet:
+            return .telnet(recent)
         default:
             return .unsupported
         }

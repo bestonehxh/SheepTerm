@@ -5,6 +5,12 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
     case ssh
     case serial
     case local
+    /// A telnet session (RFC 854): `address` + TCP `port` (23 by default),
+    /// driven like a serial console — `TelnetWorker` under the same
+    /// `SerialTerminalController`. GNS3/EVE-NG consoles, reverse-telnet
+    /// console servers, old gear without SSH. JSON value "telnet"; a build
+    /// that predates it reads `.unsupported` and keeps the string.
+    case telnet
     /// A web page (device web UI) opened in a WKWebView tab. `Host.address`
     /// holds the URL (see `WebAddress`, WebTabs.swift, and ARCHITECTURE.md
     /// "Web tabs"). JSON value "web" — SheepTerm for Windows reads it too.
@@ -27,6 +33,7 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
         switch self {
         case .ssh: return "SSH"
         case .serial: return "SER"
+        case .telnet: return "TEL"
         case .local: return "ZSH"
         case .web: return "WEB"
         case .unsupported: return "?"
@@ -35,7 +42,7 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
 
     /// Kinds that are a terminal session on a device (highlight, snippets,
     /// broadcast, history, paging, logging).
-    var isDeviceSession: Bool { self == .ssh || self == .serial }
+    var isDeviceSession: Bool { self == .ssh || self == .serial || self == .telnet }
 }
 
 enum CipherMode: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -86,6 +93,14 @@ struct Host: Identifiable, Codable, Hashable {
     /// where a host is FILED, not what it is, so re-filing a host must not
     /// make it a different target or a conflict on import.
     var section: String? = nil
+    /// Set only on a connect-box target typed as `sftp://` / `scp://` /
+    /// `ftp://` / `tftp://`: open it as a Files tab with this protocol
+    /// (`RemoteEndpoint.Proto` raw value). NOT stored — no CodingKey, so it
+    /// never reaches hosts.json, recents, Sync or a share.
+    var filesProto: String? = nil
+    /// Set only on a connect-box target typed as `ping 10.0.0.1 …`: open it
+    /// in the Ping tab (`PingPlan.connectBoxTargets`). NOT stored, like `filesProto`.
+    var pingTargets: [String]? = nil
     var cipherMode: CipherMode? = nil
     /// ForwardAgent for this host. Optional (not a defaulted Bool) so hosts
     /// written by an older build still decode — a missing key would throw.
@@ -122,12 +137,36 @@ struct Host: Identifiable, Codable, Hashable {
     /// known_hosts: never travels in a `.sheepterm` / Share Link (ShareCodec
     /// strips it); Sync and Backup carry it (the user's own Macs).
     var webTrustedCertSHA256: String? = nil
+    /// SSH port forwards opened with the session (5.0 (49)), in ssh's own
+    /// spelling: `8443:10.0.0.1:443` (-L) or a bare `1080` (-D, SOCKS) —
+    /// see `PortForwardSpec`. Listeners are on 127.0.0.1 only. This Mac's
+    /// choice, like `agentForward`: a `.sheepterm` neither carries nor sets
+    /// it (ShareCodec strips both ways); Sync and Backup carry it.
+    var forwards: [String]? = nil
     /// The raw `kind` string of a host whose kind this build does not know
     /// (`kind == .unsupported`); written back as-is. Not a JSON key.
     var unknownKind: String? = nil
 
     /// Whether this host opts out of session logging, nil = no.
     var skipsLog: Bool { noLog ?? false }
+
+    /// Something under the host forms' Advanced row is not at its default
+    /// (cipher, agent, jump host, forwards) — the form then opens with
+    /// Advanced shown, so a setting is never hidden AND in force.
+    /// The host a second session to the same device opens with (⌘D split,
+    /// Duplicate): its port forwards stay with the first one — a second set
+    /// could only fail ("port in use") and leave rules nobody can start
+    /// (review 5.0 (58)).
+    var forSecondSession: Host {
+        var copy = self
+        copy.forwards = nil
+        return copy
+    }
+
+    var hasAdvancedSettings: Bool {
+        (cipherMode ?? .auto) != .auto || (agentForward ?? false) || jumpHostID != nil || jumpSpecValue != nil
+            || !(forwards ?? []).isEmpty
+    }
 
     /// The one decision "does this session get a log file": a host that opts
     /// out never does; every other one follows the global setting.
@@ -198,6 +237,7 @@ struct Host: Identifiable, Codable, Hashable {
         if filled.vendor == nil { filled.vendor = match.vendor }
         if filled.disablePaging == nil { filled.disablePaging = match.disablePaging }
         if filled.noLog == nil { filled.noLog = match.noLog }
+        if filled.forwards == nil { filled.forwards = match.forwards }
         // The path is one answer: a target that names a bastion either way
         // keeps it, and only one that names none takes the saved host's.
         if filled.jumpHostID == nil && filled.jumpSpecValue == nil {
@@ -217,7 +257,7 @@ struct Host: Identifiable, Codable, Hashable {
 extension Host {
     enum CodingKeys: String, CodingKey {
         case id, name, kind, address, port, username, credentialID, section, cipherMode, agentForward,
-             vendor, disablePaging, jumpHostID, jumpSpec, noLog, webTrustedCertSHA256
+             vendor, disablePaging, jumpHostID, jumpSpec, noLog, webTrustedCertSHA256, forwards
     }
 
     init(from decoder: Decoder) throws {
@@ -245,6 +285,9 @@ extension Host {
         jumpSpec = try c.decodeIfPresent(String.self, forKey: .jumpSpec)
         noLog = try c.decodeIfPresent(Bool.self, forKey: .noLog)
         webTrustedCertSHA256 = try c.decodeIfPresent(String.self, forKey: .webTrustedCertSHA256)
+        // Tolerant: a value of the wrong shape (another build, a hand edit)
+        // is dropped, not a reason to quarantine the whole hosts.json.
+        forwards = (try? c.decodeIfPresent([String].self, forKey: .forwards)) ?? nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -266,6 +309,7 @@ extension Host {
         try c.encodeIfPresent(jumpSpec, forKey: .jumpSpec)
         try c.encodeIfPresent(noLog, forKey: .noLog)
         try c.encodeIfPresent(webTrustedCertSHA256, forKey: .webTrustedCertSHA256)
+        try c.encodeIfPresent(forwards, forKey: .forwards)
     }
 }
 
@@ -453,6 +497,7 @@ extension Host {
     /// anything outside this politely instead of trapping on the conversion.
     nonisolated static let sshPortRange = 1...65_535
     nonisolated static let defaultSSHPort = 22
+    nonisolated static let defaultTelnetPort = 23
 
     /// `SerialWorker` hands the baud to `cfsetspeed`, whose `speed_t` is
     /// UNSIGNED: `speed_t(-1)` is a Swift trap, not a failed guard, and it
@@ -472,7 +517,7 @@ extension Host {
     /// `.local` has no port at all, so there is nothing to be out of range.
     var hasUsablePort: Bool {
         switch kind {
-        case .ssh: return Host.sshPortRange.contains(port)
+        case .ssh, .telnet: return Host.sshPortRange.contains(port)
         case .serial: return Host.serialBaudRange.contains(port)
         case .local, .web, .unsupported: return true
         }
@@ -709,6 +754,9 @@ enum ConfigurationHygiene {
                 case .serial:
                     hosts[index].port = Host.defaultSerialBaud
                     report.narrowedBauds += 1
+                case .telnet:
+                    hosts[index].port = Host.defaultTelnetPort
+                    report.narrowedPorts += 1
                 default:
                     hosts[index].port = Host.defaultSSHPort
                     report.narrowedPorts += 1
@@ -975,7 +1023,7 @@ enum ConnectParser {
     /// `%zone` — nothing else. Not a validator (`:::::` passes), only the
     /// spelling test that keeps a name with two colons in it from being
     /// taken for an address.
-    static func looksLikeIPv6(_ text: String) -> Bool {
+    nonisolated static func looksLikeIPv6(_ text: String) -> Bool {
         let parts = text.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
         guard let address = parts.first, !address.isEmpty else { return false }
         // `isHexDigit` alone admits fullwidth Ａ–Ｆ／０–９, which made
@@ -995,7 +1043,99 @@ enum ConnectParser {
         if WebAddress.hasWebScheme(text) {
             return Host.web(name: "", url: text)
         }
+        if let telnet = parseTelnet(text) { return telnet }
+        if let files = parseFilesURL(text) { return files }
+        if let ping = parsePing(text) { return ping }
         return parse(text)
+    }
+
+    /// A link another app opened us with (5.0 (53)): `telnet://host[:port]`
+    /// — what GNS3 / EVE-NG hand out for a console, e.g. a GNS3 console
+    /// command `open -a SheepTerm telnet://%h:%p` — or
+    /// `ssh://[user@]host[:port]` (RFC draft spelling; `;fingerprint=…`
+    /// parameters are dropped — the host key is still checked as always).
+    /// Opens a tab and types nothing; nil = not a link we take.
+    static func externalLink(_ text: String) -> Host? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("telnet://") { return parseTelnet(trimmed) }
+        guard lower.hasPrefix("ssh://") else { return nil }
+        var rest = String(trimmed.dropFirst("ssh://".count))
+        if let slash = rest.firstIndex(of: "/") { rest = String(rest[..<slash]) }
+        // `user;fingerprint=…@host`: parameters ride on the user part.
+        if let at = rest.lastIndex(of: "@"), let semi = rest[..<at].firstIndex(of: ";") {
+            rest = String(rest[..<semi]) + String(rest[at...])
+        }
+        guard let user = rest.removingPercentEncoding, var host = parse(user, requireHostShape: false) else { return nil }
+        host.name = host.address
+        return host
+    }
+
+    /// `telnet://host[:port]`, or what everyone types at a CLI —
+    /// `telnet host [port]` — is a telnet target (port 23 unless one is
+    /// given). A user@ has no meaning for telnet and is refused rather than
+    /// silently dropped. nil = not a telnet target.
+    static func parseTelnet(_ text: String) -> Host? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target: String
+        if trimmed.lowercased().hasPrefix("telnet://") {
+            target = String(trimmed.dropFirst("telnet://".count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        } else {
+            let words = trimmed.split(whereSeparator: { $0.isWhitespace })
+            guard words.count == 2 || words.count == 3, words[0].lowercased() == "telnet" else { return nil }
+            if words.count == 3 {
+                guard let port = Int(words[2]) else { return nil }
+                target = String(words[1]).contains(":") && !String(words[1]).hasPrefix("[")
+                    ? "[\(words[1])]:\(port)" : "\(words[1]):\(port)"
+            } else {
+                target = String(words[1])
+            }
+        }
+        guard !target.contains("@"), var host = parse(target, requireHostShape: false) else { return nil }
+        // `parse` fills in 22 when no port was typed; a bare IPv6 address
+        // has no port at all (`2001:db8::22` ends in ":22" and is not one).
+        let explicitPort = target.hasPrefix("[") ? target.contains("]:") : target.filter { $0 == ":" }.count == 1
+        host.kind = .telnet
+        if !explicitPort { host.port = Host.defaultTelnetPort }
+        host.name = host.address
+        return host
+    }
+
+    /// `ping 10.0.0.1 [more…]` → a Ping-tab target (`Host.pingTargets`).
+    static func parsePing(_ text: String) -> Host? {
+        guard let targets = PingPlan.connectBoxTargets(text) else { return nil }
+        var host = Host(name: "ping " + targets.joined(separator: ", "), kind: .ssh, address: targets[0])
+        host.pingTargets = targets
+        return host
+    }
+
+    /// `sftp://[user@]host[:port][/path]`, `scp://…`, `ftp://…`, `tftp://…`
+    /// → a Files-tab target (`Host.filesProto`). A password in the URL is
+    /// dropped (it would be asked). Nil for anything else.
+    static func parseFilesURL(_ text: String) -> Host? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let schemeEnd = trimmed.range(of: "://") else { return nil }
+        let scheme = trimmed[..<schemeEnd.lowerBound].lowercased()
+        guard ["sftp", "scp", "ftp", "tftp"].contains(scheme) else { return nil }
+        var rest = String(trimmed[schemeEnd.upperBound...])
+        if let slash = rest.firstIndex(of: "/") { rest = String(rest[..<slash]) }
+        // user:password@ — the password is never kept.
+        if let at = rest.lastIndex(of: "@") {
+            let userInfo = rest[..<at]
+            let user = userInfo.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+            rest = (user.isEmpty ? "" : user + "@") + rest[rest.index(after: at)...]
+        }
+        // The scheme already says "a device": a one-label name (`switch-lab`)
+        // is a host here, not a typo (review 6.0).
+        guard var host = parse(rest, requireHostShape: false) else { return nil }
+        // An explicit port: `host:21` or `[v6]:21` (a bare IPv6 has several colons).
+        let explicitPort = rest.range(of: #"(^[^:]*|\])(:[0-9]+)$"#, options: .regularExpression) != nil
+        if !explicitPort {
+            host.port = ["ftp": 21, "tftp": 69][scheme] ?? 22
+        }
+        host.filesProto = scheme
+        host.name = "\(scheme)://\(host.username.isEmpty ? "" : host.username + "@")\(host.address)"
+        return host
     }
 
     static func parse(_ text: String, requireHostShape: Bool = true) -> Host? {
@@ -3533,6 +3673,8 @@ final class HostStore: ObservableObject {
                     // (ShareCodec strips it), so Replace keeps what we had.
                     merged.jumpHostID = current.jumpHostID
                     merged.jumpSpec = current.jumpSpec
+                    // So are the port forwards (the file carries none).
+                    merged.forwards = current.forwards
                     // A web host's trusted certificate is ours too (the file
                     // never carries one) — kept while the URL is the same.
                     merged.webTrustedCertSHA256 = merged.address == current.address
@@ -3686,6 +3828,7 @@ final class HostStore: ObservableObject {
             recents[index].noLog = new.noLog
             recents[index].jumpHostID = new.jumpHostID
             recents[index].jumpSpec = new.jumpSpec
+            recents[index].forwards = new.forwards
             changed = true
         }
         guard changed else { return }

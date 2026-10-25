@@ -46,7 +46,6 @@ final class SheepAlert: NSObject {
 
     static let contentWidth: CGFloat = 288
 
-    @discardableResult
     /// A button painted the caution yellow (Paste Immediately): neither the
     /// blue default nor a red destructive one — "go, but look first".
     func markCaution(_ button: NSButton) {
@@ -57,6 +56,7 @@ final class SheepAlert: NSObject {
         button.identifier?.rawValue == "sheep.caution"
     }
 
+    @discardableResult
     func addButton(withTitle title: String) -> NSButton {
         let button = NSButton(title: title, target: self, action: #selector(buttonPressed(_:)))
         button.bezelStyle = .push

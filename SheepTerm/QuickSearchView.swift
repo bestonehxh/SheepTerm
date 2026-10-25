@@ -107,7 +107,12 @@ struct QuickSearchView: View {
             // container — the field just needs to stay readable on it.
             .background { ControlFill(zone: .sidebar, cornerRadius: 8) }
 
-            if let target = connectTarget {
+            if let target = connectTarget, target.pingTargets != nil {
+                paletteRow(badge: "", badgeColor: Theme.ok, symbol: "waveform.path.ecg", name: target.name,
+                           detail: String(localized: "ping tab · press ↩")) {
+                    connect(target)
+                }
+            } else if let target = connectTarget {
                 paletteRow(
                     badge: target.kind.badge,
                     badgeColor: Theme.kindColor(target.kind),

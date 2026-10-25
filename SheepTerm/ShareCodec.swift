@@ -109,6 +109,8 @@ enum ShareCodec {
             // author's choosing is a phishing vector (4.2 (9) review).
             host.jumpHostID = nil
             host.jumpSpec = nil
+            // Port forwards are this Mac's listeners, not the device's.
+            host.forwards = nil
             // A web host's trusted certificate is this Mac's decision (like
             // known_hosts): a file must not pre-trust a certificate for us.
             host.webTrustedCertSHA256 = nil
@@ -135,6 +137,9 @@ enum ShareCodec {
             // The importer sets a jump host by hand, in Edit Host.
             host.jumpHostID = nil
             host.jumpSpec = nil
+            // A file must not open listeners on this Mac (or point them at a
+            // target of its author's choosing): forwards are set by hand.
+            host.forwards = nil
             // A web host's trusted certificate is this Mac's decision (like
             // known_hosts): a file must not pre-trust a certificate for us.
             host.webTrustedCertSHA256 = nil

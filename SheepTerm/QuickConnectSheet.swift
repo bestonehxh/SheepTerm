@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// Form for ad-hoc SSH / Serial connections from the + menu.
+/// Form for ad-hoc SSH / Telnet / Serial connections from the + menu.
 /// Supports saved credentials (Keychain-backed), a target group picker,
 /// and an optional "save session" toggle.
 struct QuickConnectSheet: View {
@@ -33,6 +33,9 @@ struct QuickConnectSheet: View {
     /// typed back deliberately — the same `portEdited` rule HostEditSheet
     /// has; testing `value == 22` alone could not tell the two apart.
     @State private var portEdited = false
+    /// The telnet form swaps the 22 for 23 on appear; that change is not the
+    /// user's and must not count as touching the field.
+    @State private var settingDefaultPort = false
 
     // Credential
     @State private var credentialSelection: UUID?   // nil = enter manually
@@ -69,6 +72,11 @@ struct QuickConnectSheet: View {
     /// "Don't log this session" -> `Host.noLog` (SSH and serial alike). Unticked =
     /// follow File > Log Sessions to File.
     @State private var noLog = false
+    /// SSH: the Advanced settings are shown (opened for a prefill that has one set).
+    @State private var showAdvanced = false
+    /// SSH port forwards (see `PortForwardSpec`); `forwardDraft` is the open add form.
+    @State private var forwards: [PortForwardSpec] = []
+    @State private var forwardDraft: ForwardDraft?
 
     private static let defaultGroup = "Quick Connect"
     private static let newGroupTag = "\u{0}new-group"
@@ -88,14 +96,17 @@ struct QuickConnectSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(addOnly ? String(localized: "Add Host") : kind == .ssh ? String(localized: "New SSH Connection") : String(localized: "New Serial Console"))
+            Text(addOnly ? String(localized: "Add Host")
+                 : kind == .ssh ? String(localized: "New SSH Connection")
+                 : kind == .telnet ? String(localized: "New Telnet Session")
+                 : String(localized: "New Serial Console"))
                 .font(.headline)
             if let kindSwitch {
                 HostKindSwitch(kind: kindSwitch)
             }
 
             Form {
-                if kind == .ssh {
+                if isTCP {
                     TextField("Host / IP", text: $address, prompt: Text("10.10.1.1"))
                         .formRow("Host / IP")
                     if let addressError {
@@ -103,15 +114,18 @@ struct QuickConnectSheet: View {
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.destructive)
                     }
-                    TextField("Port", text: $port, prompt: Text("22"))
+                    TextField("Port", text: $port, prompt: Text(kind == .telnet ? "23" : "22"))
                         .formRow("Port")
-                        .onChange(of: port) { portEdited = true }
+                        .onChange(of: port) {
+                            if settingDefaultPort { settingDefaultPort = false } else { portEdited = true }
+                        }
                     if let portError {
                         Text(portError)
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.destructive)
                     }
-
+                }
+                if kind == .ssh {
                     FormPopup(selection: $credentialSelection,
                               items: [.option(String(localized: "Enter manually"), nil)] + model.credentialStore.credentials.map {
                                   .option("\($0.name) (\($0.username))", $0.id)
@@ -131,24 +145,13 @@ struct QuickConnectSheet: View {
                         }
                     }
 
-                    FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
-                        .formRow("Cipher mode")
-
                     FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                         .formRow("Device family")
-
-                    Toggle("Forward SSH agent", isOn: $agentForward)
-                    JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
-                                candidates: jumpCandidates,
-                                render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
-                    if let jumpError {
-                        Text(jumpError)
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.destructive)
-                    }
-                    Toggle("Disable paging on connect", isOn: $disablePaging)
-                        .disabled(vendor.disablePagingCommand == nil)
-
+                } else if kind == .telnet {
+                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
+                        .formRow("Device family")
+                }
+                if isTCP {
                     TextField("Name", text: $name, prompt: Text("optional"))
                         .formRow("Name")
                 } else {
@@ -189,9 +192,10 @@ struct QuickConnectSheet: View {
 
                 Divider()
 
-                if kind == .ssh {
+                if isTCP {
                     if !addOnly {
-                        Toggle("Save session to group", isOn: $saveSession)
+                        Toggle("Save to Group", isOn: $saveSession)
+                            .help("Also keep this connection as a host in a group.")
                     }
                     if saveSession || addOnly {
                         FormPopup(selection: $groupSelection,
@@ -203,8 +207,32 @@ struct QuickConnectSheet: View {
                         }
                     }
                 }
-                Toggle("Don't log this session", isOn: $noLog)
-                    .help("This session never writes a log file, even with Log Sessions to File on. Saved with the host if you save it.")
+                noLogToggle
+                if kind == .ssh {
+                    // Only when the family HAS a pager-off command (5.0 (59),
+                    // the user: a greyed row under Auto only added clutter).
+                    if vendor.disablePagingCommand != nil {
+                        Toggle("No Paging", isOn: $disablePaging)
+                            .help("Turns the device's pager off after login (\(vendor.disablePagingCommand ?? "")), so long output is not cut into pages.")
+                    }
+                    // The connection plumbing most connections never change,
+                    // behind Advanced (the user, 2026-10-25: too busy).
+                    AdvancedToggle(isOn: $showAdvanced)
+                    if showAdvanced || jumpError != nil || forwardError != nil {
+                        FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
+                            .formRow("Cipher mode")
+                        Toggle("Forward SSH agent", isOn: $agentForward)
+                        JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
+                                    candidates: jumpCandidates,
+                                    render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                        if let jumpError {
+                            Text(jumpError)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.destructive)
+                        }
+                        PortForwardsRow(forwards: $forwards, draft: $forwardDraft)
+                    }
+                }
             }
             .textFieldStyle(.roundedBorder)
 
@@ -233,6 +261,16 @@ struct QuickConnectSheet: View {
         }
         .onAppear {
             if let initialGroup, groupNames.contains(initialGroup) { groupSelection = initialGroup }
+            if kind == .telnet, let prefill, prefill.kind == .telnet, !prefilled {
+                // Recent → Save as Host… on a telnet recent.
+                prefilled = true
+                name = prefill.name
+                address = prefill.address
+                port = String(prefill.port)
+                portEdited = true
+                noLog = prefill.skipsLog
+                vendor = prefill.highlightVendor
+            }
             if kind == .ssh, let prefill, !prefilled {
                 prefilled = true
                 name = prefill.name
@@ -246,6 +284,8 @@ struct QuickConnectSheet: View {
                 disablePaging = prefill.disablePaging ?? false
                 noLog = prefill.skipsLog
                 vendor = prefill.highlightVendor
+                showAdvanced = prefill.hasAdvancedSettings
+                forwards = prefill.forwardSpecs
                 jumpHostID = prefill.jumpHostID
                 if let jumpID = prefill.jumpHostID {
                     jumpText = model.store.groups.flatMap(\.hosts).first { $0.id == jumpID }
@@ -253,6 +293,13 @@ struct QuickConnectSheet: View {
                 } else {
                     jumpText = prefill.jumpSpecValue ?? ""
                 }
+            }
+            if kind == .telnet {
+                if !portEdited, port != String(Host.defaultTelnetPort) {
+                    settingDefaultPort = true
+                    port = String(Host.defaultTelnetPort)
+                }
+                return
             }
             guard kind == .ssh else {
                 // The serial form has no text field at all, so there is
@@ -267,6 +314,15 @@ struct QuickConnectSheet: View {
             AuthPrompt.forceASCIIKeyboard()
         }
     }
+
+    private var noLogToggle: some View {
+        Toggle("Don't Log", isOn: $noLog)
+            .help("This session never writes a log file, even with Log Sessions to File on. Saved with the host if you save it.")
+    }
+
+    /// SSH and telnet: a host and a TCP port. Telnet has no login of its
+    /// own — the device asks for one in the stream.
+    private var isTCP: Bool { kind == .ssh || kind == .telnet }
 
     private var defaultCredentialName: String {
         effectiveUsername.isEmpty ? "credential" : "\(effectiveUsername)@\(targetHost)"
@@ -333,7 +389,7 @@ struct QuickConnectSheet: View {
     /// nobody can read. The check is on the HOST half, so the shorthand above
     /// still works.
     private var addressError: String? {
-        guard kind == .ssh, !trimmedAddress.isEmpty else { return nil }
+        guard isTCP, !trimmedAddress.isEmpty else { return nil }
         // Kept ahead of the parser's own verdict: `admin@` is a specific
         // mistake with a specific answer, and letting it fall through to the
         // general "not a valid address" made the message worse than it was.
@@ -374,7 +430,7 @@ struct QuickConnectSheet: View {
     }
 
     private var portError: String? {
-        guard kind == .ssh, parsedPort == nil else { return nil }
+        guard isTCP, parsedPort == nil else { return nil }
         return String(localized: "Port must be 1-65535")
     }
 
@@ -382,9 +438,16 @@ struct QuickConnectSheet: View {
         switch kind {
         case .ssh:
             return parsedPort != nil && !targetHost.isEmpty && addressError == nil
-                && !JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID)
+                && !JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID) && forwardError == nil
+        case .telnet:
+            return parsedPort != nil && !targetHost.isEmpty && addressError == nil
         default: return !device.isEmpty
         }
+    }
+
+    /// The red line under the forwards row (it also blocks Connect).
+    private var forwardError: String? {
+        kind == .ssh ? forwardDraft?.error(adding: forwards) : nil
     }
 
     /// Saved SSH hosts that can be a bastion: one hop only, so a host that
@@ -401,7 +464,7 @@ struct QuickConnectSheet: View {
     }
 
     private var targetGroup: String? {
-        guard kind == .ssh, saveSession || addOnly else { return nil }
+        guard isTCP, saveSession || addOnly else { return nil }
         if groupSelection == Self.newGroupTag {
             // The store's group-name pass, not just a trim: a pasted U+2028
             // survived `trimmingCharacters` and made a raw group, and a
@@ -463,6 +526,13 @@ struct QuickConnectSheet: View {
                 cipherMode: cipherMode,
                 agentForward: agentForward
             )
+        } else if kind == .telnet {
+            host = Host(
+                name: trimmedName.isEmpty ? targetHost : trimmedName,
+                kind: .telnet,
+                address: targetHost,
+                port: parsedPort ?? Host.defaultTelnetPort
+            )
         } else {
             host = Host(
                 name: (device as NSString).lastPathComponent,
@@ -487,6 +557,7 @@ struct QuickConnectSheet: View {
             // Travels with the host into the session, a recent and a saved group.
             host.jumpHostID = jumpHostID
             host.jumpSpec = JumpTarget.storedSpec(text: jumpText, jumpHostID: jumpHostID)
+            host.forwards = PortForwardSpec.stored(forwards, draft: forwardDraft)
         }
         // A password typed beside "Enter manually" is for THIS session (it is
         // saved only if "Save as credential" was ticked, and then the host
@@ -514,13 +585,17 @@ struct QuickConnectSheet: View {
             dismiss()
             return
         }
+        // The sheet goes FIRST (as Open File does): the new tab's card may
+        // open its window-centred panel at once (a small window) and take
+        // the keyboard, and a dismiss after that left this sheet up over it
+        // (the user, 6.0 (2)).
+        dismiss()
         model.connectQuick(
             host: host,
             saveTo: targetGroup,
             password: sessionPassword,
             serialLog: nil
         )
-        dismiss()
     }
 
     private static func serialDevices() -> [String] {

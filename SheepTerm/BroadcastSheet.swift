@@ -20,8 +20,8 @@ struct BroadcastSheet: View {
             switch tab.content {
             case .local: kind = .local
             case .ssh: kind = .ssh
-            case .serial: kind = .serial
-            case .web: kind = .web
+            case .serial(let c): kind = c.isTelnet ? .telnet : .serial
+            case .web, .files, .ping: kind = .web
             }
             return BroadcastPlan.Candidate(id: tab.id, title: tab.title, kind: kind, status: tab.statusInfo)
         }

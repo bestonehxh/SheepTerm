@@ -836,8 +836,10 @@ final class AccountCardPanel: NSObject, NSWindowDelegate {
             panel.animator().alphaValue = 0
             panel.animator().setFrame(panel.frame.offsetBy(dx: 0, dy: -6), display: true)
         }, completionHandler: {
-            panel.parent?.removeChildWindow(panel)
-            panel.orderOut(nil)
+            MainActor.assumeIsolated {
+                panel.parent?.removeChildWindow(panel)
+                panel.orderOut(nil)
+            }
         })
     }
 

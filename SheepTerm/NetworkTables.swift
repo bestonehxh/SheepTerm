@@ -101,7 +101,12 @@ enum NetworkTables {
         var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
         guard getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
         else { return nil }
-        return String(cString: host)
+        return Self.text(host)
+    }
+
+    /// A NUL-terminated C buffer as text (String(cString:) on an array is deprecated).
+    private static func text(_ buffer: [CChar]) -> String {
+        String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// The IPv4 neighbour table, as `arp -an` would print it.
@@ -114,7 +119,7 @@ enum NetworkTables {
         guard sysctl(&mib, 6, &buffer, &size, nil, 0) == 0 else { return [] }
         return parseRouteDump(Array(buffer.prefix(size))) { index in
             var name = [CChar](repeating: 0, count: Int(IF_NAMESIZE) + 1)
-            return if_indextoname(UInt32(index), &name) != nil ? String(cString: name) : "if\(index)"
+            return if_indextoname(UInt32(index), &name) != nil ? text(name) : "if\(index)"
         }
     }
 

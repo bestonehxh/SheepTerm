@@ -266,7 +266,7 @@ final class AIPanelModel: ObservableObject {
         case .ssh(let c): host = c.host
         case .serial(let c): host = c.host
         case .web(let c): host = c.host
-        case .local: host = nil
+        case .local, .files, .ping: host = nil
         }
         guard let id = host?.credentialID, let password = Keychain.passwordWithoutPrompt(for: id) else { return [] }
         return [password]
@@ -278,9 +278,11 @@ final class AIPanelModel: ObservableObject {
         let family = tab.highlightVendor == .auto ? "not set — infer it from the output" : tab.highlightVendor.label
         switch tab.content {
         case .ssh: return (family, "SSH")
-        case .serial: return (family, "serial console")
+        case .serial(let c): return (family, c.isTelnet ? "telnet" : "serial console")
         case .local: return ("macOS (local shell on the engineer's Mac)", "local shell")
         case .web: return ("a device's web interface (no terminal output)", "web page")
+        case .files: return ("a file browser (no terminal output)", "files tab")
+        case .ping: return ("a ping monitor (no terminal output)", "ping tab")
         }
     }
 

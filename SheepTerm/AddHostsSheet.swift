@@ -249,7 +249,7 @@ struct AddHostsSheet: View {
                     .font(.system(size: 10))
                     .foregroundStyle(status == nil ? .secondary : .primary)
                 Spacer()
-                Toggle("Don't log this session", isOn: $noLog)
+                Toggle("Don't Log", isOn: $noLog)
                     .help("Hosts added here never write a session log, even with Log Sessions to File on.")
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)

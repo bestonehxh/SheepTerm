@@ -163,6 +163,7 @@ struct HostKindSwitch: View {
             Spacer(minLength: 0)
             Picker("", selection: $kind) {
                 Text("SSH").tag(ConnectionKind.ssh)
+                Text("Telnet").tag(ConnectionKind.telnet)
                 Text("Web").tag(ConnectionKind.web)
             }
             .pickerStyle(.segmented)
@@ -256,5 +257,35 @@ struct SheetLabel: View {
     init(_ text: LocalizedStringKey) { self.text = text }
     var body: some View {
         Text(text).lineLimit(1).frame(width: SheetLayout.labelWidth, alignment: .trailing)
+    }
+}
+
+/// The host forms' "Advanced" row (5.0 (49)): a chevron and a word in the
+/// field column that shows or hides the settings most hosts never touch
+/// (cipher, agent, jump host, forwards). The user found the
+/// full form too busy. Opened by the form itself when the host already has
+/// one of those set, so nothing is ever hidden that is not at its default.
+struct AdvancedToggle: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        LabeledContent {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { isOn.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(isOn ? 90 : 0))
+                    Text("Advanced")
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .frame(width: SheetLayout.fieldWidth, alignment: .leading)
+        } label: {
+            Text("").frame(width: SheetLayout.labelWidth)
+        }
     }
 }

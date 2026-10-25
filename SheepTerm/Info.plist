@@ -43,6 +43,15 @@
 				<string>sheepterm</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Telnet and SSH links</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>telnet</string>
+				<string>ssh</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>

@@ -22,18 +22,27 @@ final class SessionTab: ObservableObject, Identifiable {
         case serial(SerialTerminalController)
         /// A web page (ConnectionKind.web) — no terminal, no worker, no log.
         case web(WebTabController)
+        /// A Files tab (SFTP / SCP / FTP / TFTP) — no terminal, no log.
+        case files(FilesTabController)
+        /// A Ping tab (6.0 (2)) — no terminal, no log file.
+        case ping(PingTabController)
     }
 
     let id = UUID()
     let content: Content
     @Published var title: String
     @Published var statusInfo: String?
+    /// A live SSH session's port forwards (status bar ⇄ menu); empty when
+    /// it has none or is not connected.
+    @Published var forwards: [ForwardState] = []
+    /// A web tab's site icon (`WebFavicon`); nil = the globe.
+    @Published var favicon: NSImage?
     @Published var highlightEnabled = false {
         didSet {
             switch content {
             case .ssh(let controller): controller.setHighlightEnabled(highlightEnabled)
             case .serial(let controller): controller.setHighlightEnabled(highlightEnabled)
-            case .local, .web: return
+            case .local, .web, .files, .ping: return
             }
             // The default for the NEXT tab follows whichever toggle was used
             // last — ⇧⌘H or the tab's context menu (the status-bar sheep was
@@ -50,7 +59,7 @@ final class SessionTab: ObservableObject, Identifiable {
             switch content {
             case .ssh(let controller): controller.adoptVendor(highlightVendor)
             case .serial(let controller): controller.adoptVendor(highlightVendor)
-            case .local, .web: break
+            case .local, .web, .files, .ping: break
             }
         }
     }
@@ -188,7 +197,7 @@ final class AppModel: ObservableObject {
         // A prompt-named title already carries the cable / address.
         if tab.promptName != nil { return tab.title }
         switch tab.content {
-        case .local, .web:
+        case .local, .web, .files, .ping:
             return tab.title
         case .ssh(let controller):
             let address = controller.host.address
@@ -218,6 +227,8 @@ final class AppModel: ObservableObject {
     func paneContent(ofSession id: UUID) -> PaneContent? {
         guard let tab = tab(id: id) else { return nil }
         if case .web(let controller) = tab.content { return controller }
+        if case .files(let controller) = tab.content { return controller }
+        if case .ping(let controller) = tab.content { return controller }
         return terminalHost(of: tab)
     }
     // Launch clean like Terminal.app — the sidebar opens with ⌘0 or the
@@ -231,6 +242,12 @@ final class AppModel: ObservableObject {
     }()
     @Published var quickConnect: QuickConnectRequest?
     @Published var showCredentials = false
+    /// ＋ / File → Open File… (`FileTransferSheet`).
+    @Published var showFileTransfer = false
+    /// File ▸ Transfer Log… / the File Server popover (`TransferLogView`).
+    @Published var showTransferLog = false
+    /// 6.0's What's New, once (`WhatsNewPlan`).
+    @Published var showWhatsNew = false
     /// File → Known Hosts… (and the HOST KEY CHANGED offer, pre-filtered).
     @Published var knownHostsRequest: KnownHostsRequest?
     /// File → Search Logs… (4.2 (4)).
@@ -277,7 +294,7 @@ final class AppModel: ObservableObject {
                 switch tab.content {
                 case .ssh(let controller): controller.terminalHost.cancelCommandGuard(turnedOff: true)
                 case .serial(let controller): controller.terminalHost.cancelCommandGuard(turnedOff: true)
-                case .local, .web: break
+                case .local, .web, .files, .ping: break
                 }
             }
         }
@@ -293,7 +310,7 @@ final class AppModel: ObservableObject {
                     controller.terminalHost.cancelSafePaste(reason: .stopped)
                 case .serial(let controller):
                     controller.terminalHost.cancelSafePaste(reason: .stopped)
-                case .local, .web:
+                case .local, .web, .files, .ping:
                     break
                 }
             }
@@ -314,10 +331,27 @@ final class AppModel: ObservableObject {
     @Published var statusShowClock = true {
         didSet { UserDefaults.standard.set(statusShowClock, forKey: "statusShowClock") }
     }
-    /// The connection-state sheep at the bar's left edge (also the
-    /// highlight on/off button). Shown by default.
-    @Published var statusShowSheep = true {
-        didSet { UserDefaults.standard.set(statusShowSheep, forKey: "statusShowSheep") }
+    /// The File Server glyph in the bottom bar. Off: it shows only while a
+    /// server runs or its popover is open (opened from ＋ → File Server…),
+    /// and goes away by itself once every server is off.
+    @Published var statusShowFileServer = true {
+        didSet { UserDefaults.standard.set(statusShowFileServer, forKey: "statusShowFileServer") }
+    }
+    /// View ▸ Bottom Bar Items ▸ Transfer Progress (default on): the strip
+    /// that takes the bottom bar while the File Server moves files.
+    @Published var statusShowTransfers = true {
+        didSet { UserDefaults.standard.set(statusShowTransfers, forKey: "statusShowTransfers") }
+    }
+    /// Mirrors FileServerModel (running or popover open) so the bar can
+    /// show the glyph without observing every transfer tick.
+    @Published var fileServerActive = false
+    /// A File Server transfer is moving (or just ended): the bottom bar shows
+    /// the transfer strip in place of its items, even when it is hidden.
+    @Published var fileTransferShown = false
+    /// How the bar's left edge shows the connection state: wool puffs (the
+    /// default), a packet, the sheep, or nothing (5.0 (60)).
+    @Published var statusConnectionStyle: ConnectionIndicator = .wool {
+        didSet { UserDefaults.standard.set(statusConnectionStyle.rawValue, forKey: ConnectionIndicator.storageKey) }
     }
     @Published var terminalTheme = "sheepterm" {
         didSet {
@@ -382,7 +416,7 @@ final class AppModel: ObservableObject {
             case .local(let controller): Theme.apply(to: controller.terminalView)
             case .ssh(let controller): Theme.apply(to: controller.terminalView)
             case .serial(let controller): Theme.apply(to: controller.terminalView)
-            case .web: break
+            case .web, .files, .ping: break
             }
         }
     }
@@ -432,7 +466,10 @@ final class AppModel: ObservableObject {
         statusShowHints = UserDefaults.standard.object(forKey: "statusShowHints") as? Bool ?? false
         statusShowIP = UserDefaults.standard.object(forKey: "statusShowIP") as? Bool ?? false
         statusShowClock = UserDefaults.standard.object(forKey: "statusShowClock") as? Bool ?? true
-        statusShowSheep = UserDefaults.standard.object(forKey: "statusShowSheep") as? Bool ?? true
+        statusShowFileServer = UserDefaults.standard.object(forKey: "statusShowFileServer") as? Bool ?? true
+        statusShowTransfers = UserDefaults.standard.object(forKey: "statusShowTransfers") as? Bool ?? true
+        statusConnectionStyle = ConnectionIndicator.stored(UserDefaults.standard.string(forKey: ConnectionIndicator.storageKey),
+                                                           legacySheepShown: UserDefaults.standard.object(forKey: "statusShowSheep") as? Bool)
         // Launched from Finder the cwd is "/"; start shells at home like Terminal.app.
         FileManager.default.changeCurrentDirectoryPath(NSHomeDirectory())
         // hosts.json / recents.json unreadable at launch: the file is kept as
@@ -463,6 +500,7 @@ final class AppModel: ObservableObject {
         // now. Compile the per-vendor packs once, here — there is no Settings
         // UI left to recompile them, so nothing ever calls this again.
         Highlighter.installDefaults()
+        FileServerEngines.install()
         newLocalTab()
         installKeyMonitor()
         startSerialWatch()
@@ -501,7 +539,10 @@ final class AppModel: ObservableObject {
         statusShowHints = defaults.object(forKey: "statusShowHints") as? Bool ?? false
         statusShowIP = defaults.object(forKey: "statusShowIP") as? Bool ?? false
         statusShowClock = defaults.object(forKey: "statusShowClock") as? Bool ?? true
-        statusShowSheep = defaults.object(forKey: "statusShowSheep") as? Bool ?? true
+        statusShowFileServer = defaults.object(forKey: "statusShowFileServer") as? Bool ?? true
+        statusShowTransfers = defaults.object(forKey: "statusShowTransfers") as? Bool ?? true
+        statusConnectionStyle = ConnectionIndicator.stored(defaults.string(forKey: ConnectionIndicator.storageKey),
+                                                           legacySheepShown: defaults.object(forKey: "statusShowSheep") as? Bool)
         let width = defaults.double(forKey: "sidebarWidth")
         sidebarWidth = width == 0 ? 232 : min(max(width, 200), 320)
         if files == nil || files!.contains("hosts.json") { store.reloadFromDisk() }
@@ -658,13 +699,28 @@ final class AppModel: ObservableObject {
     func shutdownSessionsForQuit() {
         // Phase 1 — nothing here waits. See `beginShutdownForQuit`.
         var flushes: [QuitLogFlush] = []
+        // Servers stop (each sweeps its upload temps) and Files tabs close
+        // (a cancelled download removes its part file).
+        FileServerModel.shared.stopAll()
+        // Those stops finish on their own queues; at quit nothing will, so
+        // the hidden temps they would have removed are swept here (review
+        // 5.0 (58)): the backups folder and every Files tab's folder.
+        FileServerPlan.sweepTemps(in: FileServerModel.shared.writeFolder)
+        var sweep: [URL] = []
         for tab in tabs {
             switch tab.content {
             case .ssh(let controller): flushes.append(controller.beginShutdownForQuit())
             case .serial(let controller): flushes.append(controller.beginShutdownForQuit())
+            case .files(let controller):
+                controller.close()
+                sweep.append(controller.localPath)
+            case .ping(let controller): controller.close()
             case .local, .web: break    // no worker, no log
             }
         }
+        // After EVERY tab has closed: a sweep between two closes could take
+        // the part file of a tab sharing the folder mid-rename (review 6.0).
+        for folder in sweep { FileServerPlan.sweepTemps(in: folder) }
         guard !flushes.isEmpty else { return }
 
         // Phase 2 — one budget for the whole quit, taken once, in
@@ -981,6 +1037,8 @@ final class AppModel: ObservableObject {
         case .ssh(let controller): view = controller.terminalView
         case .serial(let controller): view = controller.terminalView
         case .web(let controller): view = controller.keyView
+        case .files(let controller): view = controller.keyView
+        case .ping(let controller): view = controller.keyView
         }
         view.window?.makeFirstResponder(view)
     }
@@ -993,7 +1051,7 @@ final class AppModel: ObservableObject {
         case .local(let controller): return controller.terminalView
         case .ssh(let controller): return controller.terminalView
         case .serial(let controller): return controller.terminalView
-        case .web: return nil
+        case .web, .files, .ping: return nil
         }
     }
 
@@ -1063,6 +1121,7 @@ final class AppModel: ObservableObject {
         guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
         let store = WKWebsiteDataStore.default()
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
+        WebFavicon.clear()
     }
 
     /// File / ＋ → New Web Tab: an empty web tab, URL field focused — no form.
@@ -1089,9 +1148,144 @@ final class AppModel: ObservableObject {
             quickConnect = QuickConnectRequest(kind: .web, addOnly: true, webPrefill: (name, url))
         case .ssh(let host):
             quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true, sshPrefill: host)
+        case .telnet(let host):
+            // The same field carries it: the form takes the prefill of its own kind.
+            quickConnect = QuickConnectRequest(kind: .telnet, addOnly: true, sshPrefill: host)
         case .unsupported, .alreadySaved:
             NSSound.beep()
         }
+    }
+
+    /// Opens a Files tab for a saved/typed SSH host (SFTP, SCP fallback) or a
+    /// typed `ftp://` / `tftp://` target. The login is resolved the way a
+    /// terminal session resolves it: the credential's username, its Keychain
+    /// password, else this run's session cache — else the tab asks.
+    ///
+    /// An SSH tab of the same saved host that is up lends its connection:
+    /// the Files tab opens SFTP as a second channel there (no second login,
+    /// through its jump host too) and connects on its own only when that
+    /// fails. `session` is the tab to try first.
+    func openFiles(_ target: Host, proto: RemoteEndpoint.Proto, session: SSHTerminalController? = nil) {
+        var host = target.completed(from: store.groups.flatMap(\.hosts), when: .needsCompletion)
+        let sharing = target.filesProto == nil && proto != .ftp && proto != .tftp
+        let hostID = target.id
+        let lender: () -> SSHChannelBridge? = { [weak self, weak session] in
+            if let bridge = session?.openChannelBridge() { return bridge }
+            guard let self else { return nil }
+            for tab in self.tabs {
+                if case .ssh(let other) = tab.content, other !== session, other.host.id == hostID,
+                   let bridge = other.openChannelBridge() { return bridge }
+            }
+            return nil
+        }
+        // A host reached through a bastion: the Files tab does not tunnel
+        // yet — say so rather than dial the device directly. (An open tab
+        // of it lends its connection, which already goes through.)
+        let canLend = sharing && (session?.canLendConnection == true || tabs.contains { tab in
+            if case .ssh(let other) = tab.content { return other.host.id == hostID && other.canLendConnection }
+            return false
+        })
+        if (host.jumpHostID != nil || host.jumpSpecValue != nil) && !canLend {
+            let alert = SheepAlert()
+            alert.messageText = String(localized: "Open File does not go through a jump host yet.")
+            alert.informativeText = String(localized: "“\(host.name)” is reached through a jump host. Connect its SSH tab first — the Files tab then rides that connection.")
+            alert.addButton(withTitle: String(localized: "OK"))
+            alert.sheepStyled().runModal()
+            return
+        }
+        let credential = host.credentialID.flatMap { credentialStore.credential(for: $0) }
+        if let credential, !credential.username.isEmpty { host.username = credential.username }
+        let password = credential.flatMap { credentialStore.password(for: $0) }
+            ?? passwordCache["\(host.username)@\(host.address):\(host.port)"]
+        let endpoint = RemoteEndpoint(proto: proto, host: host.address, port: host.port,
+                                      username: host.username, password: password,
+                                      legacyAlgorithms: (host.cipherMode ?? .auto) != .modern)
+        let title = target.filesProto == nil ? host.name : "\(host.username.isEmpty ? "" : host.username + "@")\(host.address)"
+        let controller = FilesTabController(endpoint: endpoint, title: title)
+        if sharing { controller.sharedSession = lender }
+        controller.reachedThroughJump = host.jumpHostID != nil || host.jumpSpecValue != nil
+        let tab = SessionTab(content: .files(controller), title: title)
+        controller.onStatus = { [weak tab] status in tab?.statusInfo = status }
+        controller.onCloseTab = { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.close(tab: tab)
+        }
+        // A click in the pane makes it the selected session (a split: ⌘W
+        // and the status bar must act on the pane that was clicked).
+        controller.onFocus = { [weak self, weak tab] in
+            guard let self, let tab, self.selectedID != tab.id else { return }
+            self.selectedID = tab.id
+        }
+        if attach(tab) { selectedID = tab.id }
+        controller.start()
+    }
+
+    /// The Ping tab (6.0 (2)). `targets` (a sidebar host / SSH tab ▸ Ping,
+    /// `ping …` in the connect box) go to the focused Ping tab, else the
+    /// last one, else a new one; ＋ / File ▸ New Ping… always opens a new,
+    /// empty tab. Nothing pings until a target is added.
+    func openPing(_ targets: [String] = [], inNewTab: Bool = false) {
+        if !inNewTab, !targets.isEmpty {
+            let pings = tabs.compactMap { tab -> (SessionTab, PingTabController)? in
+                if case .ping(let controller) = tab.content { return (tab, controller) }
+                return nil
+            }
+            if let (tab, controller) = pings.first(where: { $0.0.id == selectedID }) ?? pings.last {
+                controller.add(targets: targets)
+                selectedID = tab.id
+                return
+            }
+        }
+        let controller = PingTabController()
+        let tab = SessionTab(content: .ping(controller), title: PingTabController.title(count: 0))
+        // It keeps half its tab at least (PaneLayout.keepsWhole).
+        book.compactSessions.insert(tab.id)
+        // Read the hosts when a row is added, not when the tab opened: a host
+        // saved or renamed later still names its row (review 6.0 (2)).
+        controller.savedName = { [weak self] address in
+            guard let self else { return nil }
+            let saved = self.store.groups.flatMap(\.hosts).filter { $0.kind == .ssh || $0.kind == .telnet }
+                .map { (name: $0.name, address: $0.address) }
+            return PingPlan.savedName(for: address, in: saved)
+        }
+        controller.onTitleChange = { [weak tab] title in tab?.title = title }
+        controller.onStatus = { [weak tab] status in tab?.statusInfo = status.isEmpty ? nil : status }
+        controller.onFocus = { [weak self, weak tab] in
+            guard let self, let tab, self.selectedID != tab.id else { return }
+            self.selectedID = tab.id
+        }
+        controller.onOpenSSH = { [weak self] address in
+            guard let self else { return }
+            // The saved host on that address, else a typed target.
+            if let host = self.store.groups.flatMap(\.hosts).first(where: { $0.kind == .ssh && $0.address.lowercased() == address.lowercased() }) {
+                self.open(host: host)
+            } else if let host = ConnectParser.parse(address, requireHostShape: false) {
+                self.open(host: host)
+            }
+        }
+        if attach(tab) { selectedID = tab.id }
+        controller.start()
+        controller.add(targets: targets)
+    }
+
+    /// File ▸ Open Files / a tab chip: a Files tab for the SSH tab's host.
+    /// SSH tab chip ▸ Ping: its device's address into the Ping tab.
+    func pingTab(_ tab: SessionTab) {
+        guard case .ssh(let controller) = tab.content,
+              let targets = PingPlan.addresses(for: controller.host.address) else { NSSound.beep(); return }
+        openPing(targets)
+    }
+
+    func openFilesForSelectedTab() {
+        guard let tab = selectedTab, case .ssh(let controller) = tab.content else { NSSound.beep(); return }
+        pendingPlacement = .tabAfter(tab.id)
+        openFiles(controller.host, proto: FilesPlan.sshHostProto, session: controller)
+        pendingPlacement = .newTab
+    }
+
+    var canOpenFilesForSelectedTab: Bool {
+        if case .ssh? = selectedTab?.content { return true }
+        return false
     }
 
     private func openWeb(_ host: Host) {
@@ -1099,6 +1293,7 @@ final class AppModel: ObservableObject {
         let tab = SessionTab(content: .web(controller), title: host.name)
         controller.onTitleChange = { [weak tab] title in tab?.title = title }
         controller.onStatus = { [weak tab] status in tab?.statusInfo = status }
+        controller.onFavicon = { [weak tab] image in tab?.favicon = image }
         controller.onFocus = { [weak self, weak tab] in
             guard let self, let tab, self.selectedID != tab.id else { return }
             self.selectedID = tab.id
@@ -1218,7 +1413,7 @@ final class AppModel: ObservableObject {
         case .local(let controller): return controller.terminalHost
         case .ssh(let controller): return controller.terminalHost
         case .serial(let controller): return controller.terminalHost
-        case .web: return nil
+        case .web, .files, .ping: return nil
         }
     }
 
@@ -1247,8 +1442,9 @@ final class AppModel: ObservableObject {
         tab.objectWillChange.send()
     }
 
-    /// Edit → Send Break (⌃⌥B). Serial consoles only: a break is a line
-    /// condition, and SSH and a local shell have no line to put it on.
+    /// Edit → Send Break (⌃⌥B). Consoles only: a break is a line condition
+    /// (on telnet, IAC BRK — a console server puts it on the line behind it);
+    /// SSH and a local shell have no line to put it on.
     func sendBreak() {
         guard case .serial(let controller)? = selectedTab?.content else { return }
         controller.sendBreak()
@@ -1294,6 +1490,13 @@ final class AppModel: ObservableObject {
         return false
     }
 
+    /// A console tab: the cable, or telnet (binary mode is asked for first —
+    /// a console server's line to a ROMMON).
+    var canSendFileViaXModem: Bool {
+        if case .serial? = selectedTab?.content { return true }
+        return false
+    }
+
     /// SSH/serial tabs that are still up — what a quit would actually cut.
     /// A tab with no status yet is mid-connect, which counts: killing it
     /// loses the session just the same.
@@ -1301,6 +1504,9 @@ final class AppModel: ObservableObject {
         tabs.filter { tab in
             switch tab.content {
             case .local, .web: return false
+            // A Files tab counts while a transfer is queued or moving.
+            case .files(let controller): return controller.busyTransfers > 0
+            case .ping: return false
             case .ssh, .serial:
                 guard let status = tab.statusInfo else { return true }
                 return !status.hasPrefix("disconnected")
@@ -1343,6 +1549,14 @@ final class AppModel: ObservableObject {
               password overridePassword: String? = nil, serialLog: Bool? = nil,
               reusingLogger: SessionLogger? = nil, promptName carriedPromptName: String? = nil,
               askPasswordFor refused: RefusedLogin? = nil) {
+        if let raw = host.filesProto, let proto = RemoteEndpoint.Proto(rawValue: raw) {
+            openFiles(host, proto: proto)
+            return
+        }
+        if let targets = host.pingTargets {
+            openPing(targets)
+            return
+        }
         switch host.kind {
         case .local:
             newLocalTab()
@@ -1453,6 +1667,7 @@ final class AppModel: ObservableObject {
                 tab.highlightVendor = detected
             }
             tab.highlightEnabled = UserDefaults.standard.object(forKey: "highlightDefault") as? Bool ?? true
+            controller.onForwards = { [weak tab] states in tab?.forwards = states }
             controller.onStatus = { [weak tab, weak self] status in
                 guard let tab else { return }
                 tab.statusInfo = status
@@ -1488,7 +1703,9 @@ final class AppModel: ObservableObject {
             }
             if attach(tab) { selectedID = tab.id }
             controller.start()
-        case .serial:
+        case .serial, .telnet:
+            // A telnet session is a console line over TCP: the same controller,
+            // with `TelnetWorker` under it (see ConsoleWorker).
             let controller = SerialTerminalController(host: host, reusingLogger: reusingLogger)
             controller.logOverride = serialLog
             controller.terminalHost.historyKey = historyKey(for: host)
@@ -1522,7 +1739,18 @@ final class AppModel: ObservableObject {
                 // The port is open only when this status arrives — note the
                 // recent now, not at open() time; a failed open must not be
                 // recorded (and must not be written twice).
-                if status.hasPrefix("serial ·") {
+                let livePrefix = host.kind == .telnet ? "telnet ·" : "serial ·"
+                if host.kind == .telnet, status.hasPrefix(livePrefix) {
+                    tab.wasConnected = true
+                    if !tab.didNoteRecent { self?.store.noteRecent(host) }
+                    tab.didNoteRecent = true
+                    let tabID = tab.id
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                        guard let current = self?.tabs.first(where: { $0.id == tabID }),
+                              current.statusInfo?.hasPrefix(livePrefix) == true else { return }
+                        current.autoReconnectAttempts = 0
+                    }
+                } else if status.hasPrefix(livePrefix) {
                     tab.wasConnected = true
                     var current = host
                     current.port = controller?.host.port ?? host.port
@@ -1676,6 +1904,10 @@ final class AppModel: ObservableObject {
         // which this form has never heard of: writing its nil over the
         // heading unfiled the host as a side effect of "Update Saved Host".
         var updated = host.carryingLocalFiling(from: existing)
+        // The form's nil means no forwards were typed (they sit under its
+        // Advanced row) — Update must not wipe the saved host's. Typed ones
+        // replace them, and the change is listed in the dialog.
+        if updated.forwards == nil { updated.forwards = existing.forwards }
         // The Session name field is optional and the form fills it with the
         // address (or the device leaf) when it is left empty. That is not a
         // name the user asked to save, so it neither counts as a change nor
@@ -1771,6 +2003,14 @@ final class AppModel: ObservableObject {
             }
             changes.append(String(localized: "jump host: \(label(existing)) → \(label(incoming))"))
         }
+        // nil from the form = none typed: the saved host keeps its own (see saveSession).
+        if let typed = incoming.forwards, typed != (existing.forwards ?? []) {
+            func list(_ host: Host) -> String {
+                let labels = host.forwardSpecs.map(\.label)
+                return labels.isEmpty ? String(localized: "none") : labels.joined(separator: ", ")
+            }
+            changes.append(String(localized: "port forwards: \(list(existing)) → \(list(incoming))"))
+        }
         return changes
     }
 
@@ -1784,6 +2024,10 @@ final class AppModel: ObservableObject {
         case .serial(let controller):
             controller.stop()
         case .web(let controller):
+            controller.close()
+        case .files(let controller):
+            controller.close()
+        case .ping(let controller):
             controller.close()
         }
         tabs.remove(at: index)
@@ -1830,7 +2074,7 @@ final class AppModel: ObservableObject {
         switch tab.content {
         case .ssh(let controller): host = controller.host
         case .serial(let controller): host = controller.host
-        case .local, .web: return
+        case .local, .web, .files, .ping: return
         }
         let attempts = tab.autoReconnectAttempts
         guard attempts < 3 else {
@@ -1901,6 +2145,12 @@ final class AppModel: ObservableObject {
             // "Reconnect" on a web tab is a reload: same page, same session.
             controller.reload()
             return
+        case .files(let controller):
+            controller.connect()
+            return
+        case .ping(let controller):
+            controller.restartAll()
+            return
         case .local: return
         }
         // The successor tab is rebuilt from scratch, so its highlight state
@@ -1946,7 +2196,7 @@ final class AppModel: ObservableObject {
                 switch newTab.content {
                 case .ssh(let controller): controller.suppressVendorDetection()
                 case .serial(let controller): controller.suppressVendorDetection()
-                case .local, .web: break
+                case .local, .web, .files, .ping: break
                 }
             }
             // didSet on these re-applies the family (adoptVendor → repaint if
@@ -1957,7 +2207,7 @@ final class AppModel: ObservableObject {
                 switch newTab.content {
                 case .ssh(let controller): controller.carryAutoDetected(oldVendor)
                 case .serial(let controller): controller.carryAutoDetected(oldVendor)
-                case .local, .web: break
+                case .local, .web, .files, .ping: break
                 }
             }
             // Carrying the toggle over is not the user toggling: the didSet
@@ -2026,9 +2276,34 @@ final class AppModel: ObservableObject {
 
     /// ⌘D / ⌘⇧D: a second session on the focused pane's host, beside it.
     /// A serial console cannot be opened twice (the port is exclusive).
+    #if DEBUG
+    /// Screenshots: a demo Ping tab split beside the focused pane.
+    func debugPingDemoBeside() {
+        guard let tab = selectedTab else { return }
+        // SHEEPTERM_DEBUG_PING_PROMO_DOWN=1: below (full width, graph shown).
+        let down = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_PING_PROMO_DOWN"] == "1"
+        pendingPlacement = .split(beside: tab.id, down ? .down : .right)
+        openPing(inNewTab: true)
+        pendingPlacement = .newTab
+        if case .ping(let ping)? = selectedTab?.content {
+            ping.loadDemo()
+            if let first = ping.rows.first { ping.selection = [first.id] }
+        }
+    }
+    #endif
+
+    /// Split Right / Down are greyed when the split would be refused (a
+    /// full tab, or a Ping pane that would lose its half) — the menu said
+    /// yes and then beeped (review 6.0 (2)).
+    func canSplitFocusedPane(_ direction: PaneDirection) -> Bool {
+        guard let tab = selectedTab, let ws = selectedWorkspace, ws.paneCount < PaneLayout.maxPanes else { return false }
+        var isPing = false
+        if case .ping = tab.content { isPing = true }
+        return book.canSplit(beside: tab.id, direction, compact: isPing)
+    }
+
     func splitFocusedPane(_ direction: PaneDirection) {
-        guard let tab = selectedTab, let ws = selectedWorkspace else { NSSound.beep(); return }
-        guard ws.paneCount < PaneLayout.maxPanes else { NSSound.beep(); return }
+        guard let tab = selectedTab, canSplitFocusedPane(direction) else { NSSound.beep(); return }
         pendingPlacement = .split(beside: tab.id, direction)
         switch tab.content {
         case .local:
@@ -2037,11 +2312,15 @@ final class AppModel: ObservableObject {
             // Same as `reconnect`: a family the FINGERPRINT chose is written
             // onto `controller.host`; opening with it would read as a saved
             // choice and switch detection off on the new pane for good.
+            var host = controller.host.forSecondSession
+            if !tab.vendorManuallyChosen && tab.highlightVendor != .auto { host.vendor = .auto }
+            open(host: host, completeness: .complete)
+        case .serial(let controller):
+            // A cable is exclusive; a telnet console opens again like SSH.
+            guard controller.isTelnet else { NSSound.beep(); break }
             var host = controller.host
             if !tab.vendorManuallyChosen && tab.highlightVendor != .auto { host.vendor = .auto }
             open(host: host, completeness: .complete)
-        case .serial:
-            NSSound.beep()
         case .web(let controller):
             // The same site beside it, on the page the tab is on now.
             var host = controller.host
@@ -2049,6 +2328,10 @@ final class AppModel: ObservableObject {
                 host.address = url
             }
             open(host: host, completeness: .complete)
+        case .files:
+            NSSound.beep()
+        case .ping:
+            openPing(inNewTab: true)
         }
         pendingPlacement = .newTab
     }
@@ -2063,7 +2346,7 @@ final class AppModel: ObservableObject {
             NSSound.beep()
             return
         }
-        var host = controller.host
+        var host = controller.host.forSecondSession
         if !tab.vendorManuallyChosen && tab.highlightVendor != .auto { host.vendor = .auto }
         pendingPlacement = .tabAfter(tab.id)
         open(host: host, completeness: .complete)
@@ -2090,7 +2373,7 @@ final class AppModel: ObservableObject {
     /// Sidebar → Open in Split: `host` to the right of the focused pane (or
     /// its own tab when there is none).
     func openInSplit(host: Host) {
-        if let focused = selectedID, let ws = selectedWorkspace, ws.paneCount < PaneLayout.maxPanes {
+        if let focused = selectedID, book.canSplit(beside: focused, .right) {
             pendingPlacement = .split(beside: focused, .right)
         }
         open(host: host)
@@ -2167,7 +2450,7 @@ final class AppModel: ObservableObject {
 
     /// A sidebar host dropped on a pane's edge: a new session there.
     func dropHost(_ host: Host, beside target: UUID, _ direction: PaneDirection) {
-        guard let ws = book.workspace(containing: target), ws.paneCount < PaneLayout.maxPanes else {
+        guard book.canSplit(beside: target, direction) else {
             NSSound.beep(); return
         }
         pendingPlacement = .split(beside: target, direction)
@@ -2207,9 +2490,34 @@ final class AppModel: ObservableObject {
         case .serial(let controller):
             controller.suppressVendorDetection()
             store.setVendor(vendor, matching: controller.host)
-        case .local, .web: break
+        case .local, .web, .files, .ping: break
         }
         tab.highlightVendor = vendor
+    }
+
+    /// The File Server popover's family pick for a tab it could not detect:
+    /// this tab only (highlight follows); the saved host is NOT changed —
+    /// the status bar and the View menu are where a family gets saved.
+    func setHighlightVendorForTabOnly(_ vendor: Vendor, tabID: UUID) {
+        guard let tab = tabs.first(where: { $0.id == tabID }) else { return }
+        switch tab.content {
+        case .ssh(let controller): controller.suppressVendorDetection()
+        case .serial(let controller): controller.suppressVendorDetection()
+        case .local, .web, .files, .ping: return
+        }
+        tab.vendorManuallyChosen = true
+        tab.highlightVendor = vendor
+    }
+
+    /// The device address a tab talks to, for File Server's route lookup.
+    /// Nil for serial, local and web tabs (the popover then shows the Mac's
+    /// primary address).
+    func deviceAddress(of tab: SessionTab) -> String? {
+        switch tab.content {
+        case .ssh(let controller): return controller.host.address
+        case .serial(let controller) where controller.isTelnet: return controller.host.address
+        default: return nil
+        }
     }
 
     func toggleHighlightCurrent() {
@@ -2217,7 +2525,7 @@ final class AppModel: ObservableObject {
         switch tab.content {
         case .ssh, .serial:
             tab.highlightEnabled.toggle() // didSet records the new default
-        case .local, .web:
+        case .local, .web, .files, .ping:
             break
         }
     }
@@ -2281,7 +2589,7 @@ final class AppModel: ObservableObject {
 
     private var openSerialPaths: Set<String> {
         Set(tabs.compactMap { tab -> String? in
-            if case .serial(let controller) = tab.content { return controller.host.address }
+            if case .serial(let controller) = tab.content, !controller.isTelnet { return controller.host.address }
             return nil
         })
     }

@@ -177,7 +177,7 @@ nonisolated struct KeychainBackend: PasswordVault.Backend {
             query[kSecUseAuthenticationContext as String] = context
             // The login (file) keychain's access prompt is not covered by
             // the context above; this older flag is what refuses it there.
-            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+            query[kSecUseAuthenticationUI as String] = LegacyKeychainFlag.value.uiFail
         }
         return query
     }
@@ -211,4 +211,15 @@ nonisolated struct KeychainBackend: PasswordVault.Backend {
         let status = SecItemDelete(query(account, interactive: interactive) as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
+}
+
+/// `kSecUseAuthenticationUIFail` is deprecated, yet it is still the only
+/// thing that refuses the FILE keychain's prompt (the LAContext above covers
+/// the data-protection keychain only). Read through a protocol so the one
+/// intended use does not warn on every build.
+nonisolated private protocol LegacyKeychainFlagReading { var uiFail: CFString { get } }
+nonisolated private struct LegacyKeychainFlag: LegacyKeychainFlagReading {
+    @available(macOS, deprecated: 11.0)
+    var uiFail: CFString { kSecUseAuthenticationUIFail }
+    static var value: LegacyKeychainFlagReading { LegacyKeychainFlag() }
 }

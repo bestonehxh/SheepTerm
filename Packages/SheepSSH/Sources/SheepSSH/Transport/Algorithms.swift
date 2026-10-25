@@ -229,4 +229,28 @@ enum Negotiation {
         return NegotiatedAlgorithms(kex: kex, hostKey: hostKey, cipherClientToServer: c2s, cipherServerToClient: s2c,
                                     macClientToServer: macC2S, macServerToClient: macS2C)
     }
+    /// Server role: the first algorithm on the CLIENT's name-list that this
+    /// server supports (RFC 4253 §7.1 — the client's order wins).
+    static func negotiateServer(client: KexInit, server: AlgorithmPreferences) throws(NegotiationError) -> NegotiatedAlgorithms {
+        func pickName<A: RawRepresentable>(_ clientNames: [String], _ supported: [A],
+                                           _ category: String) throws(NegotiationError) -> A
+        where A.RawValue == String {
+            for name in clientNames {
+                if let match = supported.first(where: { $0.rawValue == name }) { return match }
+            }
+            throw .noCommonAlgorithm(category: category, serverOffers: supported.map(\.rawValue))
+        }
+        let kex = try pickName(client.kexAlgorithms, server.kex, "key exchange")
+        let hostKey = try pickName(client.hostKeyAlgorithms, server.hostKeys, "host key")
+        let c2s = try pickName(client.ciphersClientToServer, server.ciphers, "cipher (client to server)")
+        let s2c = try pickName(client.ciphersServerToClient, server.ciphers, "cipher (server to client)")
+        let macC2S = c2s.isAEAD ? nil : try pickName(client.macsClientToServer, server.macs, "MAC (client to server)")
+        let macS2C = s2c.isAEAD ? nil : try pickName(client.macsServerToClient, server.macs, "MAC (server to client)")
+        guard client.compressionClientToServer.contains("none"),
+              client.compressionServerToClient.contains("none") else {
+            throw .noCommonAlgorithm(category: "compression", serverOffers: ["none"])
+        }
+        return NegotiatedAlgorithms(kex: kex, hostKey: hostKey, cipherClientToServer: c2s, cipherServerToClient: s2c,
+                                    macClientToServer: macC2S, macServerToClient: macS2C)
+    }
 }

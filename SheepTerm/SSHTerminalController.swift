@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SheepVTRender
 import SheepJump
+import SheepSSH
 import Synchronization
 
 /// Owns one SSH session tab: the SheepVT view plus the SSH worker.
@@ -17,6 +18,8 @@ final class SSHTerminalController: NSObject {
 
     var onTitleChange: ((String) -> Void)?
     var onStatus: ((String) -> Void)?
+    /// The session's forwards, whenever they change (`SessionTab.forwards`).
+    var onForwards: (([ForwardState]) -> Void)?
     /// Fired once when the passive stream fingerprint names a device family
     /// for a tab that was still on `.auto`. AppModel routes it to the tab's
     /// highlightVendor via the auto path (never marking it a manual choice).
@@ -95,6 +98,10 @@ final class SSHTerminalController: NSObject {
     }
 
     private let worker = SSHWorker()
+
+    /// A Files tab's way onto this tab's connection (nil unless it is up).
+    func openChannelBridge() -> SSHChannelBridge? { worker.openChannelBridge() }
+    var canLendConnection: Bool { worker.isInteractive }
     /// What the last `worker.write` made through `TerminalViewDelegate.send`
     /// answered. That delegate method returns Void and cannot be changed (it
     /// belongs to the terminal package), so Safe Paste's pacer reads the
@@ -250,6 +257,10 @@ final class SSHTerminalController: NSObject {
             DispatchQueue.main.async {
                 self?.printNotice(message)
             }
+        }
+        worker.onForwards = { [weak self] status in
+            let states = status.map { ForwardState(spec: PortForwardSpec($0.rule), active: $0.active, connections: $0.connections) }
+            DispatchQueue.main.async { self?.onForwards?(states) }
         }
         worker.onStatus = { [weak self] status in
             DispatchQueue.main.async {
@@ -659,8 +670,26 @@ final class SSHTerminalController: NSObject {
             initialCols: terminalView.cols,
             initialRows: terminalView.rows,
             agentForward: host.agentForward ?? false,
-            jump: jump
+            jump: jump,
+            forwards: forwardRules()
         ))
+    }
+
+    /// Status bar menu → Stop / Start one forward of the live session.
+    func setForward(_ spec: PortForwardSpec, enabled: Bool) {
+        worker.setForward(spec.rule, enabled: enabled)
+    }
+
+    /// The host's port forwards as SheepSSH rules. An entry that does not
+    /// parse (a hand-edited hosts.json, another build) is named, not dropped
+    /// in silence.
+    private func forwardRules() -> [ForwardRule] {
+        let specs = host.forwardSpecs
+        let unreadable = (host.forwards ?? []).filter { PortForwardSpec.parse($0) == nil }
+        if !unreadable.isEmpty {
+            printNotice("port forward not understood, skipped: " + unreadable.joined(separator: ", "), error: true)
+        }
+        return specs.map(\.rule)
     }
 
     /// The start password, handed over once: the controller does not keep
@@ -922,5 +951,30 @@ extension SSHTerminalController: TerminalViewDelegate {
 
     func shouldPaste(_ view: TerminalView, text: String) -> Bool {
         terminalHost.shouldPaste(text)
+    }
+}
+
+// The app's spelling of a forward and SheepSSH's, both ways.
+nonisolated extension PortForwardSpec {
+    var rule: ForwardRule {
+        switch self {
+        case .local(let bind, let target, let port): return .local(bindPort: bind, host: target, port: port)
+        case .socks(let bind): return .dynamic(bindPort: bind)
+        // No address = "" on the wire: the server's loopback (OpenSSH's default).
+        case .remote(let address, let bind, let target, let port):
+            return .remote(bindAddress: address ?? "", bindPort: bind, host: target, port: port)
+        case .remoteSocks(let address, let bind): return .remoteDynamic(bindAddress: address ?? "", bindPort: bind)
+        }
+    }
+
+    init(_ rule: ForwardRule) {
+        switch rule {
+        case .local(let bind, let host, let port): self = .local(bindPort: bind, host: host, port: port)
+        case .dynamic(let bind): self = .socks(bindPort: bind)
+        case .remote(let address, let bind, let host, let port):
+            self = .remote(bindAddress: address.isEmpty ? nil : address, bindPort: bind, host: host, port: port)
+        case .remoteDynamic(let address, let bind):
+            self = .remoteSocks(bindAddress: address.isEmpty ? nil : address, bindPort: bind)
+        }
     }
 }

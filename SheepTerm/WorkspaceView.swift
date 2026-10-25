@@ -79,8 +79,9 @@ extension SessionTerminalHost: PaneContent {
 /// straight onto view coordinates.
 final class PaneTreeView: NSView {
     /// The gap between panes (variant C): it IS the divider — nothing is
-    /// drawn in it, the chrome background shows through.
-    static let dividerThickness: CGFloat = 4
+    /// drawn in it, the chrome background shows through. 3 pt (was 4 since
+    /// 4.2 (7); the user asked for 3, 5.0 (56)); the grab area stays wider.
+    static let dividerThickness: CGFloat = 3
     static let dividerGrabWidth: CGFloat = 9
 
     var onDividerMoved: ((UUID, Int, CGFloat) -> Void)?
@@ -219,14 +220,19 @@ final class PaneTreeView: NSView {
         return leadingInset + rect.minX.rounded()
     }
 
+    /// Space between a split terminal's text and its card's sides: 10 pt —
+    /// the cards meet the window's sides, so the left card's text sits where
+    /// a lone pane's is, and where Terminal.app's is (measured).
+    static let paneTextInset: CGFloat = 10
+
     private func layoutPanes() {
         guard let state, bounds.width > 1, bounds.height > 1 else { return }
         let several = state.paneCount > 1
-        // Several panes: rounded cards on a tray. The tray is `tabActive`,
-        // the darkest chrome tone — `chrome` itself is two steps from the
-        // terminal background and the 4 pt gaps vanished (measured on the
-        // first build). One pane: no background of our own, exactly as before.
-        layer?.backgroundColor = several ? NSColor(Theme.tabActive).cgColor : nil
+        // Several panes: the gaps between the cards are the terminal's own
+        // background (the user, 5.0 (57): a darker tray strip looked foreign)
+        // — one surface; each pane's header row is what tells them apart.
+        // One pane: no background of our own, exactly as before.
+        layer?.backgroundColor = several ? Theme.termBackgroundNS.cgColor : nil
         for (id, leaf) in leaves {
             leaf.showsHeader = several
             // With several panes the pointer only reaches a pane's device once
@@ -252,9 +258,15 @@ final class PaneTreeView: NSView {
             // Rounded, not `integral`: integral grows the rect and ate into
             // the 4 pt gap.
             leaf.frame = CGRect(x: rect.minX.rounded(), y: rect.minY.rounded(), width: rect.width.rounded(), height: rect.height.rounded())
-            // The 4 pt gap keeps text off the neighbour; the header is the
-            // top inset (PaneLeafView adds it).
-            leaf.insets = NSEdgeInsets()
+            // A terminal's text sat flush on the card's edge (4 pt from the
+            // neighbour); give it the lone pane's breathing room inside the
+            // card. A web page keeps the whole card. The header is the top
+            // inset (PaneLeafView adds it).
+            // Split cards only: a lone pane's margin is DetailPane's already —
+            // adding this too put its text 18 pt in (the user, 5.0 (54)).
+            leaf.insets = several && leaf.content is SessionTerminalHost
+                ? NSEdgeInsets(top: 0, left: Self.paneTextInset, bottom: 0, right: Self.paneTextInset)
+                : NSEdgeInsets()
         }
         let strips = state.layout.dividerRects(in: bounds, divider: Self.dividerThickness)
         while dividers.count > strips.count { dividers.removeLast().removeFromSuperview() }
@@ -274,7 +286,7 @@ final class PaneTreeView: NSView {
             // From the model, not the strip's shape (a split under 4 pt tall
             // had guessed wrong).
             divider.axis = axes[strip.split] ?? (strip.rect.width < strip.rect.height ? .horizontal : .vertical)
-            // The gap is four points; the grab area is a little wider.
+            // The gap is three points; the grab area is a little wider.
             let grab = Self.dividerGrabWidth
             divider.frame = divider.axis == .horizontal
                 ? CGRect(x: strip.rect.minX - (grab - strip.rect.width) / 2, y: strip.rect.minY, width: grab, height: strip.rect.height)
@@ -294,20 +306,43 @@ final class PaneTreeView: NSView {
     /// Where a drop of `payload` at `point` (our coordinates) would go; nil
     /// when it would be refused, so no zone is drawn for it.
     private func zone(for payload: PaneDragPayload, at point: CGPoint) -> (pane: UUID, direction: PaneDirection)? {
-        guard let state, let target = PaneLayout.dropTarget(at: point, frames: paneFrames()) else { return nil }
+        guard let state else { return nil }
+        let frames = dropFrames(for: payload)
+        zoneFrames = frames
+        guard let target = PaneLayout.dropTarget(at: point, frames: frames) else { return nil }
         switch payload {
         case .pane(let session):
             // Over itself = nowhere; from another tab only while there is room.
             guard session != target.pane,
                   state.layout.contains(session) || state.paneCount < PaneLayout.maxPanes else { return nil }
+            // Never one that would squeeze a Ping pane (PaneLayout.keepsWhole).
+            var trial = AppModel.shared.book
+            guard trial.move(session: session, beside: target.pane, target.direction) else { return nil }
         case .host(let id):
-            guard state.paneCount < PaneLayout.maxPanes, AppModel.shared.savedHost(id: id) != nil else { return nil }
+            guard state.paneCount < PaneLayout.maxPanes, AppModel.shared.savedHost(id: id) != nil,
+                  AppModel.shared.book.canSplit(beside: target.pane, target.direction) else { return nil }
         }
         return target
     }
 
+    /// The frames a drop is aimed at. A pane moved within its own tab is
+    /// measured against the tab WITHOUT it: with two panes the other one
+    /// fills the tab, so anywhere in the right half means the whole right
+    /// half (the owner, 6.0 (2): a drop mid-pane did not snap to a side).
+    private func dropFrames(for payload: PaneDragPayload) -> [UUID: CGRect] {
+        guard let state, state.zoomed == nil, case .pane(let session) = payload,
+              state.layout.contains(session), state.paneCount > 1 else { return paneFrames() }
+        var without = state.layout
+        without.remove(session, keepingWhole: AppModel.shared.book.compactSessions)
+        return without.rects(in: bounds, divider: Self.dividerThickness)
+    }
+
+    /// What `showZone` draws against (set by `zone`).
+    private var zoneFrames: [UUID: CGRect]?
+
     private func showZone(_ zone: (pane: UUID, direction: PaneDirection)?) {
-        guard let zone, let rect = paneFrames()[zone.pane] else {
+        guard let zone, let rect = (zoneFrames ?? paneFrames())[zone.pane] else {
+            zoneFrames = nil
             zoneView.removeFromSuperview()
             return
         }
@@ -373,8 +408,14 @@ final class PaneTreeView: NSView {
            source.paneCount + state.paneCount <= PaneLayout.maxPanes {
             let point = convert(window.convertPoint(fromScreen: drag.screenPoint), from: nil)
             target = PaneLayout.dropTarget(at: point, frames: paneFrames())
+            // A merge that would squeeze a Ping pane shows no zone.
+            if let t = target {
+                var trial = AppModel.shared.book
+                if !trial.merge(workspace: drag.workspace, beside: t.pane, t.direction) { target = nil }
+            }
         }
         chipZoneShown = true
+        zoneFrames = nil        // a chip merge aims at the panes as shown
         AppModel.shared.chipDropZone = target
         showZone(target)
     }
@@ -454,13 +495,14 @@ final class PaneLeafView: NSView {
         // reconnects); DetailPane does not re-render for a SessionTab's own
         // changes, so the header watches the tab itself.
         if let tab = AppModel.shared.tab(id: session) {
-            titleWatch = tab.$title.combineLatest(tab.$statusInfo)
+            titleWatch = tab.$title.combineLatest(tab.$statusInfo, tab.$favicon)
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self, weak tab] title, status in
+                .sink { [weak self, weak tab] title, status, favicon in
                     guard let self, let tab else { return }
                     self.header.setTitle(title, detail: PaneHeaderView.detail(of: tab, title: title, status: status),
                                          dot: PaneHeaderView.dotColor(of: tab, status: status))
                     self.header.isWeb = { if case .web = tab.content { return true } else { return false } }()
+                    self.header.favicon = favicon
                 }
         }
     }
@@ -611,6 +653,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         case .web(let controller):
             let host = WebAddress.displayHost(of: controller.currentURL)
             return host == title ? nil : host
+        case .files, .ping:
+            return status
         }
     }
 
@@ -621,14 +665,19 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         switch tab.content {
         case .local: return NSColor(Theme.ok)
         case .ssh: return down ? SheepAlert.destructiveRed : NSColor(Theme.accent)
-        case .serial: return down ? SheepAlert.destructiveRed : NSColor(Theme.warn)
+        case .serial(let c): return down ? SheepAlert.destructiveRed : NSColor(c.isTelnet ? Theme.accent : Theme.warn)
         case .web: return NSColor(Theme.web)
+        case .files: return down ? SheepAlert.destructiveRed : NSColor(Theme.accent)
+        case .ping: return NSColor(Theme.ok)
         }
     }
 
-    /// A web tab: a globe instead of the status dot (no favicons).
+    /// A web tab: its site's icon (else a globe) instead of the status dot.
     var isWeb = false {
         didSet { if isWeb != oldValue { needsDisplay = true } }
+    }
+    var favicon: NSImage? {
+        didSet { if favicon !== oldValue { needsDisplay = true } }
     }
 
     func setTitle(_ title: String, detail: String?, dot: NSColor) {
@@ -666,6 +715,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         bounds.fill()
         // Drawn, not a layer: the drag image is a cacheDisplay snapshot,
         // which only sees what draw(_:) paints.
+        if isWeb, let favicon {
+            let side: CGFloat = 12
+            favicon.draw(in: CGRect(x: 8 + (Self.dotSize - side) / 2, y: (bounds.height - side) / 2, width: side, height: side),
+                         from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+                         hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)])
+            return
+        }
         if isWeb, let globe = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold)) {
             let tinted = NSImage(size: globe.size, flipped: false) { rect in

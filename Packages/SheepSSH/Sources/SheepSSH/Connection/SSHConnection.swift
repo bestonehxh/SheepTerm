@@ -33,9 +33,29 @@ public final class SSHConnection {
         case globalReply(success: Bool)
         /// The server opened an auth-agent@openssh.com channel and we accepted it.
         case agentChannelOpened(UInt32)
+        /// Answer to `requestRemoteForward` (`token` is what it returned).
+        /// `port` is the port the server listens on — the one asked for, or
+        /// the one it picked when 0 was asked for; nil on failure.
+        case remoteForwardReply(token: UInt32, success: Bool, port: Int?)
+        /// A connection arrived on one of our remote forwards and the
+        /// channel was accepted (RFC 4254 §7.2 forwarded-tcpip). `port` is
+        /// the server-side listening port it came in on. The channel uses a
+        /// manual window (`consumed`).
+        case forwardedChannelOpened(UInt32, address: String, port: Int, originator: String, originatorPort: Int)
     }
 
-    enum Kind { case session, agent, direct }
+    enum Kind { case session, agent, direct, forwarded }
+
+    /// A want-reply global request awaiting its answer. Answers come in
+    /// request order (RFC 4254 §4), keepalives and forwards alike.
+    enum PendingGlobal { case keepalive, remoteForward(token: UInt32, requestedPort: Int) }
+    private var pendingGlobal: [PendingGlobal] = []
+    private var nextForwardToken: UInt32 = 1
+    /// Server-side ports of remote forwards the server accepted: only those
+    /// may open forwarded-tcpip channels to us.
+    private var remoteForwardPorts: Set<Int> = []
+    /// Forwarded channels at once, closed-but-unconfirmed included.
+    public static let maximumForwardedChannels = 256
 
     final class Channel {
         let local: UInt32
@@ -46,6 +66,12 @@ public final class SSHConnection {
         var remoteMaxPacket = 0
         var localWindow: UInt64
         var consumedSinceAdjust: UInt64 = 0
+        /// The window reopens only as the owner reports bytes passed on
+        /// (`consumed`), not as they are parsed — a port-forward whose local
+        /// socket stops reading must stop the far end, not grow our memory.
+        var manualWindow = false
+        /// Bytes taken inside the window and not yet reported consumed.
+        var unconsumed: UInt64 = 0
         var outgoing: [UInt8] = []
         /// Bytes of `outgoing` already sent (compacted lazily — removing the
         /// front per 32 KiB packet made a big paste quadratic).
@@ -98,8 +124,12 @@ public final class SSHConnection {
     // MARK: Opening
 
     /// Opens a "session" channel; `.channelOpened(id)` follows.
-    public func openSession() throws(ConnectionError) -> UInt32 {
+    /// `manualWindow`: as for `openDirectTCPIP` — a second channel on a
+    /// terminal's connection (the Files tab's SFTP) whose bytes go to an
+    /// owner that may fall behind.
+    public func openSession(manualWindow: Bool = false) throws(ConnectionError) -> UInt32 {
         let channel = allocate(.session)
+        channel.manualWindow = manualWindow
         var w = SSHWriter()
         w.writeByte(90)                         // CHANNEL_OPEN
         w.writeString("session")
@@ -116,8 +146,15 @@ public final class SSHConnection {
     /// `.channelOpenFailed` follows; data/EOF/close are the same events a
     /// session gets. The originator is nominal (RFC: "the connection's
     /// originating address", which here is this client itself).
-    public func openDirectTCPIP(host: String, port: Int) throws(ConnectionError) -> UInt32 {
+    ///
+    /// `manualWindow`: the window reopens only through `consumed(_:_:)` —
+    /// for a channel whose bytes go to a socket that may stop reading (port
+    /// forwarding). The jump host's tunnel parses everything at once and
+    /// keeps the automatic top-up.
+    public func openDirectTCPIP(host: String, port: Int, originatorHost: String = "127.0.0.1",
+                                originatorPort: Int = 0, manualWindow: Bool = false) throws(ConnectionError) -> UInt32 {
         let channel = allocate(.direct)
+        channel.manualWindow = manualWindow
         var w = SSHWriter()
         w.writeByte(90)                         // CHANNEL_OPEN
         w.writeString("direct-tcpip")
@@ -126,10 +163,22 @@ public final class SSHConnection {
         w.writeUInt32(UInt32(Self.maxPacket))
         w.writeString(host)
         w.writeUInt32(UInt32(clamping: port))
-        w.writeString("127.0.0.1")
-        w.writeUInt32(0)
+        w.writeString(originatorHost)
+        w.writeUInt32(UInt32(clamping: originatorPort))
         try send(w.bytes)
         return channel.local
+    }
+
+    /// A `manualWindow` channel's owner passed `count` of its received bytes
+    /// on; the window reopens by that much (in half-window steps). Overrun
+    /// bytes a server sent past the window were never taken off it and are
+    /// not added back. A no-op for any other channel.
+    public func consumed(_ id: UInt32, _ count: Int) throws(ConnectionError) {
+        guard let channel = channels[id], channel.open, channel.manualWindow, count > 0 else { return }
+        let credit = min(UInt64(count), channel.unconsumed)
+        channel.unconsumed -= credit
+        channel.consumedSinceAdjust += credit
+        try replenish(channel)
     }
 
     private func allocate(_ kind: Kind) -> Channel {
@@ -178,6 +227,13 @@ public final class SSHConnection {
         try request(id, "exec", wantReply: true) { $0.writeString(command) }
     }
 
+    /// subsystem (RFC 4254 §6.5) — "sftp" for the Files tab. Same wire shape
+    /// as exec: the name is one string; `.channelRequestReply(id,
+    /// "subsystem", ok)` answers it (a device without SFTP says no).
+    public func requestSubsystem(_ id: UInt32, _ name: String) throws(ConnectionError) {
+        try request(id, "subsystem", wantReply: true) { $0.writeString(name) }
+    }
+
     /// auth-agent-req@openssh.com, without asking for a reply — as OpenSSH
     /// and libssh send it: some devices never answer an unknown request,
     /// and waiting for one stalled the session. (A device that answers it
@@ -207,6 +263,42 @@ public final class SSHConnection {
         w.writeByte(80)                         // GLOBAL_REQUEST
         w.writeString("keepalive@openssh.com")
         w.writeBool(true)
+        try send(w.bytes)
+        pendingGlobal.append(.keepalive)
+    }
+
+    /// tcpip-forward (RFC 4254 §7.1, `ssh -R`): asks the server to listen
+    /// on `address`:`port` (port 0 = it picks) and open a forwarded-tcpip
+    /// channel to us per connection. "" / "localhost" binds loopback on the
+    /// server (what OpenSSH sends by default); the server's GatewayPorts
+    /// decides the rest. `.remoteForwardReply(token:…)` follows.
+    @discardableResult
+    public func requestRemoteForward(address: String, port: Int) throws(ConnectionError) -> UInt32 {
+        let token = nextForwardToken
+        nextForwardToken &+= 1
+        var w = SSHWriter()
+        w.writeByte(80)                         // GLOBAL_REQUEST
+        w.writeString("tcpip-forward")
+        w.writeBool(true)
+        w.writeString(address)
+        w.writeUInt32(UInt32(clamping: port))
+        try send(w.bytes)
+        pendingGlobal.append(.remoteForward(token: token, requestedPort: port))
+        return token
+    }
+
+    /// cancel-tcpip-forward (RFC 4254 §7.1): the server stops listening on
+    /// `address`:`port` (the port it confirmed). No reply is asked for — a
+    /// refusal changes nothing we would do — and channels for that port are
+    /// refused from now on.
+    public func cancelRemoteForward(address: String, port: Int) throws(ConnectionError) {
+        remoteForwardPorts.remove(port)
+        var w = SSHWriter()
+        w.writeByte(80)                         // GLOBAL_REQUEST
+        w.writeString("cancel-tcpip-forward")
+        w.writeBool(false)
+        w.writeString(address)
+        w.writeUInt32(UInt32(clamping: port))
         try send(w.bytes)
     }
 
@@ -315,7 +407,17 @@ public final class SSHConnection {
                 _ = try r.readString()
                 if try r.readBool() { try send([82]) }  // REQUEST_FAILURE: we offer nothing
             case 81, 82:
-                events.append(.globalReply(success: type == 81))
+                let success = type == 81
+                switch pendingGlobal.isEmpty ? .keepalive : pendingGlobal.removeFirst() {
+                case .keepalive:
+                    events.append(.globalReply(success: success))
+                case .remoteForward(let token, let requested):
+                    // Port 0 asked: the success carries the port it chose.
+                    var port: Int? = nil
+                    if success { port = requested == 0 ? (try? r.readUInt32()).map(Int.init) : requested }
+                    if let port { remoteForwardPorts.insert(port) }
+                    events.append(.remoteForwardReply(token: token, success: success && port != nil, port: port))
+                }
             case 90:
                 try incomingOpen(&r)
             case 91:                            // OPEN_CONFIRMATION
@@ -370,7 +472,11 @@ public final class SSHConnection {
                 // add back overrun bytes never taken off and the window drift up.
                 let taken = min(UInt64(data.count), channel.localWindow)
                 channel.localWindow -= taken
-                channel.consumedSinceAdjust += taken
+                if channel.manualWindow {
+                    channel.unconsumed += taken
+                } else {
+                    channel.consumedSinceAdjust += taken
+                }
                 if type == 94 {
                     events.append(.data(channel.local, data))
                 } else if dataType == 1 {
@@ -442,6 +548,10 @@ public final class SSHConnection {
         let sender = try r.readUInt32()
         let window = try r.readUInt32()
         let maxPacket = try r.readUInt32()
+        if type == "forwarded-tcpip" {
+            try incomingForwarded(&r, sender: sender, window: window, maxPacket: maxPacket)
+            return
+        }
         // Agent channels live here until the far end confirms our CLOSE; a
         // server opening them and never confirming must not grow this
         // table without bound (the forwarder caps its fds separately).
@@ -471,6 +581,42 @@ public final class SSHConnection {
         w.writeUInt32(UInt32(Self.maxPacket))
         try send(w.bytes)
         events.append(.agentChannelOpened(channel.local))
+    }
+
+    /// forwarded-tcpip: accepted only on a port the server confirmed for one
+    /// of OUR requests, and within the channel cap — anything else is
+    /// refused like any other unasked channel.
+    private func incomingForwarded(_ r: inout SSHReader, sender: UInt32, window: UInt32, maxPacket: UInt32) throws {
+        let address = try r.readText()
+        let port = Int(try r.readUInt32())
+        let originator = (try? r.readText()) ?? ""
+        let originatorPort = (try? r.readUInt32()).map(Int.init) ?? 0
+        guard remoteForwardPorts.contains(port),
+              channels.values.lazy.filter({ $0.kind == .forwarded }).count < Self.maximumForwardedChannels else {
+            var w = SSHWriter()
+            w.writeByte(92)
+            w.writeUInt32(sender)
+            w.writeUInt32(1)                    // administratively prohibited
+            w.writeString("not supported")
+            w.writeString("")
+            try send(w.bytes)
+            return
+        }
+        let channel = allocate(.forwarded)
+        channel.remote = sender
+        channel.remoteWindow = UInt64(window)
+        channel.remoteMaxPacket = Int(min(maxPacket == 0 ? UInt32(Self.maxPacket) : maxPacket, Self.maximumRemotePacket))
+        channel.manualWindow = true
+        channel.open = true
+        var w = SSHWriter()
+        w.writeByte(91)
+        w.writeUInt32(sender)
+        w.writeUInt32(channel.local)
+        w.writeUInt32(UInt32(Self.windowSize))
+        w.writeUInt32(UInt32(Self.maxPacket))
+        try send(w.bytes)
+        events.append(.forwardedChannelOpened(channel.local, address: address, port: port,
+                                              originator: originator, originatorPort: originatorPort))
     }
 
     /// Tops the local window back up once half of it has been used.

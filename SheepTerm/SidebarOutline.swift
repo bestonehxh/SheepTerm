@@ -938,6 +938,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             let cell = hostCell(outlineView)
             if let host = node.host {
                 let isConnectTarget = node.id == "connect-target"
+                if isConnectTarget, host.pingTargets != nil {
+                    cell.configure(badge: "", color: NSColor(Theme.ok), name: host.name,
+                                   detail: String(localized: "ping tab · press ↩"), symbol: "waveform.path.ecg")
+                    return cell
+                }
                 cell.configure(
                     badge: host.kind.badge,
                     color: NSColor(Theme.kindColor(host.kind)),
@@ -1395,6 +1400,18 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 self?.parent.model.openInSplit(host: host)
                 self?.parent.model.collapseSidebar()
             }
+            if host.kind == .ssh {
+                add(menu, String(localized: "Open File")) { [weak self] in
+                    self?.parent.model.openFiles(host, proto: FilesPlan.sshHostProto)
+                    self?.parent.model.collapseSidebar()
+                }
+            }
+            if (host.kind == .ssh || host.kind == .telnet), let targets = PingPlan.addresses(for: host.address) {
+                add(menu, String(localized: "Ping")) { [weak self] in
+                    self?.parent.model.openPing(targets)
+                    self?.parent.model.collapseSidebar()
+                }
+            }
             add(menu, String(localized: "Edit Host…")) { [weak self] in self?.parent.onEditHost(host) }
             menu.addItem(.separator())
             menu.addItem(sectionSubmenu(for: [host]))
@@ -1438,7 +1455,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             }
             if node.id.hasPrefix("recent-") {
                 // Not for a recent of a host that is already saved (no second copy).
-                if host.kind == .ssh || host.kind == .web,
+                if host.kind == .ssh || host.kind == .telnet || host.kind == .web,
                    !RecentSave.isSaved(host, in: parent.store.groups.flatMap(\.hosts)) {
                     add(menu, String(localized: "Save as Host…")) { [weak self] in self?.parent.model.saveRecentAsHost(host) }
                 }
@@ -2063,7 +2080,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 /// NSMenuItem holds its `target` strongly, so `target = self` made every item
 /// retain itself: the items outlived their menu forever, and each one holds a
 /// captured Host or HostGroup. Every right-click leaked the whole menu.
-private final class MenuAction: NSMenuItem {
+final class MenuAction: NSMenuItem {
     /// Owned by the item through `representedObject`, and referenced by it as
     /// `target` — the item holds the trampoline, the trampoline holds only
     /// the closure, so the pair dies with the menu.

@@ -34,6 +34,8 @@ struct TabStripView: View {
     @State private var dropConcluded = false
     /// The dragged chip is below the strip, over the panes.
     @State private var chipOverPanes = false
+    /// Bumped on every strip-width change; only the last one reveals.
+    @State private var widthSettle = 0
 
     private static let chipSpacing: CGFloat = 4
     private static let serialShadowID = "serial-shadow"
@@ -42,9 +44,9 @@ struct TabStripView: View {
     private static let dropSpace = "tabstrip-drop"
 
     var body: some View {
-        // ScrollViewReader so a newly created or ⌘-selected tab is brought
-        // into view: with many tabs the active one could sit off-screen with
-        // nothing to scroll it back.
+        // ScrollViewReader so the active tab is brought into view: with many
+        // tabs it could sit off-screen with nothing to scroll it back. See
+        // `reveal` for when and why it waits a turn.
         ScrollViewReader { scroller in
         ScrollView(.horizontal, showsIndicators: false) {
             // maxHeight so the chips CENTRE in the strip, plus 2pt of top
@@ -70,6 +72,10 @@ struct TabStripView: View {
                         isSelected: model.selectedWorkspace?.id == workspace.id,
                         isDropTarget: dropSpot == .chip(workspace.id),
                         onSelect: {
+                            // A click on the tab that is already selected
+                            // changes no selection, so onChange below never
+                            // hears of it — and it may be half under the edge.
+                            if model.selectedWorkspace?.id == workspace.id { reveal(scroller) }
                             model.select(workspace: workspace.id)
                             model.collapseSidebar()
                         },
@@ -122,6 +128,19 @@ struct TabStripView: View {
         // centred against the buttons either side of them instead of against
         // a box that is shorter than the bar.
         .frame(maxHeight: .infinity)
+        // The strip narrowed (sidebar or AI panel opened, window resized):
+        // the active tab may now be past its edge. The new width arrives at
+        // the START of the panel's 0.15 s animation, while the scroll view is
+        // still wide — scrolling then left the tab 12 pt short (measured) —
+        // so wait for the last change to settle; a live resize scrolls once,
+        // when it stops.
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { _ in
+            widthSettle += 1
+            let mine = widthSettle
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                if widthSettle == mine { reveal(scroller) }
+            }
+        }
         // Pane headers dropped here (4.2 (7)): on a chip = into that tab, on
         // the empty strip = a tab of its own. One drop target for the whole
         // strip, resolved against the chip frames, so a chip and the strip
@@ -135,19 +154,37 @@ struct TabStripView: View {
         .onDrop(of: [.utf8PlainText], delegate: StripDropDelegate(frames: chipDropFrames, spot: $dropSpot, concluded: $dropConcluded))
         // Brought into view when it appears past a full strip (review 5.0 (29)).
         .onChange(of: model.serialShadow?.path) { _, path in
-            guard path != nil, dragID == nil else { return }
-            withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(Self.serialShadowID) }
+            guard path != nil else { return }
+            // A turn later, like `reveal`: the chip has no frame yet.
+            DispatchQueue.main.async {
+                guard dragID == nil, model.serialShadow != nil else { return }
+                withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(Self.serialShadowID) }
+            }
         }
-        .onChange(of: model.selectedID) { _, _ in
-            guard dragID == nil, let id = model.selectedWorkspace?.id else { return }
-            withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
-        }
+        .onChange(of: model.selectedID) { _, _ in reveal(scroller) }
         // The dragged tab closed under the pointer (its shell exited):
         // SwiftUI never sends onEnded for a gesture whose view is gone, and
         // the drop zone stayed on screen (review finding).
-        .onChange(of: model.workspaces.map(\.id)) { _, ids in
+        .onChange(of: model.workspaces.map(\.id)) { old, ids in
             if let dragID, !ids.contains(dragID) { resetDrag() }
+            // A tab closed to the left of the active one slides it left, maybe
+            // past the edge. Count only: a drag-reorder is not a reason to
+            // scroll away from where the user dropped.
+            if old.count != ids.count { reveal(scroller) }
         }
+        }
+    }
+
+    /// Scroll the active tab wholly into view (the minimum amount; none when
+    /// it already is). Waits one main-queue turn: when the selection changes,
+    /// the chip has not been laid out yet — a new tab has no frame at all,
+    /// and the selected chip turns semibold (wider) in the same update — so
+    /// scrolling at once measured the old geometry and left the tab half
+    /// under the strip's edge (6.0 (2)). Never during a chip drag.
+    private func reveal(_ scroller: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard dragID == nil, let id = model.selectedWorkspace?.id else { return }
+            withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
         }
     }
 
@@ -283,6 +320,15 @@ private struct StripDropDelegate: DropDelegate {
         // takes nothing more.
         if let dragged = PaneHeaderView.draggingSession, workspace.layout.contains(dragged) { return nil }
         if workspace.paneCount >= PaneLayout.maxPanes { return nil }
+        // A move that would squeeze a Ping pane is refused (PaneLayout.keepsWhole).
+        if let dragged = PaneHeaderView.draggingSession {
+            var trial = model.book
+            if !trial.move(session: dragged, toWorkspace: hit.key) { return nil }
+        } else if !InternalDrag.hosts.isEmpty, !model.book.canSplit(beside: workspace.focused, .right) {
+            // A sidebar host into a tab whose layout would squeeze a Ping
+            // pane: no chip zone (it lit, then beeped — review 6.0 (2)).
+            return nil
+        }
         return .chip(hit.key)
     }
 
@@ -381,8 +427,10 @@ struct TabItemView: View {
         switch tab.content {
         case .local: return Theme.ok
         case .ssh: return isDisconnected ? Theme.destructive : Theme.accent
-        case .serial: return isDisconnected ? Theme.destructive : Theme.warn
+        case .serial(let c): return isDisconnected ? Theme.destructive : c.isTelnet ? Theme.accent : Theme.warn
         case .web: return Theme.web
+        case .files: return isDisconnected ? Theme.destructive : Theme.accent
+        case .ping: return Theme.ok
         }
     }
 
@@ -391,11 +439,26 @@ struct TabItemView: View {
         return false
     }
 
+    private var isFiles: Bool {
+        if case .files = tab.content { return true }
+        return false
+    }
+
+    private var isPing: Bool {
+        if case .ping = tab.content { return true }
+        return false
+    }
+
     var body: some View {
         HStack(spacing: 7) {
-            // A web tab wears a globe (no favicons), the others the dot.
-            if isWeb {
-                Image(systemName: "globe")
+            // A web tab wears its site's icon (else a globe), the others the dot.
+            if isWeb, let icon = tab.favicon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 12, height: 12)
+            } else if isWeb || isFiles || isPing {
+                Image(systemName: isPing ? "waveform.path.ecg" : isFiles ? "folder" : "globe")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(indicatorColor)
                     .frame(width: 9, height: 9)
@@ -453,6 +516,11 @@ struct TabItemView: View {
                 Button("Reconnect") { onReconnect() }
                 if case .ssh = tab.content {
                     Button("Duplicate") { onDuplicate() }
+                    Button("Open File") {
+                        AppModel.shared.selectedID = tab.id
+                        AppModel.shared.openFilesForSelectedTab()
+                    }
+                    Button("Ping") { AppModel.shared.pingTab(tab) }
                 }
                 Toggle("Highlight", isOn: $tab.highlightEnabled)
                 Divider()
@@ -461,6 +529,12 @@ struct TabItemView: View {
             case .web:
                 Button("Reload") { onReconnect() }
                 Button("Save as Host…") { AppModel.shared.saveWebTabAsHost(tab) }
+                Divider()
+            case .files:
+                Button("Reconnect") { onReconnect() }
+                Divider()
+            case .ping:
+                Button("Restart All") { onReconnect() }
                 Divider()
             case .local:
                 Button("Copy All Output") { onCopyAllOutput() }

@@ -935,8 +935,17 @@ nonisolated extension HighlightScanner {
         /// States that mean the same thing on every box.
         static let goodCore = ["up", "connected", "active", "established", "running",
                                "enabled", "enable", "successful", "success", "forwarding",
-                               "reachable", "authorized", "full"]
-        static let badCore = ["down", "shutdown", "fail", "failed", "failure", "unreachable",
+                               "reachable", "authorized", "full"] + transferGood
+        /// What a `copy tftp:` / `scp` / `ftp` reply ends in (File Server,
+        /// 5.0 (50)): Huawei "Downloaded the file successfully", CX/Junos
+        /// "… completed", Cisco "… copied". Single words — every family
+        /// prints them with the same meaning.
+        static let transferGood = ["successfully", "completed", "copied"]
+        /// The failing ends: Cisco "%Error opening tftp://… (Timed out)" is
+        /// already `error`; these are the rest ("aborted", "timeout",
+        /// FortiOS/PAN-OS "unsuccessful").
+        static let transferBad = ["aborted", "timeout", "unsuccessful"]
+        static let badCore = transferBad + ["down", "shutdown", "fail", "failed", "failure", "unreachable",
                               "invalid", "error", "err", "critical", "crit", "emergency",
                               "alert", "suspended", "half", "disabled", "disable",
                               // `service status all` on ClearPass: `… is stopped`
@@ -1076,24 +1085,28 @@ nonisolated extension HighlightScanner {
         ),
         "panos": Profile(
             interface: Vocab.panos, bare: ["mgt"],
-            stateGood: ["up", "active", "enabled", "established", "connected", "running", "valid"],
+            stateGood: ["up", "active", "enabled", "established", "connected", "running", "valid",
+                        "successful", "success"]
+                + Vocab.transferGood,
             stateBad: ["down", "disabled", "error", "fail", "failed", "failure", "critical",
-                       "unreachable", "invalid", "dead", "expired"],
+                       "unreachable", "invalid", "dead", "expired"] + Vocab.transferBad,
             omitting: [.cxPort]
         ),
         // No enable/disable: FortiOS ends nearly every config line in one of
         // them, so colouring them turns a config dump into a wall of green.
         "fortios": Profile(
             interface: Vocab.fortios, bare: ["internal", "modem", "dmz", "mgmt"],
-            stateGood: ["up", "connected", "established", "active", "alive", "ok", "reachable"],
+            stateGood: ["up", "connected", "established", "active", "alive", "ok", "reachable",
+                        "successful", "success"]
+                + Vocab.transferGood,
             stateBad: ["down", "dead", "fail", "failed", "failure", "error", "critical",
-                       "unreachable", "invalid", "expired"],
+                       "unreachable", "invalid", "expired"] + Vocab.transferBad,
             omitting: [.cxPort]
         ),
         "gaia": Profile(
             interface: Vocab.gaia, bare: ["Mgmt", "Sync", "lo"],
             stateGood: ["up", "active", "ready", "connected", "established", "running",
-                        "enabled", "enable", "ok"],
+                        "enabled", "enable", "ok", "successful", "success"],
             stateBad: Vocab.badCore + ["problem"],
             omitting: [.cxPort]
         ),

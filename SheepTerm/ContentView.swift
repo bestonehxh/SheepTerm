@@ -216,21 +216,26 @@ struct SidebarResizeHandle: View {
 struct DetailPane: View {
     @EnvironmentObject var model: AppModel
 
-    /// The terminal's margin (10 / 4 / 6, unchanged) — except where a web
-    /// page is shown: a lone web pane fills the area edge to edge (its bar
-    /// is the top edge), and a split holding one gets the same 4 pt as the
-    /// gaps between panes on every side, so nothing sits off-centre.
+    /// A lone terminal's margin: 10 pt each side, Terminal.app's (measured on
+    /// a 2× capture of a Terminal window, 5.0 (54): the user asked for "as far
+    /// from the edge as the Mac's Terminal"), 6 on top; a lone web pane
+    /// fills the area edge to edge (its bar is the top edge). A split: the
+    /// cards meet the window's sides (no dark strip along the edge — the user
+    /// found it odd, 5.0 (54)), 4 pt between panes and under the tab bar;
+    /// each card's own text inset (`paneTextInset`, 10) keeps every pane's
+    /// text where a lone pane's is.
     static func inset(for workspace: WorkspaceState, model: AppModel) -> (leading: CGFloat, trailing: CGFloat, top: CGFloat) {
+        // A Files tab lays out its own even margins, like a web page.
         func isWeb(_ id: UUID) -> Bool {
-            if case .web? = model.tab(id: id)?.content { return true }
-            return false
+            switch model.tab(id: id)?.content {
+            case .web?, .files?, .ping?: return true
+            default: return false
+            }
         }
-        let terminal: (CGFloat, CGFloat, CGFloat) = (10, 4, 6)
+        let terminal: (CGFloat, CGFloat, CGFloat) = (10, 10, 6)
         if let zoomed = workspace.zoomed { return isWeb(zoomed) ? (0, 0, 0) : terminal }
-        guard workspace.sessions.contains(where: isWeb) else { return terminal }
-        if workspace.paneCount == 1 { return (0, 0, 0) }
-        let gap = PaneTreeView.dividerThickness
-        return (gap, gap, gap)
+        if workspace.paneCount == 1 { return workspace.sessions.contains(where: isWeb) ? (0, 0, 0) : terminal }
+        return (0, 0, PaneTreeView.dividerThickness)
     }
 
     var body: some View {
@@ -255,9 +260,15 @@ struct DetailPane: View {
             }
             .aiPanel()
             if model.showStatusBar
-                && (model.statusShowSheep || model.statusShowSession || model.statusShowHints
-                    || model.statusShowIP || model.statusShowClock) {
+                && (model.statusConnectionStyle != .off || model.statusShowSession || model.statusShowHints
+                    || model.statusShowIP || model.statusShowClock
+                    || model.statusShowFileServer || model.fileServerActive
+                    || (model.fileTransferShown && model.statusShowTransfers)) {
                 StatusBarView()
+            } else if model.fileTransferShown && model.statusShowTransfers {
+                StatusBarView(onlyTransfer: true)
+            } else {
+                FileServerHiddenAnchor()
             }
         }
         // ignoresSafeAreaEdges: [] is load-bearing — the default background
@@ -271,6 +282,15 @@ struct DetailPane: View {
             } else {
                 QuickConnectSheet(kind: request.kind, addOnly: request.addOnly)
             }
+        }
+        .sheet(isPresented: $model.showFileTransfer) {
+            FileTransferSheet()
+        }
+        .sheet(isPresented: $model.showTransferLog) {
+            TransferLogView()
+        }
+        .sheet(isPresented: $model.showWhatsNew) {
+            WhatsNewView()
         }
         .sheet(isPresented: $model.showCredentials) {
             CredentialsSheet()
@@ -335,6 +355,7 @@ struct TopBarView: View {
     /// never `.fullScreen`, and reading it put the 64 pt traffic-light spacer
     /// back in the middle of fullscreen.
     @State private var hostWindow: NSWindow?
+    @State private var plusAnchor = MenuAnchorBox()
 
     var body: some View {
         HStack(spacing: 8) {
@@ -378,30 +399,20 @@ struct TopBarView: View {
 
             Spacer(minLength: 8)
 
-            Menu {
-                // No `.keyboardShortcut` on any of these: ⌘T, ⌘⇧N and the rest
-                // belong to the File menu (`SheepTermApp.body`), which is the
-                // one place that owns them. Declaring ⌘T here as well bound the
-                // same key twice for the same action — harmless in effect, but
-                // the top bar does not get to claim a menu's shortcut.
-                Button("New Terminal Tab") { model.newLocalTab() }
-                Divider()
-                Button("New SSH Connection…") { model.openQuickConnect(.ssh) }
-                Button("New Serial Console…") { model.openQuickConnect(.serial) }
-                Button("New Web Tab") { model.newWebTab() }
-                Divider()
-                Button("Passwords…") { model.showCredentials = true }
+            // A Button that pops an NSMenu, not a borderless SwiftUI Menu: the
+            // Menu's own control was smaller than the 26×24 hover box, so a
+            // click near the box's edge lit it and then did nothing (the user,
+            // 5.0 (58): "sometimes it does not click"). No key equivalents
+            // here: ⌘T and the rest belong to the File menu.
+            Button {
+                NewItemMenu.pop(from: plusAnchor.view, model: model)
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 15, weight: .medium))
-                    // The whole box opens the menu (a borderless Menu's control is its label).
-                    .frame(width: 26, height: 24)
-                    .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .modifier(ChromeIconBox())
+            .buttonStyle(ChromeIconButtonStyle())
+            .background(MenuAnchorView(box: plusAnchor))
+            .accessibilityLabel("New")
 
             AIPanelToggleButton()
         }
@@ -483,6 +494,43 @@ extension TopBarView {
 
 /// Line-art sheep in the icon-D style: scalloped wool ring with the ❯_ face,
 /// strokes only — no background tile.
+/// The ＋ menu (top bar). Built fresh per click; items are `MenuAction`s.
+@MainActor enum NewItemMenu {
+    static func pop(from anchor: NSView?, model: AppModel) {
+        guard let anchor else { return }
+        let menu = NSMenu()
+        func add(_ title: String.LocalizationValue, _ run: @escaping () -> Void) {
+            menu.addItem(MenuAction(title: String(localized: title), run: run))
+        }
+        add("New Terminal Tab") { model.newLocalTab() }
+        menu.addItem(.separator())
+        add("New SSH Connection…") { model.openQuickConnect(.ssh) }
+        add("New Telnet Session…") { model.openQuickConnect(.telnet) }
+        add("New Serial Console…") { model.openQuickConnect(.serial) }
+        add("New Web Tab") { model.newWebTab() }
+        menu.addItem(.separator())
+        add("New Ping Tab") { model.openPing(inNewTab: true) }
+        menu.addItem(.separator())
+        add("Open File…") { model.showFileTransfer = true }
+        add("Serve File…") { FileServerModel.shared.popoverShown = true }
+        menu.addItem(.separator())
+        add("Passwords…") { model.showCredentials = true }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
+    }
+}
+
+/// Holds the NSView a SwiftUI control sits on, so an NSMenu can pop under it.
+final class MenuAnchorBox {
+    weak var view: NSView?
+}
+
+struct MenuAnchorView: NSViewRepresentable {
+    let box: MenuAnchorBox
+    final class Flipped: NSView { override var isFlipped: Bool { true } }
+    func makeNSView(context: Context) -> NSView { let v = Flipped(); box.view = v; return v }
+    func updateNSView(_ nsView: NSView, context: Context) { box.view = nsView }
+}
+
 struct SheepLineMark: View {
     var body: some View {
         Canvas { context, size in

@@ -128,7 +128,7 @@ struct ShareLinkSheet: View {
         }
         .textFieldStyle(.roundedBorder)
         .onSubmit { create() }
-        if let note = group.flatMap({ ShareLinkPlan.jumpHostNote(ShareLinkPlan.jumpHostCount($0)) }) {
+        if group.flatMap({ ShareLinkPlan.jumpHostNote(ShareLinkPlan.jumpHostCount($0)) }) != nil {
             // The note is shared with Windows and compared by the harness; said here in words.
             let count = group.map { ShareLinkPlan.jumpHostCount($0) } ?? 0
             Text(String(localized: "\(count) hosts use a jump host — it is not shared."))

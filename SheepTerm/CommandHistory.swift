@@ -38,6 +38,11 @@ nonisolated enum CommandHistoryFilter {
         let words = lower.split(whereSeparator: { $0 == " " || $0 == "\t" })
         if words.first == "key", words.count >= 2, words[1] != "chain",
            words.count > 2 || !words[1].allSatisfy(\.isNumber) { return true }
+        // A password inside a URL: `copy ftp://user:pass@host/f flash:`.
+        if line.range(of: #"[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s@:]+:[^/\s@]+@"#, options: .regularExpression) != nil { return true }
+        // FortiOS: `execute restore image ftp <file> <ip> <user> <pass>` and
+        // `execute backup config ftp …` carry the password as the last word.
+        if words.first == "execute", words.contains("ftp"), words.count >= 6 { return true }
         return false
     }
 
@@ -261,11 +266,12 @@ nonisolated enum CommandHistory {
         switch kind {
         case .local, .web, .unsupported:
             return nil
-        case .ssh, .serial:
+        case .ssh, .serial, .telnet:
             if let savedID { return "host:" + savedID.uuidString }
             let target = address.trimmingCharacters(in: .whitespaces)
             guard !target.isEmpty else { return nil }
             if kind == .serial { return "serial:" + target }
+            if kind == .telnet { return "telnet:" + target.lowercased() + ":" + String(port) }
             let user = username.trimmingCharacters(in: .whitespaces)
             return "ssh:" + (user.isEmpty ? "" : user + "@") + target.lowercased() + ":" + String(port)
         }

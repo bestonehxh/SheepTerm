@@ -206,6 +206,20 @@ nonisolated struct PaneLayout: Equatable, Sendable {
         return best?.id
     }
 
+    /// A Ping pane keeps half the tab at least (the owner, 6.0 (2): its table
+    /// must not be squeezed out of scale): it is alone, or one of exactly two
+    /// halves of the top split — left|right or top/bottom. The OTHER half may
+    /// be split as deep as any tab.
+    func keepsWhole(_ compact: Set<UUID>) -> Bool {
+        let here = leaves.filter(compact.contains)
+        guard !here.isEmpty else { return true }
+        switch root {
+        case .leaf: return true
+        case .split(_, _, let children, _):
+            return children.count == 2 && here.allSatisfy { children.contains(.leaf($0)) }
+        }
+    }
+
     // MARK: - editing
 
     /// Put `new` beside `target`. Same-axis parent: `new` becomes a sibling
@@ -213,7 +227,7 @@ nonisolated struct PaneLayout: Equatable, Sendable {
     /// two-way split. False when the target is unknown, `new` is already
     /// here, or the tab is full.
     @discardableResult
-    mutating func insert(_ new: UUID, beside target: UUID, _ direction: PaneDirection) -> Bool {
+    mutating func insert(_ new: UUID, beside target: UUID, _ direction: PaneDirection, keepingWhole pinned: Set<UUID> = []) -> Bool {
         guard contains(target), !contains(new), count < PaneLayout.maxPanes else { return false }
         func walk(_ node: PaneNode) -> PaneNode {
             switch node {
@@ -244,7 +258,7 @@ nonisolated struct PaneLayout: Equatable, Sendable {
             }
         }
         root = walk(root)
-        normalize()
+        normalize(pinned: pinned)
         return true
     }
 
@@ -252,13 +266,17 @@ nonisolated struct PaneLayout: Equatable, Sendable {
     /// (its children take its share, scaled). `remove` makes such a tree —
     /// A | (B over (C | D)), close B — and Even Out Panes would then give A
     /// half and C, D a quarter each (review finding).
-    private mutating func normalize() {
+    /// `pinned`: a split that directly holds one of these leaves (a Ping
+    /// pane) keeps a same-axis child split as a child — splicing it in made
+    /// `h[ping, B, C]`, where Ping no longer kept half (review 6.0 (2)).
+    private mutating func normalize(pinned: Set<UUID> = []) {
         func walk(_ node: PaneNode) -> PaneNode {
             guard case .split(let id, let axis, let children, let fractions) = node else { return node }
             var newChildren: [PaneNode] = []
             var newFractions: [CGFloat] = []
+            let holdsPinned = children.contains { if case .leaf(let leaf) = $0 { return pinned.contains(leaf) }; return false }
             for (child, share) in zip(children.map(walk), fractions) {
-                if case .split(_, let childAxis, let grandchildren, let grandFractions) = child, childAxis == axis {
+                if !holdsPinned, case .split(_, let childAxis, let grandchildren, let grandFractions) = child, childAxis == axis {
                     newChildren.append(contentsOf: grandchildren)
                     newFractions.append(contentsOf: grandFractions.map { $0 * share })
                 } else {
@@ -274,7 +292,7 @@ nonisolated struct PaneLayout: Equatable, Sendable {
     /// Take `id` out; its share goes to its siblings, a split left with one
     /// child collapses into it. False for an unknown id or the last pane.
     @discardableResult
-    mutating func remove(_ id: UUID) -> Bool {
+    mutating func remove(_ id: UUID, keepingWhole pinned: Set<UUID> = []) -> Bool {
         guard contains(id), count > 1 else { return false }
         func walk(_ node: PaneNode) -> PaneNode {
             guard case .split(let splitID, let axis, let children, let fractions) = node else { return node }
@@ -291,7 +309,24 @@ nonisolated struct PaneLayout: Equatable, Sendable {
             return .split(id: splitID, axis: axis, children: children.map(walk), fractions: fractions)
         }
         root = walk(root)
-        normalize()
+        normalize(pinned: pinned)
+        return true
+    }
+
+    /// `tree` (another tab's whole layout) in the place of the leaf
+    /// `placeholder`, kept as one subtree. False for an unknown placeholder
+    /// or a session already here.
+    @discardableResult
+    mutating func graft(_ tree: PaneLayout, at placeholder: UUID) -> Bool {
+        guard contains(placeholder), Set(leaves).isDisjoint(with: tree.leaves) else { return false }
+        func walk(_ node: PaneNode) -> PaneNode {
+            switch node {
+            case .leaf(let id): return id == placeholder ? tree.root : node
+            case .split(let id, let axis, let children, let fractions):
+                return .split(id: id, axis: axis, children: children.map(walk), fractions: fractions)
+            }
+        }
+        root = walk(root)
         return true
     }
 

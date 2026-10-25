@@ -422,7 +422,7 @@ nonisolated enum PromptName {
             return false
         case .serial:
             return name.isEmpty || name == address || name == (address as NSString).lastPathComponent
-        case .ssh:
+        case .ssh, .telnet:
             return name.isEmpty || name.caseInsensitiveCompare(address.trimmingCharacters(in: .whitespaces)) == .orderedSame
                 || isIPLiteral(name)
         }

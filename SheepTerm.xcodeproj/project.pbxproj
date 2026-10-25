@@ -11,6 +11,8 @@
 		5EEB00000000000000000041 /* SheepSSH in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000053 /* SheepSSH */; };
 		5EEB00000000000000000042 /* SheepJump in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000055 /* SheepJump */; };
 		5EEB00000000000000000043 /* SheepSync in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB00000000000000000057 /* SheepSync */; };
+		5EEB000000000000000000A0 /* SheepWeb in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB000000000000000000A2 /* SheepWeb */; };
+		5EEB000000000000000000A3 /* SheepWebScripts in Frameworks */ = {isa = PBXBuildFile; productRef = 5EEB000000000000000000A4 /* SheepWebScripts */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -54,6 +56,8 @@
 				5EEB00000000000000000041 /* SheepSSH in Frameworks */,
 				5EEB00000000000000000042 /* SheepJump in Frameworks */,
 				5EEB00000000000000000043 /* SheepSync in Frameworks */,
+				5EEB000000000000000000A0 /* SheepWeb in Frameworks */,
+				5EEB000000000000000000A3 /* SheepWebScripts in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +106,8 @@
 				5EEB00000000000000000053 /* SheepSSH */,
 				5EEB00000000000000000055 /* SheepJump */,
 				5EEB00000000000000000057 /* SheepSync */,
+				5EEB000000000000000000A2 /* SheepWeb */,
+				5EEB000000000000000000A4 /* SheepWebScripts */,
 			);
 			productName = SheepTerm;
 			productReference = 5EEB00000000000000000020 /* SheepTerm.app */;
@@ -144,6 +150,7 @@
 				5EEB00000000000000000052 /* XCLocalSwiftPackageReference "Packages/SheepSSH" */,
 				5EEB00000000000000000054 /* XCLocalSwiftPackageReference "Packages/SheepJump" */,
 				5EEB00000000000000000056 /* XCLocalSwiftPackageReference "Packages/SheepSync" */,
+				5EEB000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/SheepWeb" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5EEB00000000000000000023 /* Products */;
@@ -345,7 +352,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 47;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -356,7 +363,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 5.0;
+				MARKETING_VERSION = 6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Bestchaan.SheepTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -376,7 +383,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 47;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -387,7 +394,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 5.0;
+				MARKETING_VERSION = 6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Bestchaan.SheepTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -440,6 +447,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/SheepSync;
 		};
+		5EEB000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/SheepWeb" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SheepWeb;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -461,6 +472,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5EEB00000000000000000056 /* XCLocalSwiftPackageReference "Packages/SheepSync" */;
 			productName = SheepSync;
+		};
+		5EEB000000000000000000A2 /* SheepWeb */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5EEB000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/SheepWeb" */;
+			productName = SheepWeb;
+		};
+		5EEB000000000000000000A4 /* SheepWebScripts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5EEB000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/SheepWeb" */;
+			productName = SheepWebScripts;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

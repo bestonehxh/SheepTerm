@@ -259,8 +259,7 @@ final class SessionTerminalHost {
 
     /// The pane is smaller than this: the card goes to a panel instead (the
     /// card never shrinks its font or its width).
-    private static let cardMargin: CGFloat = 24
-    private static let minPaneHeight: CGFloat = 260
+    private static let cardMargin = ConnectionCardPlan.cardMargin
 
     /// A connection card is on screen (in the pane or in its panel).
     var hasConnectionCard: Bool { connectionCard != nil }
@@ -430,8 +429,7 @@ final class SessionTerminalHost {
         // holds one page holds them all — the card never jumps in and out.
         let needed = ConnectionCardView.cardSize
         let size = overlay.bounds.size
-        let fits = size.width >= needed.width + Self.cardMargin
-            && size.height >= max(Self.minPaneHeight, needed.height + Self.cardMargin)
+        let fits = ConnectionCardPlan.cardFits(card: needed, in: size)
         if fits {
             if let panel = connectionPanel {
                 panel.parent?.removeChildWindow(panel)

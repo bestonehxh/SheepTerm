@@ -3,7 +3,12 @@ import Foundation
 import SheepVTRender
 import Synchronization
 
-/// Owns one serial console tab: SheepVT view + termios worker.
+/// Owns one console tab: SheepVT view + the line under it — a termios port
+/// (`SerialWorker`) or, for a `.telnet` host, a telnet socket
+/// (`TelnetWorker`). Both are a plain byte pipe, so everything above the
+/// worker (log, highlight, paging, prompt name, Safe Paste, Confirm
+/// Dangerous Commands) is one code path; line speed and XMODEM are the
+/// cable's alone.
 final class SerialTerminalController: NSObject {
     /// The view, its fading scroller and SafePaste. See SessionTerminalHost.
     let terminalHost = SessionTerminalHost(safePaste: true)
@@ -91,7 +96,16 @@ final class SerialTerminalController: NSObject {
         autoDetected = true
     }
 
-    private let worker = SerialWorker()
+    /// The line, whichever kind it is.
+    private let worker: any ConsoleWorker
+    /// The same object when the line is a cable: speed and XMODEM.
+    private let serialWorker: SerialWorker?
+    /// The same object when the line is a telnet socket: window size.
+    private let telnetWorker: TelnetWorker?
+    var isTelnet: Bool { telnetWorker != nil }
+    /// A telnet server that will not echo: typed text is drawn here.
+    private var telnetLocalEcho = false
+    private lazy var resizes = ResizeCoalescer { [weak self] cols, rows in self?.telnetWorker?.resize(cols: cols, rows: rows) }
     /// What the last `worker.write` made through `TerminalViewDelegate.send`
     /// answered. That delegate method returns Void and cannot be changed (it
     /// belongs to the terminal package), so Safe Paste's pacer reads the
@@ -154,6 +168,17 @@ final class SerialTerminalController: NSObject {
         // A reconnect keeps appending to the previous session's log file
         // instead of starting a fresh one per attempt.
         loggerState = Mutex(reusingLogger)
+        if host.kind == .telnet {
+            let telnet = TelnetWorker()
+            worker = telnet
+            telnetWorker = telnet
+            serialWorker = nil
+        } else {
+            let serial = SerialWorker()
+            worker = serial
+            serialWorker = serial
+            telnetWorker = nil
+        }
         super.init()
         Theme.apply(to: terminalView)
         terminalView.delegate = self
@@ -222,7 +247,15 @@ final class SerialTerminalController: NSObject {
                 self?.printNotice(message)
             }
         }
-        worker.onBaudChanged = { [weak self] baud in
+        telnetWorker?.onLocalEcho = { [weak self] on in
+            DispatchQueue.main.async {
+                guard let self, self.telnetLocalEcho != on else { return }
+                self.telnetLocalEcho = on
+                self.printNotice(on ? "the server does not echo — echoing typed text locally"
+                                    : "the server echoes again — local echo off")
+            }
+        }
+        serialWorker?.onBaudChanged = { [weak self] baud in
             DispatchQueue.main.async {
                 guard let self else { return }
                 // Reconnect (manual or automatic) opens `host`: it keeps the
@@ -244,8 +277,11 @@ final class SerialTerminalController: NSObject {
                 // A prompt the user dismissed is a decision, not a drop. Plain
                 // "disconnected" is what auto-reconnect keys on, and it would
                 // put the same prompt straight back up — three times.
-                self.onStatus?(message.hasPrefix("connection cancelled")
-                               ? "disconnected — cancelled" : "disconnected")
+                // A telnet session the far end ended (`exit`, exec-timeout)
+                // is over, not dropped — SSH's rule (4.1 (36)): no reconnect.
+                self.onStatus?(message.hasPrefix("connection cancelled") ? "disconnected — cancelled"
+                               : message.hasPrefix(SSHWorker.sessionEndedPrefix) ? "disconnected — session ended"
+                               : "disconnected")
                 // The log is NOT closed here. Auto-reconnect hands this
                 // logger to the successor 2–10 s from now, and a logger closed
                 // in between dropped every byte of the reconnected session
@@ -256,6 +292,10 @@ final class SerialTerminalController: NSObject {
     }
 
     func start() {
+        if let telnetWorker {
+            startTelnet(telnetWorker)
+            return
+        }
         // A console that names itself (an Aruba CX USB-C port) says so, and
         // says when the speed asked for is not the one it runs at.
         let known = ConsoleBaud.known(SerialWatcher.usbDevice(at: host.address))
@@ -267,6 +307,11 @@ final class SerialTerminalController: NSObject {
                 printNotice("this port is an \(known.label), which runs at \(known.baud) baud — click the speed in the status bar to change it")
             }
         }
+        openLogIfWanted()
+        serialWorker?.start(devicePath: host.address, baudRate: host.port)
+    }
+
+    private func openLogIfWanted() {
         if let logger {
             // A handed-over logger's notices belong to THIS session now — the
             // controller that opened it is on its way out.
@@ -287,7 +332,12 @@ final class SerialTerminalController: NSObject {
                 printNotice("session logging is OFF — could not create a log file: \(error)", error: true)
             }
         }
-        worker.start(devicePath: host.address, baudRate: host.port)
+    }
+
+    private func startTelnet(_ telnet: TelnetWorker) {
+        printNotice("connecting to \(host.address) port \(host.port) (telnet — not encrypted)…")
+        openLogIfWanted()
+        telnet.start(host: host.address, port: host.port, cols: terminalView.cols, rows: terminalView.rows)
     }
 
     /// Per-session `--More--` detector; see `PagerDetector`.
@@ -307,7 +357,7 @@ final class SerialTerminalController: NSObject {
     func sendBreak() {
         if !worker.sendBreak() {
             printNotice(worker.isTransferring ? "a file transfer is running — break not sent"
-                                              : "no serial session — break not sent", error: true)
+                                              : "no session — break not sent", error: true)
         }
     }
 
@@ -317,8 +367,8 @@ final class SerialTerminalController: NSObject {
     /// (`onBaudChanged` confirms it); a closed one keeps the choice for the
     /// next connect (Reconnect).
     func setBaud(_ baud: Int) {
-        guard baud != host.port, Host.serialBaudRange.contains(baud) else { return }
-        if worker.setBaud(baud) { return }
+        guard let serialWorker, baud != host.port, Host.serialBaudRange.contains(baud) else { return }
+        if serialWorker.setBaud(baud) { return }
         if worker.isTransferring {
             printNotice("a file transfer is running — speed not changed", error: true)
         } else {
@@ -379,6 +429,9 @@ final class SerialTerminalController: NSObject {
             return
         }
         printNotice("\(label): \(name) (\(Self.sizeText(data.count))) — waiting for the device to ask for it…")
+        if isTelnet {
+            printNotice("over telnet: binary mode was asked for — a console server that refuses it will corrupt the file")
+        }
         showTransferProgress(label: label, done: 0, total: data.count, started: started)
     }
 
@@ -577,6 +630,10 @@ extension SerialTerminalController: TerminalViewDelegate {
         // a paced paste can end on it instead of counting the line as sent.
         lastWriteAccepted = worker.write(bytes)
         terminalHost.noteOutgoing(bytes)
+        if telnetLocalEcho, lastWriteAccepted {
+            let echo = TelnetProtocol.localEcho(bytes)
+            if !echo.isEmpty { terminalView.feed(echo) }
+        }
     }
 
     /// Only a real keystroke cancels a running Safe Paste — a DA/DSR reply
@@ -585,8 +642,11 @@ extension SerialTerminalController: TerminalViewDelegate {
         terminalHost.prepareForOrdinaryUserInput()
     }
 
-    /// A serial line has no window-size channel; the grid is ours alone.
-    func sizeChanged(_ view: TerminalView, cols: Int, rows: Int) {}
+    /// A serial line has no window-size channel; telnet has NAWS, coalesced
+    /// like SSH's window-change (a drag must not redraw the prompt 12 times).
+    func sizeChanged(_ view: TerminalView, cols: Int, rows: Int) {
+        if isTelnet { resizes.changed(cols: cols, rows: rows) }
+    }
 
     /// The overlay repaints from the rows the renderer is about to draw, so
     /// scrolling back needs nothing from here — 2.x had to paint from this

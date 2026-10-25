@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(SheepWebScripts)
+import SheepWebScripts
+#endif
 
 // Web tabs (ConnectionKind.web): the pure rules — URL normalisation, origin
 // matching for Fill Login, the certificate-trust decision and the Fill Login
@@ -7,6 +10,8 @@ import Foundation
 // `Host` side is `WebTabs+Host.swift`) or a Darwin-only API. Tests/run.sh
 // compiles it (SRC) and `Tests/tests/WebTabTests.swift` holds every rule to its
 // cases. The app side is `WebTabController.swift` / `WebHostSheet.swift`.
+// The login-field scripts are `WebLoginScripts` in Packages/SheepWeb/Sources/SheepWebScripts
+// (shared with the other Sheep apps; the root Package.swift and Tests/run.sh compile that file too).
 // ARCHITECTURE.md "Web tabs" and "Shared with Windows".
 
 /// What a web host's address field may hold, and how it is stored.
@@ -685,6 +690,17 @@ public nonisolated enum WebLoginKey {
         return .save
     }
 
+    /// A two-step sign-in: the user name sent on the first step, kept for the
+    /// password step that shows none (5.0 (53)). Used only on the same site,
+    /// within `stepUserLifetime` s, and only when the password step named no user.
+    public static let stepUserLifetime: Double = 600
+    public static func userForSave(typed: String, step: (site: String, user: String, at: Double)?,
+                                   site: String?, now: Double) -> String {
+        guard typed.isEmpty, let step, let site, step.site == site, now - step.at >= 0,
+              now - step.at < stepUserLifetime else { return typed }
+        return step.user
+    }
+
     /// The login went through when the page — after the submit settled — no
     /// longer shows a password field.
     public static func loggedIn(passwordFieldVisible: Bool) -> Bool { !passwordFieldVisible }
@@ -710,124 +726,17 @@ public nonisolated enum WebLoginKey {
 
     /// Runs in the app's own `WKContentWorld` (the page cannot see it or call
     /// the handler): reports the field the key belongs in — the login form's
-    /// user field, else its password field (Safari's place) — as `fields`
+    /// user field, else its password field (Safari's place); on a page with no
+    /// password field, a field that says it is the user name (`userish`: the
+    /// first step of a two-step sign-in, 5.0 (53)) — as `fields`
     /// (one box, an empty list when there is no login form), again whenever
     /// it moves or the page changes; and, when a form with a filled password is sent,
-    /// what was typed (`submit`). Defines `__sheepLoginCheck()` = a visible
+    /// what was typed (`submit`); when such a first step is sent, its user name
+    /// (`user`) — the password step often shows none. Defines `__sheepLoginCheck()` = a visible
     /// password field is on the page now.
-    public static let script = """
-    (() => {
-      if (window.__sheepLogin) return;
-      window.__sheepLogin = true;
-      const post = (m) => { try { window.webkit.messageHandlers.sheepLogin.postMessage(m); } catch (e) {} };
-      // Visible = laid out, not hidden, not transparent, and not parked off
-      // the page (the "left:-9999px" autofill bait many login pages carry).
-      const visible = (el) => {
-        if (!el || el.disabled || el.readOnly) return false;
-        const r = el.getBoundingClientRect(), s = window.getComputedStyle(el);
-        if (r.width <= 0 || r.height <= 0 || s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
-        return r.right + window.scrollX > 0 && r.bottom + window.scrollY > 0;
-      };
-      const userType = (el) => ['text', 'email', 'tel', ''].includes((el.getAttribute('type') || '').toLowerCase());
-      // The user's own events only. The harness cannot make trusted events,
-      // so it sets __sheepLoginTestTrust — a global of THIS world, which the
-      // page cannot reach.
-      const trusted = (e) => e.isTrusted || window.__sheepLoginTestTrust === true;
-      // Password fields — including one the page's "show password" eye has
-      // turned into type=text for a moment: it is still the login's field.
-      const seenPassword = new Set();
-      const passwordFields = () => {
-        for (const el of document.querySelectorAll('input[type=password]')) seenPassword.add(el);
-        for (const el of Array.from(seenPassword)) if (!el.isConnected) seenPassword.delete(el);
-        return Array.from(document.querySelectorAll('input')).filter((el) => seenPassword.has(el) && visible(el));
-      };
-      const pageHasPassword = () => passwordFields().length > 0;
-      // The login form: the first visible password field, and the last
-      // visible user field before it that belongs with it (same form, or —
-      // no form — any before it): never a search box elsewhere on the page.
-      const loginFields = () => {
-        const pw = passwordFields()[0];
-        if (!pw) return [];
-        let user = null;
-        for (const el of Array.from(document.querySelectorAll('input'))) {
-          if (el === pw) break;
-          if (userType(el) && visible(el) && (pw.form ? el.form === pw.form : !el.form)) user = el;
-        }
-        return user ? [user, pw] : [pw];
-      };
-      // The key goes where Safari puts it: the user field, else the
-      // password field when the form has no user field.
-      let last = '', timer = 0;
-      const report = () => {
-        timer = 0;
-        const field = loginFields()[0];
-        const boxes = field ? [field].map((el) => { const r = el.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; }) : [];
-        const key = JSON.stringify(boxes);
-        if (key === last) return;
-        last = key;
-        post({k: 'fields', boxes: boxes});
-      };
-      // A short timer, not requestAnimationFrame: rAF stops in a page that
-      // is not on screen, and the key must be right when it comes back.
-      const again = () => { if (!timer) timer = setTimeout(report, 50); };
-      window.addEventListener('scroll', again, true);
-      window.addEventListener('resize', again);
-      document.addEventListener('focusin', again, true);
-      // Back/forward cache: the scripts do not run again, the page does.
-      window.addEventListener('pageshow', () => { last = ''; again(); });
-      new MutationObserver(again).observe(document.documentElement, {childList: true, subtree: true, attributes: true});
-      window.__sheepLoginReport = () => { last = ''; report(); };
-      report();
-      // What the USER typed, per password field (trusted input only): a
-      // value the page set itself — or our own fill — is never "typed".
-      const typed = new WeakMap();
-      document.addEventListener('input', (e) => {
-        if (!trusted(e) || !(e.target instanceof HTMLInputElement)) return;
-        if (e.target.type === 'password') seenPassword.add(e.target);
-        if (seenPassword.has(e.target)) typed.set(e.target, e.target.value);
-      }, true);
-      let sent = null;
-      const capture = () => {
-        const fields = loginFields();
-        const pw = fields[fields.length - 1];
-        if (!pw || !pw.value || typed.get(pw) !== pw.value) return;
-        // The user field — or, on a two-step login, the read-only one that
-        // shows the user chosen on the step before.
-        let user = fields.length > 1 ? fields[0].value : '';
-        if (!user) {
-          for (const el of Array.from(document.querySelectorAll('input'))) {
-            if (el === pw) break;
-            if (userType(el) && el.readOnly && el.value && (pw.form ? el.form === pw.form : !el.form)) user = el.value;
-          }
-        }
-        // A click on Submit and the form's own submit event are one login.
-        if (sent && sent.user === user && sent.pass === pw.value && Date.now() - sent.at < 1000) return;
-        sent = {user: user, pass: pw.value, at: Date.now()};
-        post({k: 'submit', user: user, pass: pw.value});
-      };
-      // Only the user's own actions, and only on THIS login form.
-      document.addEventListener('submit', (e) => {
-        const pw = loginFields().slice(-1)[0];
-        if (trusted(e) && pw && e.target === pw.form) capture();
-      }, true);
-      document.addEventListener('keydown', (e) => {
-        if (trusted(e) && e.key === 'Enter' && loginFields().includes(e.target)) capture();
-      }, true);
-      document.addEventListener('click', (e) => {
-        if (!trusted(e) || !e.target || !e.target.closest) return;
-        const b = e.target.closest('button, input[type=submit], input[type=image], [role=button]');
-        const pw = loginFields().slice(-1)[0];
-        if (!b || !pw) return;
-        // Any button of this login form (an AJAX login is often type=button);
-        // formless: a button after the password field. A "show password" eye
-        // may post too — harmless: the field it reveals still counts as the
-        // login form, so nothing is offered unless the form really goes.
-        const ofForm = pw.form ? (b.form === pw.form || pw.form.contains(b)) : (pw.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-        if (ofForm) capture();
-      }, true);
-      window.__sheepLoginCheck = () => pageHasPassword();
-    })();
-    """
+    /// (The script itself lives in the SheepWeb package — `WebLoginScripts`, shared
+    /// with the other Sheep apps since 5.0 (53); this name stays for the Windows build.)
+    public static let script = WebLoginScripts.pageScript(handler: "sheepLogin")
 }
 
 /// Web tab zoom (5.0 (25), Safari's ⌘+ / ⌘−): the steps, and the zoom
@@ -874,44 +783,14 @@ public nonisolated enum WebFillLogin {
     /// Run with `callAsyncJavaScript(_:arguments:in:contentWorld:)`; the
     /// values arrive as the JSON-encoded arguments `user` and `pass`, never
     /// spliced into the source. Finds the first VISIBLE password input and
-    /// the last visible text/email input before it, sets their values with the
+    /// the last visible text/email input before it (no password field: the
+    /// first field that says it is the user name — a two-step sign-in's first
+    /// step), sets their values with the
     /// native setter (so frameworks that track `value` see a change) and
     /// dispatches input + change. Returns "filled", "user-only" or "none".
-    public static let script = """
-    const here = (() => {
-      let h = location.hostname.toLowerCase();
-      if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
-      if (h.endsWith('.')) h = h.slice(0, -1);
-      const p = location.port || (location.protocol === 'https:' ? '443' : location.protocol === 'http:' ? '80' : '');
-      return { protocol: location.protocol, hostname: h, port: p };
-    })();
-    if (here.protocol !== expected.protocol || here.hostname !== expected.hostname || here.port !== expected.port) {
-      return 'other-origin';
-    }
-    const visible = (el) => {
-      if (el.disabled || el.readOnly) return false;
-      const r = el.getBoundingClientRect();
-      const s = window.getComputedStyle(el);
-      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
-    };
-    const inputs = Array.from(document.querySelectorAll('input'));
-    const pwIndex = inputs.findIndex((el) => el.type === 'password' && visible(el));
-    const isUserField = (el) => ['text', 'email', 'tel', ''].includes((el.getAttribute('type') || '').toLowerCase()) && visible(el);
-    let userField = null;
-    const before = pwIndex >= 0 ? inputs.slice(0, pwIndex) : inputs;
-    for (const el of before) { if (isUserField(el)) userField = el; }
-    const setValue = (el, value) => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      el.focus();
-      setter.call(el, value);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    };
-    if (userField && user.length > 0) setValue(userField, user);
-    if (pwIndex >= 0 && pass.length > 0) { setValue(inputs[pwIndex], pass); return 'filled'; }
-    if (userField && user.length > 0) return 'user-only';
-    return 'none';
-    """
+    /// (The script itself lives in the SheepWeb package — `WebLoginScripts.fillScript`,
+    /// shared with the other Sheep apps since 5.0 (53). Since then it runs in the app's own world.)
+    public static let script = WebLoginScripts.fillScript
 
     public enum Refusal: Equatable, Sendable {
         case noLogin, otherOrigin, noPage, loading

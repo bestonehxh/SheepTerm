@@ -176,11 +176,13 @@ final class SurfacePresenter {
 
     private func makeSlot(width w: Int, height h: Int, now: CFTimeInterval) -> Slot? {
         guard w >= 1, h >= 1 else { return nil }
-        let props: [IOSurfacePropertyKey: Any] = [
-            .width: w, .height: h, .bytesPerElement: 4,
-            .pixelFormat: UInt32(0x42475241),   // 'BGRA'
-        ]
-        guard let surface = IOSurface(properties: props) else { return nil }
+        // A CF dictionary to IOSurfaceCreate (the [Key: Any] initializer
+        // warned under Swift 6: Any is not Sendable).
+        let props = [
+            kIOSurfaceWidth: w, kIOSurfaceHeight: h, kIOSurfaceBytesPerElement: 4,
+            kIOSurfacePixelFormat: UInt32(0x42475241),   // 'BGRA'
+        ] as CFDictionary
+        guard let surface = IOSurfaceCreate(props) as IOSurface? else { return nil }
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
         desc.usage = [.renderTarget, .shaderRead]
         desc.storageMode = .shared

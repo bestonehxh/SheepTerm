@@ -13,6 +13,8 @@ struct StatusBarView: View {
     }()
 
     @EnvironmentObject var model: AppModel
+    /// The status bar is switched off but a transfer is moving.
+    var onlyTransfer = false
     // Empty until onAppear — getifaddrs isn't free, so don't run it in the
     // initializer that every re-render of the parent evaluates.
     @State private var localAddress = ""
@@ -25,14 +27,21 @@ struct StatusBarView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // The connection-state sheep (statusShowSheep) and the highlight
+          if onlyTransfer {
+            // The bar is hidden but files are moving: only the strip + glyph.
+            Spacer()
+            TransferStatusStrip()
+            FileServerStatusButton()
+          } else {
+            // The connection state (statusConnectionStyle) and the highlight
             // vendor control sit at the left edge for a remote tab, ahead of
             // the session/cipher/device-IP/user TEXT (statusShowSession), so
             // turning the text on never pushes them away from the edge.
             if let tab = model.selectedTab {
-                SessionStatusText(tab: tab, showText: model.statusShowSession, showSheep: model.statusShowSheep,
+                SessionStatusText(tab: tab, showText: model.statusShowSession, indicator: model.statusConnectionStyle,
                                   onVendorChange: { model.setHighlightVendorCurrent($0) },
-                                  onBaudChange: { model.setBaud($0, for: tab) })
+                                  onBaudChange: { model.setBaud($0, for: tab) },
+                                  onOpenWeb: { url in if let web = Host.web(name: "", url: url) { model.open(host: web) } })
             } else if model.statusShowSession {
                 Text("no session")
             }
@@ -46,12 +55,22 @@ struct StatusBarView: View {
                     .foregroundStyle(Theme.dimText.opacity(0.7))
             }
             Spacer()
+            // Files moving: a compact bar beside the glyph (the user's pick,
+            // 5.0 (60): "69%  734 KB/1.1 MB"; the other items stay).
+            if model.fileTransferShown && model.statusShowTransfers {
+                TransferStatusStrip()
+            }
+            if FileServerPlan.showsGlyph(switchOn: model.statusShowFileServer, running: model.fileServerActive,
+                                         starting: false, popoverOpen: false) {
+                FileServerStatusButton()
+            }
             if model.statusShowClock {
                 ClockText()
             }
             if model.statusShowIP {
                 Text(localAddress)
             }
+          }
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(Theme.dimText)
@@ -204,14 +223,26 @@ struct SessionStatusText: View {
     /// Whether the session/cipher/device-IP/username line is shown. The
     /// remote controls (state sheep + vendor picker) show regardless.
     var showText: Bool = true
-    var showSheep: Bool = true
+    var indicator: ConnectionIndicator = .sheep
     var onVendorChange: (Vendor) -> Void = { _ in }
     var onBaudChange: (Int) -> Void = { _ in }
+    /// A local forward's "Open in Web Tab".
+    var onOpenWeb: (String) -> Void = { _ in }
+
+    /// A connected SSH tab's port forwards (5.0 (50)–(53)) — the menu that
+    /// makes them usable in a click: open, copy, stop/start, and how many
+    /// connections each carries. The worker's own report, so it is empty
+    /// once the session is over.
+    private var forwardStates: [ForwardState] { tab.forwards }
+
+    private func setForward(_ spec: PortForwardSpec, _ enabled: Bool) {
+        if case .ssh(let controller) = tab.content { controller.setForward(spec, enabled: enabled) }
+    }
 
     /// A serial tab's line speed (5.0 (39)): read from the controller's host,
     /// which `onBaudChanged` updates before the new status line arrives.
     private var serialBaud: Int? {
-        if case .serial(let controller) = tab.content { return controller.host.port }
+        if case .serial(let controller) = tab.content, !controller.isTelnet { return controller.host.port }
         return nil
     }
 
@@ -225,13 +256,17 @@ struct SessionStatusText: View {
             return StatusInfoDisplay.text(tab.statusInfo) ?? String(localized: "opening \(controller.host.address)…")
         case .web(let controller):
             return StatusInfoDisplay.text(tab.statusInfo) ?? String(localized: "loading \(WebAddress.displayHost(of: controller.host.address))…")
+        case .files(let controller):
+            return tab.statusInfo ?? controller.endpoint.host
+        case .ping:
+            return tab.statusInfo ?? String(localized: "Ping")
         }
     }
 
     private var isRemote: Bool {
         switch tab.content {
         case .ssh, .serial: return true
-        case .local, .web: return false
+        case .local, .web, .files, .ping: return false
         }
     }
 
@@ -262,22 +297,54 @@ struct SessionStatusText: View {
         }
     }
 
+    private var indicatorPhase: ConnectionIndicator.Phase {
+        switch connectionState {
+        case .connecting: return .connecting
+        case .connected: return .connected
+        case .closed: return .closed
+        }
+    }
+
+    /// Amber connecting, green up, red down — turned down as a whole by the
+    /// view's opacity (`ConnectionIndicator.brightness`), so overlapping
+    /// parts never show through each other.
+    private var stateColor: Color {
+        switch connectionState {
+        case .connecting: return Theme.warn
+        case .connected: return Theme.ok
+        case .closed: return Theme.destructive
+        }
+    }
+
     var body: some View {
         HStack(spacing: 8) {
-            if isRemote, showSheep {
-                // A picture, not a button (the owner's call, 2026-10-22):
-                // ⇧⌘H and the menu toggle highlighting.
-                Group {
-                    switch connectionState {
-                    case .connecting:
-                        WalkingSheepView()
-                    case .connected:
-                        SleepingSheepView()
-                    case .closed:
-                        SheepGlyphView(pose: .closed)
+            if isRemote {
+                switch indicator {
+                case .sheep:
+                    // A picture, not a button (the owner's call, 2026-10-22):
+                    // ⇧⌘H and the menu toggle highlighting.
+                    Group {
+                        switch connectionState {
+                        case .connecting:
+                            WalkingSheepView()
+                        case .connected:
+                            SleepingSheepView()
+                        case .closed:
+                            SheepGlyphView(pose: .closed)
+                        }
                     }
+                    .frame(height: 16)          // as wide as SheepGlyph.slotWidth(pose): narrower asleep
+                case .wool:
+                    WoolIndicator(phase: indicatorPhase, color: stateColor)
+                        .opacity(ConnectionIndicator.brightness(indicatorPhase))
+                        .help(connectionStateText)
+                case .packet:
+                    PacketIndicator(phase: indicatorPhase, color: stateColor)
+                        .opacity(ConnectionIndicator.brightness(indicatorPhase))
+                        .help(connectionStateText)
+                case .off:
+                    EmptyView()
                 }
-                .frame(height: 16)          // as wide as SheepGlyph.slotWidth(pose): narrower asleep
             }
             if isRemote {
                 // The pack this session colours with, and a one-click way to
@@ -322,11 +389,145 @@ struct SessionStatusText: View {
                 .foregroundStyle(Theme.dimText)
                 .help("Baud rate")
             }
+            if !forwardStates.isEmpty {
+                Menu {
+                    ForEach(forwardStates, id: \.self) { state in
+                        let spec = state.spec
+                        Section(state.title) {
+                            if state.active, let address = spec.macAddress {
+                                if let url = spec.webURL {
+                                    Button("Open in Web Tab") { onOpenWeb(url) }
+                                }
+                                Button(spec.isSOCKS ? "Copy Proxy Address" : "Copy Address") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(address, forType: .string)
+                                }
+                            }
+                            if state.active {
+                                Button("Stop") { setForward(spec, false) }
+                            } else {
+                                Button("Start") { setForward(spec, true) }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.left.arrow.right")
+                        Text(String(forwardStates.filter(\.active).count))
+                    }
+                    .lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(Theme.dimText)
+                .help("Port forwards")
+            }
             if showText {
                 Text(text)
                     .foregroundStyle(isLegacy ? Theme.warn : Theme.dimText)
                     .lineLimit(1)
             }
         }
+    }
+}
+
+
+// MARK: - Plain connection indicators (5.0 (60))
+
+/// Animates only while connecting AND the window is key — the same rule the
+/// walking sheep follows; otherwise one static frame, no timeline ticking.
+private struct IndicatorClock<Content: View>: View {
+    let animating: Bool
+    @ViewBuilder var content: (Double) -> Content
+    @ObservedObject private var windowKey = MainWindowKeyMonitor.shared
+
+    var body: some View {
+        if animating && windowKey.isKey {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                content(context.date.timeIntervalSinceReferenceDate)
+            }
+        } else {
+            content(0.15)
+        }
+    }
+}
+
+/// Three wool puffs; connecting, they hop one after another.
+struct WoolIndicator: View {
+    let phase: ConnectionIndicator.Phase
+    let color: Color
+    static let period = 1.1
+
+    static func puff(_ c: CGPoint, _ r: CGFloat) -> Path {
+        var p = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        for i in 0..<8 {
+            let a = Double(i) / 8 * 2 * .pi
+            let br = r * 0.36
+            p = p.union(Path(ellipseIn: CGRect(x: c.x + r * 0.86 * cos(a) - br, y: c.y + r * 0.86 * sin(a) - br,
+                                               width: 2 * br, height: 2 * br)))
+        }
+        return p
+    }
+
+    var body: some View {
+        IndicatorClock(animating: phase == .connecting) { time in
+            Canvas { ctx, size in
+                let t = (time / Self.period).truncatingRemainder(dividingBy: 1)
+                for i in 0..<3 {
+                    var lift: CGFloat = 0
+                    var alpha = 1.0
+                    if phase == .connecting {
+                        let ph = t - Double(i) * 0.18
+                        let k = ph < 0 ? 0 : max(0, sin(min(ph, 0.5) * 2 * .pi))
+                        lift = CGFloat(k) * 2.2
+                        alpha = 0.45 + 0.55 * k
+                    }
+                    let puff = Self.puff(CGPoint(x: 4 + CGFloat(i) * 7, y: size.height / 2 - lift), 2.4)
+                    ctx.fill(puff, with: .color(color.opacity(alpha)))
+                }
+            }
+        }
+        .frame(width: 22, height: 14)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Two ends (this Mac, the device); connecting, a packet runs between them;
+/// up, a line joins them; down, the line is broken.
+struct PacketIndicator: View {
+    let phase: ConnectionIndicator.Phase
+    let color: Color
+    static let period = 1.2
+
+    var body: some View {
+        IndicatorClock(animating: phase == .connecting) { time in
+            Canvas { ctx, size in
+                let y = size.height / 2
+                let left = CGPoint(x: 3, y: y), right = CGPoint(x: 21, y: y)
+                switch phase {
+                case .connected:
+                    var line = Path(); line.move(to: left); line.addLine(to: right)
+                    ctx.stroke(line, with: .color(color), lineWidth: 1.2)
+                case .closed:
+                    for (a, b) in [(left.x, 9.0), (15.0, right.x)] {
+                        var seg = Path(); seg.move(to: CGPoint(x: a, y: y)); seg.addLine(to: CGPoint(x: b, y: y))
+                        ctx.stroke(seg, with: .color(color.opacity(0.8)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                    }
+                case .connecting:
+                    var dash = Path(); dash.move(to: left); dash.addLine(to: right)
+                    ctx.stroke(dash, with: .color(Theme.dimText.opacity(0.35)), style: StrokeStyle(lineWidth: 1, dash: [1.5, 2]))
+                    let t = (time / Self.period).truncatingRemainder(dividingBy: 1)
+                    let x = left.x + (right.x - left.x) * (0.5 - 0.5 * cos(t * 2 * .pi))
+                    ctx.fill(Path(ellipseIn: CGRect(x: x - 1.6, y: y - 1.6, width: 3.2, height: 3.2)), with: .color(color))
+                }
+                for p in [left, right] {
+                    ctx.fill(Path(ellipseIn: CGRect(x: p.x - 2.6, y: y - 2.6, width: 5.2, height: 5.2)),
+                             with: .color(phase == .closed ? Theme.dimText : color))
+                }
+            }
+        }
+        .frame(width: 24, height: 14)
+        .accessibilityHidden(true)
     }
 }

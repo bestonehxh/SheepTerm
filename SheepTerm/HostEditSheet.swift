@@ -28,6 +28,13 @@ struct HostEditSheet: View {
     @State private var jumpText: String
     @State private var vendor: Vendor
     @State private var baud: Int
+    /// Port forwards (5.0 (49)), in the order shown; `forwardDraft` is the
+    /// open add form (nil = closed). See `PortForwardSpec`.
+    @State private var forwards: [PortForwardSpec]
+    @State private var forwardDraft: ForwardDraft?
+    /// The Advanced settings are shown. Starts open when the host already
+    /// has one set (`Host.hasAdvancedSettings`).
+    @State private var showAdvanced: Bool
     /// Whether the Port field has been typed in during this edit. See
     /// `parsedPort`.
     @State private var portEdited = false
@@ -79,6 +86,14 @@ struct HostEditSheet: View {
             _jumpText = State(initialValue: host.jumpSpecValue ?? "")
         }
         _vendor = State(initialValue: host.highlightVendor)
+        _forwards = State(initialValue: host.forwardSpecs)
+        _showAdvanced = State(initialValue: host.hasAdvancedSettings)
+        #if DEBUG
+        // Screenshot runs only: SHEEPTERM_DEBUG_FORWARD_DRAFT=1 opens the add form, half filled.
+        if ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_FORWARD_DRAFT"] == "1" {
+            _forwardDraft = State(initialValue: ForwardDraft(kind: .local, listenPort: "8444", host: "198.51.100.7", targetPort: "443"))
+        }
+        #endif
         // A host whose stored baud is not one this picker offers showed a
         // BLANK picker, and Save wrote the bad value straight back, so the
         // advice "edit the host and pick a baud rate" led nowhere.
@@ -106,7 +121,7 @@ struct HostEditSheet: View {
             Form {
                 TextField("Name", text: $name)
                     .formRow("Name")
-                if original.kind == .ssh {
+                if hasTCPEndpoint {
                     TextField("Host / IP", text: $address)
                         .formRow("Host / IP")
                     if let addressError {
@@ -122,6 +137,8 @@ struct HostEditSheet: View {
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.destructive)
                     }
+                }
+                if original.kind == .ssh {
                     FormPopup(selection: $credentialSelection,
                               items: [.option(String(localized: "None (enter manually)"), nil)] + model.credentialStore.credentials.map {
                                   .option("\($0.name) (\($0.username))", $0.id)
@@ -152,18 +169,6 @@ struct HostEditSheet: View {
                             .formRow("Password")
                             .help("Passwords live in the Keychain — filling this saves it as a new credential for this host.")
                     }
-                    FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
-                        .formRow("Cipher mode")
-                    Toggle("Forward SSH agent", isOn: $agentForward)
-                        .help("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
-                    JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
-                                candidates: jumpCandidates,
-                                render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
-                    if let jumpError {
-                        Text(jumpError)
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.destructive)
-                    }
                 } else if original.kind == .serial {
                     TextField("Device path", text: $address)
                         .formRow("Device path")
@@ -173,14 +178,36 @@ struct HostEditSheet: View {
                 FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                     .formRow("Device family")
                     .help("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
-                Toggle("Don't log this session", isOn: $noLog)
+                Toggle("Don't Log", isOn: $noLog)
                     .help("This host never writes a session log, even with Log Sessions to File on.")
                 if original.kind == .ssh {
-                    // Greyed out, not explained: a family with no paging
-                    // command (Auto, FortiOS) has nothing to send.
-                    Toggle("Disable paging on connect", isOn: $disablePaging)
-                        .disabled(vendor.disablePagingCommand == nil)
-                        .help(disablePagingCaption)
+                    // Shown only for a family with a pager-off command
+                    // (5.0 (59), the user: a greyed row under Auto or FortiOS
+                    // was clutter). A saved `true` is kept either way.
+                    if vendor.disablePagingCommand != nil {
+                        Toggle("No Paging", isOn: $disablePaging)
+                            .help(disablePagingCaption)
+                    }
+                    // The connection plumbing most hosts never change (the
+                    // user, 2026-10-25: the form was too busy) — behind Advanced.
+                    AdvancedToggle(isOn: $showAdvanced)
+                }
+                if advancedShown {
+                    if original.kind == .ssh {
+                        FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
+                            .formRow("Cipher mode")
+                        Toggle("Forward SSH agent", isOn: $agentForward)
+                            .help("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
+                        JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
+                                    candidates: jumpCandidates,
+                                    render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                        if let jumpError {
+                            Text(jumpError)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.destructive)
+                        }
+                        PortForwardsRow(forwards: $forwards, draft: $forwardDraft)
+                    }
                 }
             }
             .textFieldStyle(.roundedBorder)
@@ -206,6 +233,10 @@ struct HostEditSheet: View {
             AuthPrompt.forceASCIIKeyboard()
         }
     }
+
+    /// SSH and telnet: a host name and a TCP port. Telnet has no login of
+    /// its own (the device asks in the stream), so it stops there.
+    private var hasTCPEndpoint: Bool { original.kind == .ssh || original.kind == .telnet }
 
     /// the SSH connect needs a TCP port — reject values it can't
     /// represent instead of trapping at connect time.
@@ -256,7 +287,7 @@ struct HostEditSheet: View {
         // SSH only. A serial device path is a PATH, and while `/dev/cu.*`
         // almost never carries an "@" or a ":", "almost never" is not a reason
         // to run a target parser over it.
-        guard original.kind == .ssh else { return (trimmedAddress, nil, nil) }
+        guard hasTCPEndpoint else { return (trimmedAddress, nil, nil) }
         let raw = trimmedAddress
         // "@" belongs in this list too. Without it `admin@10.0.0.1` typed here
         // was saved whole as the address and could never connect, while the
@@ -266,6 +297,7 @@ struct HostEditSheet: View {
             return (raw, nil, nil)
         }
         guard let parsed = ConnectParser.parse(raw, requireHostShape: false) else { return nil }
+        // ConnectParser fills in 22 when no port was typed.
         return (parsed.address,
                 parsed.port == 22 && !raw.hasSuffix(":22") ? nil : parsed.port,
                 parsed.username.isEmpty ? nil : parsed.username)
@@ -310,7 +342,7 @@ struct HostEditSheet: View {
     }
 
     private var addressError: String? {
-        guard original.kind == .ssh, !trimmedAddress.isEmpty else { return nil }
+        guard hasTCPEndpoint, !trimmedAddress.isEmpty else { return nil }
         if trimmedAddress.contains(where: { $0.isWhitespace }) { return String(localized: "Host must not contain spaces") }
         // Word for word what Quick Connect says. Two forms that accept the same
         // text should also refuse it the same way.
@@ -324,7 +356,8 @@ struct HostEditSheet: View {
 
     private var isValid: Bool {
         if trimmedName.isEmpty || trimmedAddress.isEmpty { return false }
-        if original.kind == .ssh, parsedPort == nil || addressError != nil { return false }
+        if hasTCPEndpoint, parsedPort == nil || addressError != nil { return false }
+        if original.kind == .ssh, forwardError != nil { return false }
         if original.kind == .ssh, JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID) { return false }
         return true
     }
@@ -361,6 +394,8 @@ struct HostEditSheet: View {
             // One answer in two fields: a saved reference, or the typed text.
             host.jumpHostID = jumpHostID
             host.jumpSpec = JumpTarget.storedSpec(text: jumpText, jumpHostID: jumpHostID)
+            // A valid forward typed but not added with + is saved too.
+            host.forwards = PortForwardSpec.stored(forwards, draft: forwardDraft)
             // `selectedCredential`, not `credentialSelection`: the same
             // question the form asked when it decided to show the password
             // field at all. A host pointing at a deleted credential shows it,
@@ -378,6 +413,8 @@ struct HostEditSheet: View {
                 )
                 host.credentialID = credential.id
             }
+        case .telnet:
+            host.port = parsedPort ?? Host.defaultTelnetPort
         case .serial:
             host.port = baud
         case .local, .web, .unsupported:
@@ -393,6 +430,15 @@ struct HostEditSheet: View {
 }
 
 extension HostEditSheet {
+    /// Shown when asked for — and always while one of its fields has an
+    /// error, or Save would be greyed out with the reason folded away.
+    var advancedShown: Bool {
+        showAdvanced || (original.kind == .ssh && (jumpError != nil || forwardError != nil))
+    }
+
+    /// The red line under the forwards row (it also blocks Save).
+    var forwardError: String? { forwardDraft?.error(adding: forwards) }
+
     /// What "Disable paging on connect" will actually type, for the family
     /// picked above — or why it types nothing.
     var disablePagingCaption: String {

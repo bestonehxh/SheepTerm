@@ -212,6 +212,32 @@ final class ConnectionLiveTests: XCTestCase {
         XCTAssertEqual(s.exitStatus(id), 0)
     }
 
+    /// requestSubsystem: granted where sshd serves sftp (and the server's
+    /// SFTP VERSION answers our INIT), refused where it does not — the
+    /// Files tab's SCP fallback keys on that refusal.
+    func testSubsystemRequest() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/libexec/sftp-server") else {
+            throw XCTSkip("no /usr/libexec/sftp-server")
+        }
+        let s = try LiveSession(options: ["Subsystem sftp /usr/libexec/sftp-server"])
+        let id = try s.connection.openSession()
+        try s.pump { $0.contains(.channelOpened(id)) }
+        try s.connection.requestSubsystem(id, "sftp")
+        XCTAssertTrue(try s.pump { _ in s.replies(id)["subsystem"] != nil }, s.sshd.log())
+        XCTAssertEqual(s.replies(id)["subsystem"], true)
+        // SSH_FXP_INIT v3 → SSH_FXP_VERSION (type 2).
+        try s.connection.write(id, [0, 0, 0, 5, 1, 0, 0, 0, 3])
+        XCTAssertTrue(try s.pump { _ in s.output(id).count >= 9 })
+        XCTAssertEqual(s.output(id)[4], 2)
+
+        let bare = try LiveSession()
+        let refused = try bare.connection.openSession()
+        try bare.pump { $0.contains(.channelOpened(refused)) }
+        try bare.connection.requestSubsystem(refused, "sftp")
+        XCTAssertTrue(try bare.pump { _ in bare.replies(refused)["subsystem"] != nil || bare.isClosed(refused) })
+        XCTAssertNotEqual(bare.replies(refused)["subsystem"], true)
+    }
+
     func testNoAgentChannelWithoutForwarding() throws {
         let s = try LiveSession()
         let id = try s.exec("echo ${SSH_AUTH_SOCK:-none}")

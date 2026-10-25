@@ -212,7 +212,7 @@ enum Theme {
     /// The colour a host's kind badge wears (sidebar, Quick Search, recents).
     static func kindColor(_ kind: ConnectionKind) -> SwiftUI.Color {
         switch kind {
-        case .ssh: return accent
+        case .ssh, .telnet: return accent
         case .serial: return warn
         case .local: return ok
         case .web: return web

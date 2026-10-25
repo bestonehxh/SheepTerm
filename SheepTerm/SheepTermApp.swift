@@ -24,6 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // sheepterm://share#v1.… = a share link; anything else is a .sheepterm file.
                     if url.scheme?.lowercased() == "sheepterm" {
                         ShareLinks.shared.handle(url: url)
+                    } else if ["telnet", "ssh"].contains(url.scheme?.lowercased() ?? "") {
+                        // A console link from GNS3 / EVE-NG / a browser: a tab,
+                        // nothing typed (see ConnectParser.externalLink).
+                        if let host = ConnectParser.externalLink(url.absoluteString) {
+                            AppModel.shared.open(host: host)
+                        }
                     } else {
                         AppModel.shared.importFile(at: url)
                     }
@@ -44,6 +50,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppUpdater.shared.start()
         SheepTermSync.shared.start()
         ShareLinks.shared.startExpiryWatch()
+        // What's New, once per release that has one (WhatsNewPlan). Not in a
+        // scripted debug run (screenshots / hooks), unless it is the subject.
+        var scripted = false
+        #if DEBUG
+        let debugEnv = ProcessInfo.processInfo.environment
+        scripted = debugEnv.keys.contains { $0.hasPrefix("SHEEPTERM_DEBUG_") } && debugEnv["SHEEPTERM_DEBUG_SHEET"] != "whatsnew"
+        #endif
+        let marketing = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        if !scripted, WhatsNewPlan.shouldShow(seen: UserDefaults.standard.string(forKey: WhatsNewPlan.seenKey), running: marketing) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.showWhatsNew = true }
+        }
 #if DEBUG
         // Memory-keychain scratch runs: every credential gets a demo password so the screens have something to share.
         if PasswordVault.usesMemoryKeychain {
@@ -59,6 +76,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 AppModel.shared.showImportLink(link)
             }
         }
+        // SHEEPTERM_DEBUG_PING="10.0.0.1, core.lab" types `ping …` in the connect box;
+        // SHEEPTERM_DEBUG_PING_LOG=1 opens the tab's log (live check, screenshots).
+        // SHEEPTERM_DEBUG_PING_PROMO=<file>: the local tab cats that file
+        // (sample device output) and a demo Ping tab opens beside it.
+        if let file = env["SHEEPTERM_DEBUG_PING_PROMO"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if let tab = AppModel.shared.selectedTab {
+                    // Typed and run (a trailing newline = Return as its own CR).
+                    _ = AppModel.shared.terminalHost(ofSession: tab.id)?.sendCommand("clear; PS1='core-sw1# '; cat '\(file)'\n")
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.debugPingDemoBeside() }
+            }
+        }
+        // SHEEPTERM_DEBUG_PING_PNG=<path>: a demo Ping tab drawn off screen.
+        if let path = env["SHEEPTERM_DEBUG_PING_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let ping = PingTabController()
+                ping.loadDemo()
+                if let first = ping.rows.first { ping.selection = [first.id] }
+                let host = ping.hosting
+                host.appearance = NSAppearance(named: .darkAqua)
+                // SHEEPTERM_DEBUG_PING_PNG_WIDTH: a narrower pane (a split).
+                let width = env["SHEEPTERM_DEBUG_PING_PNG_WIDTH"].flatMap(Double.init) ?? 1100
+                host.frame = NSRect(x: 0, y: 0, width: width, height: 640)
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: width, height: 640),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                    ping.close()
+                }
+            }
+        }
+        if env["SHEEPTERM_DEBUG_PING_DEMO"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AppModel.shared.openPing(inNewTab: true)
+                if case .ping(let ping)? = AppModel.shared.selectedTab?.content {
+                    ping.loadDemo()
+                    if ping.rows.count > 1 { ping.selection = [ping.rows[1].id] }
+                }
+            }
+        }
+        if let targets = env["SHEEPTERM_DEBUG_PING"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                guard let host = ConnectParser.parseConnectBox("ping " + targets) else { return }
+                AppModel.shared.open(host: host)
+                if env["SHEEPTERM_DEBUG_PING_LOG"] == "1", case .ping(let ping)? = AppModel.shared.selectedTab?.content {
+                    ping.showLog = true
+                }
+            }
+        }
         if env["SHEEPTERM_DEBUG_NETWORK_INFO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 AppModel.shared.closeCurrentWorkspace()
@@ -71,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 AppModel.shared.showSharedLinks = true
             }
         }
-        // SHEEPTERM_DEBUG_SHEET=addhost-ssh|addhost-web opens Add Host on that kind
+        // SHEEPTERM_DEBUG_SHEET=addhost-ssh|addhost-web|addhost-telnet opens Add Host on that kind (addhost-newssh|addhost-newtelnet: the connect form)
         // (edithost:<uuid> is SidebarView's); SHEEPTERM_DEBUG_OPEN_URLS="u1 u2" opens
         // each like ⌘K would; SHEEPTERM_DEBUG_SIDEBAR=1 shows the sidebar. Scratch runs only.
         if env["SHEEPTERM_DEBUG_SIDEBAR"] == "1" || (env["SHEEPTERM_DEBUG_SHEET"] ?? "").hasPrefix("edithost:") {
@@ -83,6 +158,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { AppModel.shared.toggleSidebar() }
             }
         }
+        // SHEEPTERM_DEBUG_SPLIT=right|down (or several, "right down right"): split the
+        // focused pane 3 s in, then once a second (pane margin shots, nested splits).
+        if let split = env["SHEEPTERM_DEBUG_SPLIT"] {
+            for (i, word) in split.split(separator: " ").enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(i)) {
+                    AppModel.shared.splitFocusedPane(word == "down" ? .down : .right)
+                    let m = AppModel.shared
+                    NSLog("debug split %@ → panes %d, tabs %d, focused %@", String(word), m.selectedWorkspace?.paneCount ?? -1,
+                          m.tabs.count, m.selectedTab?.title ?? "nil")
+                }
+            }
+        }
         if let urls = env["SHEEPTERM_DEBUG_OPEN_URLS"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 for text in urls.split(separator: " ") {
@@ -90,6 +177,382 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 if env["SHEEPTERM_DEBUG_SIDEBAR"] == "1" { AppModel.shared.sidebarShown = true }
             }
+        }
+        // SHEEPTERM_DEBUG_OPEN_FILES=n: Open Files on the selected SSH tab after n seconds
+        // (screenshots of a Files tab riding that tab's connection).
+        if let after = env["SHEEPTERM_DEBUG_OPEN_FILES"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) { AppModel.shared.openFilesForSelectedTab() }
+        }
+        // SHEEPTERM_DEBUG_INDICATORS_PNG=<path>: the bottom bar's Wool and Packet
+        // indicators, every phase, drawn by the real views (screenshots).
+        if let path = env["SHEEPTERM_DEBUG_INDICATORS_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let phases: [(ConnectionIndicator.Phase, Color)] = [
+                    (.connecting, Theme.warn), (.connected, Theme.ok), (.closed, Theme.destructive)]
+                @MainActor func row(_ v: some View, _ name: String) -> some View {
+                    HStack(spacing: 10) { v; Text(name); Spacer(); Text("Sun 2026-10-25 04:10:00") }
+                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.dimText)
+                        .padding(.horizontal, 12).frame(width: 440, height: 24).background(Theme.chrome)
+                }
+                let view = VStack(alignment: .leading, spacing: 6) {
+                    ForEach(0..<3, id: \.self) { i in row(WoolIndicator(phase: phases[i].0, color: phases[i].1).opacity(ConnectionIndicator.brightness(phases[i].0)), "Wool") }
+                    ForEach(0..<3, id: \.self) { i in row(PacketIndicator(phase: phases[i].0, color: phases[i].1).opacity(ConnectionIndicator.brightness(phases[i].0)), "Packet") }
+                }.padding(12).background(Theme.tabActive)
+                let host = NSHostingView(rootView: view)
+                host.frame.size = host.fittingSize
+                host.appearance = NSAppearance(named: .darkAqua)
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_FILESERVER="tftp ssh ftp" starts those servers and
+        // opens the File Server popover (scratch runs / screenshots only).
+        if let servers = env["SHEEPTERM_DEBUG_FILESERVER"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                // SHEEPTERM_DEBUG_SERVE_FILE=<path>: the file a device may pull.
+                if let file = env["SHEEPTERM_DEBUG_SERVE_FILE"] { FileServerModel.shared.setServedFile(URL(fileURLWithPath: file)) }
+                if let v = env["SHEEPTERM_DEBUG_PICKED_VENDOR"].flatMap(Vendor.init(rawValue:)) { FileServerModel.shared.pickedVendor = v }
+                for name in servers.split(separator: " ") {
+                    if let kind = FileServerModel.Server(rawValue: String(name)) { FileServerModel.shared.start(kind) }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    // …or, with SHEEPTERM_DEBUG_FILESERVER_PNG=<path>, renders the
+                    // popover to that file instead (no screen capture needed).
+                    if let path = env["SHEEPTERM_DEBUG_FILESERVER_PNG"] {
+                        if let tab = AppModel.shared.selectedTab, let vendor = env["SHEEPTERM_DEBUG_VENDOR"].flatMap(Vendor.init(rawValue:)) {
+                            AppModel.shared.setHighlightVendorForTabOnly(vendor, tabID: tab.id)
+                        }
+                        let host = NSHostingView(rootView: FileServerPopover().environmentObject(AppModel.shared)
+                            .background(Theme.chrome).environment(\.colorScheme, .dark))
+                        host.appearance = NSAppearance(named: .darkAqua)
+                        let size = host.fittingSize
+                        let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: size.width, height: size.height),
+                                              styleMask: .borderless, backing: .buffered, defer: false)
+                        window.appearance = NSAppearance(named: .darkAqua)
+                        window.backgroundColor = NSColor(Theme.chrome)
+                        window.contentView = host
+                        window.orderFront(nil)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            host.frame.size = host.fittingSize
+                            window.setContentSize(host.fittingSize)
+                            host.layoutSubtreeIfNeeded()
+                            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                                host.cacheDisplay(in: host.bounds, to: rep)
+                                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                            }
+                            window.orderOut(nil)
+                        }
+                    } else {
+                        FileServerModel.shared.popoverShown = true
+                    }
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_PREVIEW_PNG=<path>: 5.0 (60)'s visual changes in one
+        // picture (Open File sheet, New SSH toggles, transfer rows, glyphs).
+        if let path = env["SHEEPTERM_DEBUG_PREVIEW_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let rows = [
+                    ServerTransfer(token: "a", peer: "192.168.222.254", name: "running-config.cfg", isUpload: true, done: 734_003, total: 1_048_576),
+                    ServerTransfer(token: "b", peer: "192.168.222.254", name: "startup-config.cfg", isUpload: true, done: 18_220, total: 18_220, state: .done),
+                    ServerTransfer(token: "c", peer: "192.168.222.1", name: "fortios.out", isUpload: false, done: 0, total: 0, state: .failed, detail: "file not found"),
+                    ServerTransfer(token: "d", peer: "192.168.222.1", name: "fgt-backup.conf", isUpload: true, done: 40_000, total: 0),
+                ]
+                let view = HStack(alignment: .top, spacing: 16) {
+                    VStack(spacing: 16) {
+                        QuickConnectSheet(kind: .ssh, addOnly: false)
+                        FileTransferSheet()
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(rows) { TransferRow(transfer: $0) }
+                        HStack(spacing: 14) {
+                            FileServerGlyph(running: false).frame(width: 14, height: 12)
+                            FileServerGlyph(running: true).frame(width: 14, height: 12)
+                            FileServerGlyph(running: false).frame(width: 16, height: 13)
+                            Text("off · on · Files tab header").foregroundStyle(Theme.dimText)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .frame(width: 330).padding(14).background(Theme.tabActive)
+                }
+                .padding(16).environmentObject(AppModel.shared).background(Theme.chrome).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    host.frame.size = host.fittingSize
+                    window.setContentSize(host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
+                    NSLog("preview png: %@", NSStringFromRect(host.bounds))
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_STRIP_PNG=<path>: bottom-bar transfer strip drafts.
+        if let path = env["SHEEPTERM_DEBUG_STRIP_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let strip = FileServerPlan.Strip(label: "running-config.cfg", fraction: 0.69, percent: "69%", size: "734 KB/1.1 MB")
+                @MainActor func bar(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                        HStack(spacing: 12) { content() }
+                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.dimText)
+                            .padding(.horizontal, 12).frame(width: 760, height: 24)
+                            .background(Theme.chrome)
+                            .overlay(alignment: .top) { Rectangle().fill(Theme.chromeLine).frame(height: 1) }
+                    }
+                }
+                let glyph = FileServerGlyph(running: true, busy: false).frame(width: 14, height: 12)
+                let view = VStack(alignment: .leading, spacing: 18) {
+                    bar("A  name · bar · percent and size") {
+                        Text(strip.label).foregroundStyle(Theme.tabText)
+                        TransferBar(fraction: 0.69).frame(maxWidth: 220)
+                        Text(strip.detail); Spacer(); glyph
+                    }
+                    bar("B  bar across the whole bar, text on the right") {
+                        Text(strip.label).foregroundStyle(Theme.tabText)
+                        TransferBar(fraction: 0.69)
+                        Text(strip.detail); glyph
+                    }
+                    bar("C  compact, right side beside the glyph (other items stay)") {
+                        Text("zsh — This Mac").foregroundStyle(Theme.dimText); Spacer()
+                        Text(strip.label).foregroundStyle(Theme.tabText)
+                        TransferBar(fraction: 0.69).frame(width: 90)
+                        Text("69%  734 KB/1.1 MB"); glyph
+                    }
+                    bar("Done (4 s, then the bar comes back)") {
+                        Image(systemName: "checkmark").foregroundStyle(Theme.ok)
+                        Text("running-config.cfg").foregroundStyle(Theme.tabText)
+                        Text("Success").foregroundStyle(Theme.ok); Spacer(); glyph
+                    }
+                    bar("Failed (4 s; ⓘ = reason on hover)") {
+                        Image(systemName: "xmark").foregroundStyle(Theme.destructive)
+                        Text("fortios.out").foregroundStyle(Theme.tabText)
+                        Text("Failed").foregroundStyle(Theme.destructive)
+                        Image(systemName: "info.circle"); Spacer(); glyph
+                    }
+                }
+                .padding(16).background(Theme.tabActive).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        if env["SHEEPTERM_DEBUG_SHEET"] == "transferlog" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.showTransferLog = true }
+        }
+        // SHEEPTERM_DEBUG_WHATSNEW_ART=<dir>: the What's New pictures, drawn
+        // by the real views with sample data (start with SHEEPTERM_DEBUG_FILESERVER
+        // + _SERVE_FILE + _MAC_IP + _VENDOR so the popover has a server, a
+        // file and a command). Writes open-file.png and serve-file.png.
+        if let dir = env["SHEEPTERM_DEBUG_WHATSNEW_ART"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                if let tab = AppModel.shared.selectedTab, let vendor = env["SHEEPTERM_DEBUG_VENDOR"].flatMap(Vendor.init(rawValue:)) {
+                    AppModel.shared.setHighlightVendorForTabOnly(vendor, tabID: tab.id)
+                }
+                @MainActor func menuItem(_ title: String, on: Bool = false) -> some View {
+                    Text(title)
+                        .font(.system(size: 13))
+                        .foregroundStyle(on ? Color.white : Theme.tabText)
+                        .padding(.horizontal, 10).padding(.vertical, 3)
+                        .frame(width: 210, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(on ? Theme.accent : Color.clear))
+                }
+                @MainActor func line() -> some View { Rectangle().fill(Theme.chromeLine).frame(height: 1).padding(.vertical, 4).padding(.horizontal, 10) }
+                let plusMenu = VStack(alignment: .leading, spacing: 0) {
+                    HStack { Spacer(); Image(systemName: "plus").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.tabText) }
+                        .padding(.bottom, 8).padding(.trailing, 6)
+                    VStack(alignment: .leading, spacing: 0) {
+                        menuItem("New Terminal Tab"); line()
+                        menuItem("New SSH Connection…"); menuItem("New Telnet Session…"); menuItem("New Serial Console…"); menuItem("New Web Tab"); line()
+                        menuItem("New Ping Tab"); line()
+                        menuItem("Open File…", on: true); menuItem("Serve File…"); line()
+                        menuItem("Passwords…")
+                    }
+                    .padding(5)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Theme.controlFill))
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.chromeLine))
+                }
+                let openFile = HStack(alignment: .top, spacing: 28) {
+                    plusMenu.frame(width: 230)
+                    Image(systemName: "arrow.right").font(.system(size: 20, weight: .medium)).foregroundStyle(Theme.dimText).padding(.top, 120)
+                    FileTransferSheet(sample: "10.10.1.1", username: "admin").frame(width: SheetLayout.width)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.controlFill))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.chromeLine))
+                }
+                .padding(28)
+                let bottomBar = HStack(spacing: 12) {
+                    Text("ssh · admin@10.10.1.1"); Spacer()
+                    TransferBar(fraction: 0.69).frame(width: 90)
+                    Text("69%  734 KB/1.1 MB")
+                    FileServerGlyph(running: true).frame(width: 14, height: 12)
+                    Text("Sun 2026-10-25 09:41:00")
+                }
+                .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.dimText)
+                .padding(.horizontal, 12).frame(height: 24).background(Theme.chrome)
+                .overlay(alignment: .top) { Rectangle().fill(Theme.chromeLine).frame(height: 1) }
+                let serveFile = VStack(spacing: 18) {
+                    FileServerPopover()
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.controlFill))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.chromeLine))
+                    bottomBar.frame(width: 640)
+                }
+                .padding(28)
+                @MainActor func write(_ v: some View, _ name: String) {
+                    let host = NSHostingView(rootView: v.environmentObject(AppModel.shared).background(Theme.tabActive).environment(\.colorScheme, .dark))
+                    host.appearance = NSAppearance(named: .darkAqua)
+                    host.frame.size = host.fittingSize
+                    let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                          styleMask: .borderless, backing: .buffered, defer: false)
+                    window.appearance = NSAppearance(named: .darkAqua)
+                    window.contentView = host
+                    window.orderFront(nil)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        host.frame.size = host.fittingSize
+                        window.setContentSize(host.fittingSize)
+                        host.layoutSubtreeIfNeeded()
+                        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                            host.cacheDisplay(in: host.bounds, to: rep)
+                            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
+                        }
+                        window.orderOut(nil)
+                    }
+                }
+                // Watching transfers: numbered callouts match the page's steps.
+                @MainActor func badge(_ n: Int) -> some View {
+                    Text("\(n)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.tabActive)
+                        .frame(width: 18, height: 18).background(Circle().fill(Theme.ok))
+                }
+                let rows = [
+                    ServerTransfer(token: "a", peer: "10.10.1.1", name: "AOS-CX_10.13.swi", isUpload: false, done: 734_003, total: 1_100_000),
+                    ServerTransfer(token: "b", peer: "10.10.1.1", name: "running-config.cfg", isUpload: true, done: 18_220, total: 18_220, state: .done),
+                    ServerTransfer(token: "c", peer: "10.10.1.2", name: "backup.cfg", isUpload: false, done: 0, total: 0, state: .failed, detail: "file not found"),
+                ]
+                let tooltip = Text("67% · 734 KB of 1.1 MB · 10.10.1.1")
+                    .font(.system(size: 11)).foregroundStyle(Color.black.opacity(0.85))
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color(white: 0.93)))
+                    .shadow(radius: 2, y: 1)
+                let panel = VStack(alignment: .leading, spacing: 10) {
+                    TransferRow(transfer: rows[0])
+                        .overlay(alignment: .topLeading) {
+                            Image(systemName: "cursorarrow").font(.system(size: 14)).foregroundStyle(.white)
+                                .shadow(radius: 1).offset(x: 12, y: 10)
+                        }
+                    tooltip.padding(.leading, 22).padding(.top, 2)
+                    TransferRow(transfer: rows[1])
+                    TransferRow(transfer: rows[2])
+                }
+                .frame(width: 300)
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.controlFill))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.chromeLine))
+                .overlay(alignment: .topTrailing) { badge(3).offset(x: 8, y: -8) }
+                @MainActor func logLine(_ time: String, _ name: String, _ ok: Bool) -> some View {
+                    HStack(spacing: 10) {
+                        Text(time).monospacedDigit().foregroundStyle(Theme.dimText)
+                        Text(name).lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text(ok ? "Success" : "Failed").foregroundStyle(ok ? Theme.ok : Theme.destructive)
+                    }
+                    .font(.system(size: 11))
+                }
+                let logCard = VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath").foregroundStyle(Theme.dimText)
+                        Text("Transfer Log").font(.system(size: 12, weight: .semibold))
+                    }
+                    logLine("09:41:02", "running-config.cfg", true)
+                    logLine("09:38:15", "backup.cfg", false)
+                    logLine("09:30:47", "AOS-CX_10.12.swi", true)
+                }
+                .frame(width: 270)
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.controlFill))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.chromeLine))
+                .overlay(alignment: .topTrailing) { badge(4).offset(x: 8, y: -8) }
+                let bar = HStack(spacing: 12) {
+                    Text("ssh · admin@10.10.1.1"); Spacer()
+                    TransferBar(fraction: 0.67).frame(width: 90)
+                        .overlay(alignment: .top) { badge(2).offset(y: -24) }
+                    Text("67%  734 KB/1.1 MB")
+                    FileServerGlyph(running: true).frame(width: 14, height: 12)
+                        .overlay(alignment: .top) { badge(1).offset(y: -24) }
+                    Text("Sun 2026-10-25 09:41:00")
+                }
+                .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.dimText)
+                .padding(.horizontal, 12).frame(height: 24).background(Theme.chrome)
+                .overlay(alignment: .top) { Rectangle().fill(Theme.chromeLine).frame(height: 1) }
+                let transfers = VStack(spacing: 34) {
+                    HStack(alignment: .top, spacing: 22) { panel; logCard }
+                    bar.frame(width: 660)
+                }
+                .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 20)
+                write(openFile, "open-file.png")
+                write(serveFile, "serve-file.png")
+                write(transfers, "transfers.png")
+                write(TransferLogView(), "log.png")
+            }
+        }
+        // SHEEPTERM_DEBUG_FAMILY_PNG=<path>: the File Server's no-family rows.
+        if let path = env["SHEEPTERM_DEBUG_FAMILY_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let view = VStack(alignment: .leading, spacing: 10) {
+                    CommandRow(command: .init(kind: .pull, text: "tftp://10.10.1.10/AOS-CX_10.13.swi", verified: false), tabID: nil)
+                    FamilyPickerRow(current: nil) { _ in }
+                }
+                .padding(14).frame(width: 360).background(Theme.controlFill).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        if env["SHEEPTERM_DEBUG_SHEET"] == "whatsnew" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.showWhatsNew = true }
         }
         if env["SHEEPTERM_DEBUG_SHEET"] == "passwords" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.showCredentials = true }
@@ -100,8 +563,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let sheet = env["SHEEPTERM_DEBUG_SHEET"], sheet.hasPrefix("addhost-") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 AppModel.shared.closeCurrentWorkspace()
-                AppModel.shared.quickConnect = QuickConnectRequest(kind: sheet == "addhost-web" ? .web : .ssh,
-                                                                   addOnly: sheet != "addhost-newssh")
+                let kind: ConnectionKind = sheet == "addhost-web" ? .web : sheet.hasSuffix("telnet") ? .telnet : .ssh
+                AppModel.shared.quickConnect = QuickConnectRequest(kind: kind,
+                                                                   addOnly: sheet != "addhost-newssh" && sheet != "addhost-newtelnet")
             }
         }
         if let name = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SHARE_GROUP"], !name.isEmpty {
@@ -163,12 +627,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// reports, decides nothing, and is suppressed during a logout. Do not make
     /// these two consistent with each other; the difference is the point.
     static func askAboutLiveSessions() -> QuitAnswer {
-        let live = AppModel.shared.liveRemoteSessions
+        // A device pulling from (or pushing to) the File Server counts too:
+        // quitting cuts that transfer just the same.
+        var titles = AppModel.shared.liveRemoteSessions.map(\.title)
+        if FileServerModel.shared.inFlight > 0 { titles.append(String(localized: "File Server transfer")) }
+        let live = titles
         guard !live.isEmpty else { return .nothingToAsk }
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Quit SheepTerm? \(live.count) sessions are still open.")
-        let names = live.prefix(8).map { "• \($0.title)" }.joined(separator: "\n")
+        let names = live.prefix(8).map { "• \($0)" }.joined(separator: "\n")
         let more = live.count > 8 ? "\n• " + String(localized: "and \(live.count - 8) more") : ""
         alert.informativeText = (live.count == 1 ? String(localized: "Quitting closes it right away.")
                                                  : String(localized: "Quitting closes them right away."))
@@ -364,7 +832,7 @@ struct SheepTermCommands: Commands {
     private var isRemoteSessionSelected: Bool {
         switch model.selectedTab?.content {
         case .ssh, .serial: return true
-        case .local, .web, nil: return false
+        case .local, .web, .files, .ping, nil: return false
         }
     }
 
@@ -402,10 +870,13 @@ struct SheepTermCommands: Commands {
                 .keyboardShortcut("t", modifiers: .command)
             Button("New SSH Connection…") { model.openQuickConnect(.ssh) }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("New Telnet Session…") { model.openQuickConnect(.telnet) }
             Button("New Serial Console…") { model.openQuickConnect(.serial) }
             // No shortcut: ⌘T is New Terminal Tab, and ⌘N would read as a
             // new window to anyone coming from a browser.
             Button("New Web Tab") { model.newWebTab() }
+            Divider()
+            Button("New Ping Tab") { model.openPing(inNewTab: true) }
             // Main window only — while Settings is key, ⌘⇧W must not close
             // a terminal tab in the background.
             Button("Close Tab") { model.closeCurrentWorkspace() }
@@ -421,6 +892,13 @@ struct SheepTermCommands: Commands {
             }
             Button("Search Logs…") { model.showLogSearch = true }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+            Divider()
+            // Two items, short names (the owner, 5.0 (60)): files ON a device
+            // (Open File… — starts on the focused SSH tab's device and rides
+            // its connection), files FOR devices (Serve File… → the popover,
+            // which also holds the Transfer Log).
+            Button("Open File…") { model.showFileTransfer = true }
+            Button("Serve File…") { FileServerModel.shared.popoverShown = true }
             Divider()
             Button("Import Group…") { model.importGroupViaPanel() }
             Button("Import from Link…") { model.showImportLink() }
@@ -443,7 +921,7 @@ struct SheepTermCommands: Commands {
                 .keyboardShortcut("b", modifiers: [.control, .option])
                 .disabled(!model.canSendBreak)
             Button("Send File via XMODEM…") { model.sendFileViaXModem() }
-                .disabled(!model.canSendBreak)
+                .disabled(!model.canSendFileViaXModem)
             Divider()
             // Search in the scrollback. SheepVT owns the engine and the
             // find bar itself — these items only forward the standard
@@ -570,11 +1048,19 @@ struct SheepTermCommands: Commands {
                 Label("Show Bottom Bar", systemImage: "rectangle.bottomthird.inset.filled")
             }
             Menu {
-                Toggle("Sheep", isOn: $model.statusShowSheep)
+                Picker("Connection Status", selection: $model.statusConnectionStyle) {
+                    Text("Wool").tag(ConnectionIndicator.wool)
+                    Text("Packet").tag(ConnectionIndicator.packet)
+                    Text("Sheep").tag(ConnectionIndicator.sheep)
+                    Divider()
+                    Text("Off").tag(ConnectionIndicator.off)
+                }
                 Toggle("Session Info", isOn: $model.statusShowSession)
                 Toggle("Shortcut Hints", isOn: $model.statusShowHints)
                 Toggle("This Mac IP", isOn: $model.statusShowIP)
                 Toggle("Clock", isOn: $model.statusShowClock)
+                Toggle("File Server", isOn: $model.statusShowFileServer)
+                Toggle("Transfer Progress", isOn: $model.statusShowTransfers)
             } label: {
                 Label("Bottom Bar Items", systemImage: "checklist")
             }
@@ -667,10 +1153,10 @@ struct SheepTermCommands: Commands {
             // Logs must not start a second login to the focused device.
             Button("Split Right") { model.splitFocusedPane(.right) }
                 .keyboardShortcut("d", modifiers: .command)
-                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+                .disabled(!model.canSplitFocusedPane(.right) || !mainWindowKey.isKey)
             Button("Split Down") { model.splitFocusedPane(.down) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+                .disabled(!model.canSplitFocusedPane(.down) || !mainWindowKey.isKey)
             Button("Close Pane") { model.closeCurrentTab() }
                 .disabled(model.selectedTab == nil)
             // Also by dragging the pane's header onto the empty tab strip.

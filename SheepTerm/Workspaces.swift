@@ -70,6 +70,18 @@ nonisolated enum PaneDragPayload: Equatable, Sendable {
 
 nonisolated struct WorkspaceBook: Equatable, Sendable {
     private(set) var workspaces: [WorkspaceState] = []
+    /// Ping panes: each keeps half its tab at least (`PaneLayout.keepsWhole`).
+    /// Every edit that adds or moves a pane is refused when it would break that.
+    var compactSessions: Set<UUID> = []
+
+    /// Would a new session (a Ping one when `compact`) fit beside `target`,
+    /// on that side? A trial `attach` on a copy — the same rule, no second copy of it.
+    func canSplit(beside target: UUID, _ direction: PaneDirection, compact: Bool = false) -> Bool {
+        var trial = self
+        let probe = UUID()
+        if compact { trial.compactSessions.insert(probe) }
+        return trial.attach(probe, .split(beside: target, direction)).layout.contains(target)
+    }
 
     // MARK: - reading
 
@@ -97,13 +109,20 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         precondition(workspace(containing: session) == nil, "session attached twice")
         switch placement {
         case .split(let beside, let direction):
-            if let i = index(ofWorkspaceContaining: beside), workspaces[i].layout.insert(session, beside: beside, direction) {
-                workspaces[i].focused = session
-                workspaces[i].zoomed = nil
-                return workspaces[i]
+            // A split that would squeeze a Ping pane: a tab of its own instead.
+            if let i = index(ofWorkspaceContaining: beside) {
+                var layout = workspaces[i].layout
+                if layout.insert(session, beside: beside, direction, keepingWhole: compactSessions), layout.keepsWhole(compactSessions) {
+                    workspaces[i].layout = layout
+                    workspaces[i].focused = session
+                    workspaces[i].zoomed = nil
+                    return workspaces[i]
+                }
             }
         case .replacing(let old):
             if let i = index(ofWorkspaceContaining: old), workspaces[i].layout.replace(old, with: session) {
+                // The new session takes the old one's place AND its rule.
+                if compactSessions.remove(old) != nil { compactSessions.insert(session) }
                 if workspaces[i].focused == old { workspaces[i].focused = session }
                 if workspaces[i].zoomed == old { workspaces[i].zoomed = session }
                 return workspaces[i]
@@ -132,6 +151,7 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
     /// nothing is left.
     @discardableResult
     mutating func remove(_ session: UUID) -> UUID? {
+        compactSessions.remove(session)
         guard let i = index(ofWorkspaceContaining: session) else { return nil }
         if takeOut(session, fromWorkspaceAt: i) {
             guard !workspaces.isEmpty else { return nil }
@@ -154,7 +174,7 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         for direction in [PaneDirection.left, .up, .right, .down] {
             if let found = layout.neighbor(of: session, direction) { next = found; break }
         }
-        workspaces[i].layout.remove(session)
+        workspaces[i].layout.remove(session, keepingWhole: compactSessions)
         if workspaces[i].focused == session, let next = next ?? workspaces[i].layout.leaves.first {
             workspaces[i].focused = next
         }
@@ -174,13 +194,13 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         guard session != target,
               let si = index(ofWorkspaceContaining: session),
               let ti = index(ofWorkspaceContaining: target) else { return false }
-        if si != ti, workspaces[ti].paneCount >= PaneLayout.maxPanes { return false }
         var book = self
         let targetID = book.workspaces[ti].id
         book.workspaces[si].zoomed = nil
         book.takeOut(session, fromWorkspaceAt: si)
         guard let t = book.workspaces.firstIndex(where: { $0.id == targetID }),
-              book.workspaces[t].layout.insert(session, beside: target, direction) else { return false }
+              book.workspaces[t].layout.insert(session, beside: target, direction, keepingWhole: book.compactSessions),
+              book.workspaces[t].layout.keepsWhole(compactSessions) else { return false }
         book.workspaces[t].focused = session
         book.workspaces[t].zoomed = nil
         self = book
@@ -195,6 +215,35 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
     /// the result would exceed `PaneLayout.maxPanes`.
     @discardableResult
     mutating func merge(workspace source: UUID, beside target: UUID, _ direction: PaneDirection) -> Bool {
+        if mergeAsRow(workspace: source, beside: target, direction) { return true }
+        // A row beside a Ping pane would squeeze it: the whole tab goes in
+        // as ONE half instead, its own layout kept (review 6.0 (2):
+        // `ping | (s1 / s2)` is legal, the row `ping | s1 | s2` is not).
+        return mergeAsGroup(workspace: source, beside: target, direction)
+    }
+
+    private mutating func mergeAsGroup(workspace source: UUID, beside target: UUID, _ direction: PaneDirection) -> Bool {
+        guard let si = workspaces.firstIndex(where: { $0.id == source }),
+              let ti = index(ofWorkspaceContaining: target), si != ti,
+              workspaces[si].paneCount > 1,
+              workspaces[si].paneCount + workspaces[ti].paneCount <= PaneLayout.maxPanes else { return false }
+        var book = self
+        let tree = book.workspaces[si].layout
+        let focus = book.workspaces[si].focused
+        let targetID = book.workspaces[ti].id
+        book.workspaces.remove(at: si)
+        guard let t = book.workspaces.firstIndex(where: { $0.id == targetID }) else { return false }
+        let placeholder = UUID()
+        guard book.workspaces[t].layout.insert(placeholder, beside: target, direction, keepingWhole: book.compactSessions),
+              book.workspaces[t].layout.graft(tree, at: placeholder),
+              book.workspaces[t].layout.keepsWhole(compactSessions) else { return false }
+        book.workspaces[t].focused = focus
+        book.workspaces[t].zoomed = nil
+        self = book
+        return true
+    }
+
+    private mutating func mergeAsRow(workspace source: UUID, beside target: UUID, _ direction: PaneDirection) -> Bool {
         guard let si = workspaces.firstIndex(where: { $0.id == source }),
               let ti = index(ofWorkspaceContaining: target), si != ti,
               workspaces[si].paneCount + workspaces[ti].paneCount <= PaneLayout.maxPanes else { return false }
@@ -208,9 +257,10 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         // (so the first goes first), after it for right/down (so the last
         // goes first).
         for session in direction.insertsBefore ? moving : moving.reversed() {
-            guard book.workspaces[t].layout.insert(session, beside: target, direction) else { return false }
+            guard book.workspaces[t].layout.insert(session, beside: target, direction, keepingWhole: book.compactSessions) else { return false }
         }
         book.workspaces[t].layout.equalizeSplit(containing: target)
+        guard book.workspaces[t].layout.keepsWhole(compactSessions) else { return false }
         book.workspaces[t].focused = focus
         book.workspaces[t].zoomed = nil
         self = book
