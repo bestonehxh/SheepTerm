@@ -70,4 +70,42 @@ nonisolated enum TabOrder {
         if right { return from + 1 < count ? from + 2 : nil }
         return from > 0 ? from - 1 : nil
     }
+
+    /// What the pointer is over while a pane header is dragged across the
+    /// tab strip (6.0 (3)).
+    enum StripHit: Equatable {
+        /// The middle of chip `index`: join that tab.
+        case chip(Int)
+        /// Gap `index` (this enum's convention): a tab of its own there.
+        case gap(Int)
+    }
+
+    /// `frames` are the chips' laid-out frames in order (before any shift);
+    /// while gap `open` shows its ghost, every chip from `open` on is drawn
+    /// `shift` further right, and the ghost fills the hole. The outer
+    /// `edge` share of a chip on either side is the gap beside it, the rest
+    /// is the chip; left of every chip = gap 0, right of every chip = the
+    /// end. Only x counts: the strip is one row.
+    static func stripHit(x: CGFloat, frames: [CGRect], open: Int?, shift: CGFloat,
+                         spacing: CGFloat, edge: CGFloat = 0.25) -> StripHit {
+        guard !frames.isEmpty else { return .gap(0) }
+        let open = open.map { min(max($0, 0), frames.count) }
+        func visual(_ index: Int) -> CGRect {
+            guard let open, index >= open else { return frames[index] }
+            return frames[index].offsetBy(dx: shift, dy: 0)
+        }
+        if let open {
+            let start = open < frames.count ? frames[open].minX : frames[frames.count - 1].maxX + spacing
+            if x >= start, x < start + shift { return .gap(open) }
+        }
+        for index in frames.indices {
+            let frame = visual(index)
+            guard x >= frame.minX, x <= frame.maxX, frame.width > 0 else { continue }
+            let share = (x - frame.minX) / frame.width
+            if share < edge { return .gap(index) }
+            if share > 1 - edge { return .gap(index + 1) }
+            return .chip(index)
+        }
+        return x < visual(0).minX ? .gap(0) : .gap(frames.count)
+    }
 }

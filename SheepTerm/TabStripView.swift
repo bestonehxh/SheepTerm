@@ -32,12 +32,20 @@ struct TabStripView: View {
     /// land, for the highlight.
     @State private var dropSpot: StripDropSpot?
     @State private var dropConcluded = false
+    /// The chips' frames as they were when a drop drag came over the strip,
+    /// before any slid aside for the ghost — a measured frame follows the
+    /// `.offset`, so the live ones would move under the pointer. Drop space
+    /// for hit-testing, the chips' own space for placing the ghost.
+    @State private var dropBaseFrames: [UUID: CGRect] = [:]
+    @State private var ghostBaseFrames: [UUID: CGRect] = [:]
     /// The dragged chip is below the strip, over the panes.
     @State private var chipOverPanes = false
     /// Bumped on every strip-width change; only the last one reveals.
     @State private var widthSettle = 0
 
     private static let chipSpacing: CGFloat = 4
+    /// How far the chips past a drop gap slide to make room for the ghost.
+    static let ghostShift = TabChipMetrics.dragSize.width + chipSpacing
     private static let serialShadowID = "serial-shadow"
 
     private static let space = "tabstrip"
@@ -91,7 +99,10 @@ struct TabStripView: View {
                             .preference(key: TabChipDropFrames.self,
                                         value: [workspace.id: proxy.frame(in: .named(Self.dropSpace))])
                     })
-                    .offset(x: dragOffset(for: workspace.id))
+                    .offset(x: dragOffset(for: workspace.id) + ghostShift(for: workspace.id))
+                    // Pulled down over the panes: the panes' chip ghost
+                    // follows the pointer instead (PaneTreeView.showChipGhost).
+                    .opacity(dragID == workspace.id && chipOverPanes ? 0 : 1)
                     .zIndex(dragID == workspace.id ? 10 : 0)
                     // The dragged chip tracks the pointer exactly; only the
                     // neighbours' slide is animated (updateDragTarget).
@@ -112,6 +123,7 @@ struct TabStripView: View {
                                      onOpen: { model.openSerialShadow() },
                                      onDismiss: { model.dismissSerialShadow() })
                         .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                        .offset(x: ghostGap == nil ? 0 : Self.ghostShift)
                         .id(Self.serialShadowID)
                 }
             }
@@ -119,6 +131,17 @@ struct TabStripView: View {
             // window server turns a chip drag into a window drag (see
             // NonWindowDraggingArea).
             .background(NonWindowDraggingArea())
+            // A pane header between chips or past the last (6.0 (3)): the
+            // chips from that gap on slide right (an offset — their measured
+            // frames stay put) and the ghost of the new tab fills the hole.
+            .overlay(alignment: .topLeading) {
+                if let gap = ghostGap, let ghost = StripDropGhost.current(), let origin = ghostOrigin(gap) {
+                    StripDropGhostChip(ghost: ghost)
+                        .offset(x: origin.x, y: origin.y)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.snappy(duration: 0.14), value: dropSpot)
             .coordinateSpace(name: Self.space)
             .onPreferenceChange(TabChipFrames.self) { chipFrames = $0 }
             .frame(maxHeight: .infinity)
@@ -142,16 +165,15 @@ struct TabStripView: View {
             }
         }
         // Pane headers dropped here (4.2 (7)): on a chip = into that tab, on
-        // the empty strip = a tab of its own. One drop target for the whole
-        // strip, resolved against the chip frames, so a chip and the strip
-        // behind it never compete for the same drop.
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(dropSpot == .strip ? Theme.controlFill.opacity(0.6) : Color.clear)
-        )
+        // a gap between chips or the empty strip = a tab of its own there
+        // (shown by the ghost chip). One drop target for the whole strip,
+        // resolved against the chip frames, so a chip and the strip behind it
+        // never compete for the same drop.
         .coordinateSpace(name: Self.dropSpace)
         .onPreferenceChange(TabChipDropFrames.self) { chipDropFrames = $0 }
-        .onDrop(of: [.utf8PlainText], delegate: StripDropDelegate(frames: chipDropFrames, spot: $dropSpot, concluded: $dropConcluded))
+        .onDrop(of: [.utf8PlainText], delegate: StripDropDelegate(frames: chipDropFrames, base: $dropBaseFrames,
+                                                                   chipFrames: chipFrames, ghostBase: $ghostBaseFrames,
+                                                                   spot: $dropSpot, concluded: $dropConcluded))
         // Brought into view when it appears past a full strip (review 5.0 (29)).
         .onChange(of: model.serialShadow?.path) { _, path in
             guard path != nil else { return }
@@ -186,6 +208,30 @@ struct TabStripView: View {
             guard dragID == nil, let id = model.selectedWorkspace?.id else { return }
             withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
         }
+    }
+
+    /// The gap a pane header (or sidebar host) is over, if any.
+    private var ghostGap: Int? {
+        if case .gap(let gap) = dropSpot { return gap }
+        return nil
+    }
+
+    /// A chip at or past the open drop gap slides right by the ghost's width.
+    private func ghostShift(for id: UUID) -> CGFloat {
+        guard let gap = ghostGap, let index = model.workspaces.firstIndex(where: { $0.id == id }), index >= gap else { return 0 }
+        return Self.ghostShift
+    }
+
+    /// Where the ghost goes in the chips' own space: the left edge of the
+    /// chip at `gap` (before it slides), or past the last chip.
+    private func ghostOrigin(_ gap: Int) -> CGPoint? {
+        let ids = model.workspaces.map(\.id)
+        let frames = ghostBaseFrames.isEmpty ? chipFrames : ghostBaseFrames
+        guard let reference = ids.first.flatMap({ frames[$0] }) else { return nil }
+        let y = reference.midY - TabChipMetrics.dragSize.height / 2
+        if gap < ids.count, let frame = frames[ids[gap]] { return CGPoint(x: frame.minX, y: y) }
+        guard let last = ids.last.flatMap({ frames[$0] }) else { return nil }
+        return CGPoint(x: last.maxX + Self.chipSpacing, y: y)
     }
 
     /// The dragged chip: the pointer's travel. A neighbour between the
@@ -297,8 +343,9 @@ private struct TabChipDropFrames: PreferenceKey {
 nonisolated enum StripDropSpot: Equatable, Sendable {
     /// Into this tab (a workspace id).
     case chip(UUID)
-    /// The empty strip: a tab of its own.
-    case strip
+    /// A tab of its own in this gap (`TabOrder`'s convention; the count =
+    /// after the last chip).
+    case gap(Int)
 }
 
 /// Pane headers (`pane:<uuid>`) and sidebar hosts (`host:<uuid>`) dropped
@@ -308,14 +355,44 @@ nonisolated enum StripDropSpot: Equatable, Sendable {
 /// The pasteboard says which; the pane's own tab is not a target.
 private struct StripDropDelegate: DropDelegate {
     let frames: [UUID: CGRect]
+    /// `frames` as they were when the drag came over the strip (see
+    /// `TabStripView.dropBaseFrames`).
+    @Binding var base: [UUID: CGRect]
+    /// The chips' own-space frames, and their copy taken with `base` (the
+    /// ghost's place; taken here, before the first shift — an onChange of
+    /// the spot came a frame late and put the ghost over a slid chip).
+    let chipFrames: [UUID: CGRect]
+    @Binding var ghostBase: [UUID: CGRect]
     @Binding var spot: StripDropSpot?
     /// Set by performDrop, cleared by the next dropEntered.
     @Binding var concluded: Bool
 
     private func resolve(_ location: CGPoint) -> StripDropSpot? {
         let model = AppModel.shared
-        guard let hit = frames.first(where: { $0.value.contains(location) }) else { return .strip }
-        guard let workspace = model.book.workspace(id: hit.key) else { return nil }
+        let ids = model.workspaces.map(\.id)
+        let measured = ids.compactMap { (base.isEmpty ? frames : base)[$0] }
+        guard measured.count == ids.count else { return .gap(ids.count) }
+        let open: Int? = { if case .gap(let gap) = spot { return gap }; return nil }()
+        let hit = TabOrder.stripHit(x: location.x, frames: measured, open: open,
+                                    shift: TabStripView.ghostShift, spacing: 4)
+        // A sidebar host opens past the last tab (or into a chip's tab).
+        let isPane = PaneHeaderView.draggingSession != nil
+        switch hit {
+        case .gap(let gap):
+            return .gap(isPane ? gap : ids.count)
+        case .chip(let index):
+            if let joined = chipSpot(ids[index]) { return joined }
+            guard isPane else { return nil }
+            // A chip that takes no more (its own tab, a full one): the gap on
+            // the near side of it.
+            let frame = measured[index].offsetBy(dx: open.map { index >= $0 ? TabStripView.ghostShift : 0 } ?? 0, dy: 0)
+            return .gap(location.x < frame.midX ? index : index + 1)
+        }
+    }
+
+    private func chipSpot(_ id: UUID) -> StripDropSpot? {
+        let model = AppModel.shared
+        guard let workspace = model.book.workspace(id: id) else { return nil }
         // A pane dropped on its own tab's chip would go nowhere; a full tab
         // takes nothing more.
         if let dragged = PaneHeaderView.draggingSession, workspace.layout.contains(dragged) { return nil }
@@ -323,13 +400,13 @@ private struct StripDropDelegate: DropDelegate {
         // A move that would squeeze a Ping pane is refused (PaneLayout.keepsWhole).
         if let dragged = PaneHeaderView.draggingSession {
             var trial = model.book
-            if !trial.move(session: dragged, toWorkspace: hit.key) { return nil }
+            if !trial.move(session: dragged, toWorkspace: id) { return nil }
         } else if !InternalDrag.hosts.isEmpty, !model.book.canSplit(beside: workspace.focused, .right) {
             // A sidebar host into a tab whose layout would squeeze a Ping
             // pane: no chip zone (it lit, then beeped — review 6.0 (2)).
             return nil
         }
-        return .chip(hit.key)
+        return .chip(id)
     }
 
     /// Only a drag that started inside the app (a pane header, a sidebar
@@ -343,6 +420,10 @@ private struct StripDropDelegate: DropDelegate {
 
     func dropEntered(info: DropInfo) {
         concluded = false
+        if spot == nil {
+            base = frames
+            ghostBase = chipFrames
+        }
         spot = resolve(info.location)
     }
 
@@ -354,11 +435,17 @@ private struct StripDropDelegate: DropDelegate {
         return DropProposal(operation: spot == nil ? .forbidden : .move)
     }
 
-    func dropExited(info: DropInfo) { spot = nil }
+    func dropExited(info: DropInfo) {
+        spot = nil
+        base = [:]
+        ghostBase = [:]
+    }
 
     func performDrop(info: DropInfo) -> Bool {
         let target = resolve(info.location)
         spot = nil
+        base = [:]
+        ghostBase = [:]
         concluded = true
         let providers = info.itemProviders(for: [.utf8PlainText])
         guard let target, providers.count == 1, let provider = providers.first else { return false }
@@ -382,12 +469,12 @@ private struct StripDropDelegate: DropDelegate {
         switch (payload, target) {
         case (.pane(let session), .chip(let workspace)):
             model.movePane(session, toWorkspace: workspace)
-        case (.pane(let session), .strip):
-            model.movePaneToNewTab(session)
+        case (.pane(let session), .gap(let gap)):
+            model.movePaneToNewTab(session, toGap: gap)
         case (.host(let id), .chip(let workspace)):
             guard let host = model.savedHost(id: id), let ws = model.book.workspace(id: workspace) else { NSSound.beep(); return }
             model.dropHost(host, beside: ws.focused, .right)
-        case (.host(let id), .strip):
+        case (.host(let id), .gap):
             guard let host = model.savedHost(id: id) else { NSSound.beep(); return }
             model.open(host: host)
         }
@@ -542,6 +629,69 @@ struct TabItemView: View {
             }
             Button("Close Tab") { onClose() }
         }
+    }
+}
+
+/// One look for every dragged pane and every drop ghost, so the eye reads
+/// "a tab" whatever is moving: a chip's height, a typical chip's width, the
+/// session's dot and its own title, cut short with … when it is long.
+enum TabChipMetrics {
+    static let dragSize = CGSize(width: 180, height: 24)
+    static let font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+}
+
+/// What the ghost chip shows: the dragged pane's dot and title, or the
+/// dragged sidebar host's name.
+struct StripDropGhost {
+    let title: String
+    let color: Color
+
+    @MainActor
+    static func current() -> StripDropGhost? {
+        let model = AppModel.shared
+        if let session = PaneHeaderView.draggingSession, let tab = model.tab(id: session) {
+            return StripDropGhost(title: tab.title,
+                                  color: Color(nsColor: PaneHeaderView.dotColor(of: tab, status: tab.statusInfo)))
+        }
+        if InternalDrag.hosts.count == 1, let id = InternalDrag.hosts.first, let host = model.savedHost(id: id) {
+            return StripDropGhost(title: host.name, color: Theme.dimText)
+        }
+        return nil
+    }
+}
+
+/// The tab a drop on the strip would create. It wears the USB serial
+/// shadow chip's look (the user: not a dashed outline) — clear white, a
+/// hairline edge, a soft glow that breathes (still with Reduce Motion).
+/// Never takes a click: the drop lands on the strip behind it.
+private struct StripDropGhostChip: View {
+    let ghost: StripDropGhost
+    @State private var glowUp = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(ghost.color)
+                .frame(width: 7, height: 7)
+            Text(ghost.title)
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(width: TabChipMetrics.dragSize.width, height: TabChipMetrics.dragSize.height)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.14)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+        .shadow(color: Color.white.opacity(reduceMotion ? 0.6 : (glowUp ? 0.7 : 0.2)), radius: 6)
+        .foregroundStyle(Color.white)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { glowUp = true }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

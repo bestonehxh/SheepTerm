@@ -2437,9 +2437,16 @@ final class AppModel: ObservableObject {
         focusMoved(session)
     }
 
-    /// A pane header dropped on the empty strip, or Tabs → Move Pane to New Tab.
+    /// A pane header dropped on the empty strip, Tabs → Unsplit, or Unsplit on a pane header's right-click menu.
     func movePaneToNewTab(_ session: UUID) {
         guard book.detach(session: session) != nil else { NSSound.beep(); return }
+        focusMoved(session)
+    }
+
+    /// A pane header dropped between two tab chips or past the last: its own
+    /// tab in that gap (the order before the move).
+    func movePaneToNewTab(_ session: UUID, toGap gap: Int) {
+        guard book.detach(session: session, toGap: gap) != nil else { NSSound.beep(); return }
         focusMoved(session)
     }
 

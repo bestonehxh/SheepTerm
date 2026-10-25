@@ -270,6 +270,19 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
     /// A pane of several taken into a tab of its own, right after the one it
     /// came from. nil when it is alone already or unknown.
     @discardableResult
+    /// A pane header dropped between two tab chips (or past the last): the
+    /// pane's own tab lands in `gap` of the order as it was BEFORE the
+    /// detach — 0 = first, the old count = last.
+    mutating func detach(session: UUID, toGap gap: Int) -> WorkspaceState? {
+        guard let source = index(ofWorkspaceContaining: session),
+              let fresh = detach(session: session) else { return nil }
+        // `detach` put it right after its source; the old order's gaps past
+        // the source are one further along now.
+        let old = min(max(gap, 0), workspaces.count - 1)
+        move(workspace: fresh.id, toGap: old <= source ? old : old + 1)
+        return fresh
+    }
+
     mutating func detach(session: UUID) -> WorkspaceState? {
         guard let i = index(ofWorkspaceContaining: session), workspaces[i].paneCount > 1 else { return nil }
         workspaces[i].zoomed = nil

@@ -1160,7 +1160,7 @@ struct SheepTermCommands: Commands {
             Button("Close Pane") { model.closeCurrentTab() }
                 .disabled(model.selectedTab == nil)
             // Also by dragging the pane's header onto the empty tab strip.
-            Button("Move Pane to New Tab") { model.moveFocusedPaneToNewTab() }
+            Button("Unsplit") { model.moveFocusedPaneToNewTab() }
                 .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
             Menu("Focus Pane") {
                 Button("Left") { model.focusPane(.left) }

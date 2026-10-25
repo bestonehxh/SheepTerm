@@ -95,6 +95,15 @@ final class PaneTreeView: NSView {
     private let zoneView = DropZoneView()
     /// The zone on screen belongs to a tab-chip drag (cleared when it ends).
     private var chipZoneShown = false
+    /// The chip that follows a tab chip pulled down over the panes
+    /// (the same look as a dragged pane header).
+    private let chipGhost: NSImageView = {
+        let view = NSImageView()
+        view.imageScaling = .scaleNone
+        view.setAccessibilityElement(false)
+        view.alphaValue = 0.92
+        return view
+    }()
 
     override var isFlipped: Bool { true }
 
@@ -400,8 +409,10 @@ final class PaneTreeView: NSView {
                 AppModel.shared.chipDropZone = nil
                 showZone(nil)
             }
+            chipGhost.removeFromSuperview()
             return
         }
+        showChipGhost(for: drag)
         var target: (pane: UUID, direction: PaneDirection)?
         if let state, let window, drag.workspace != state.id,
            let source = AppModel.shared.book.workspace(id: drag.workspace),
@@ -418,6 +429,25 @@ final class PaneTreeView: NSView {
         zoneFrames = nil        // a chip merge aims at the panes as shown
         AppModel.shared.chipDropZone = target
         showZone(target)
+        if chipGhost.superview != nil { addSubview(chipGhost, positioned: .above, relativeTo: nil) }
+    }
+
+    /// The ghost sits where a dragged pane header's image would: the pointer
+    /// near its dot. Its dot wears the dragged tab's focused session colour.
+    private func showChipGhost(for drag: ChipDrag) {
+        guard let window else { return }
+        if chipGhost.superview == nil {
+            let model = AppModel.shared
+            let tab = model.book.workspace(id: drag.workspace).flatMap { model.tab(id: $0.focused) }
+            let dot = tab.map { PaneHeaderView.dotColor(of: $0, status: $0.statusInfo) } ?? NSColor(Theme.dimText)
+            var favicon: NSImage?
+            if let tab, case .web = tab.content { favicon = tab.favicon }
+            chipGhost.image = PaneHeaderView.chipImage(title: tab?.title ?? "", dot: dot, favicon: favicon)
+            addSubview(chipGhost, positioned: .above, relativeTo: nil)
+        }
+        let point = convert(window.convertPoint(fromScreen: drag.screenPoint), from: nil)
+        let size = TabChipMetrics.dragSize
+        chipGhost.frame = CGRect(x: point.x - 16, y: point.y - size.height / 2, width: size.width, height: size.height)
     }
 
     /// The position of the divider being dragged, committed on release.
@@ -713,8 +743,6 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     override func draw(_ dirtyRect: NSRect) {
         NSColor(Theme.chrome).withAlphaComponent(0.95).setFill()
         bounds.fill()
-        // Drawn, not a layer: the drag image is a cacheDisplay snapshot,
-        // which only sees what draw(_:) paints.
         if isWeb, let favicon {
             let side: CGFloat = 12
             favicon.draw(in: CGRect(x: 8 + (Self.dotSize - side) / 2, y: (bounds.height - side) / 2, width: side, height: side),
@@ -741,14 +769,25 @@ final class PaneHeaderView: NSView, NSDraggingSource {
                                     width: Self.dotSize, height: Self.dotSize)).fill()
     }
 
-    /// Right-click on a web pane's header: Save as Host….
+    /// Right-click on a pane's header: Unsplit (the pane leaves for a tab of
+    /// its own, like Tabs → Unsplit or a drop on the empty strip), Close
+    /// Pane, and on a web pane Save as Host….
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard isWeb else { return nil }
         let menu = NSMenu()
-        let item = NSMenuItem(title: String(localized: "Save as Host…"), action: #selector(saveAsHost), keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+        func add(_ title: String, _ action: Selector) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        add(String(localized: "Unsplit"), #selector(unsplit))
+        if isWeb { add(String(localized: "Save as Host…"), #selector(saveAsHost)) }
+        menu.addItem(.separator())
+        add(String(localized: "Close Pane"), #selector(closePane))
         return menu
+    }
+
+    @objc private func unsplit() {
+        AppModel.shared.movePaneToNewTab(session)
     }
 
     @objc private func saveAsHost() {
@@ -774,7 +813,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         guard hypot(point.x - start.x, point.y - start.y) >= 4 else { return }
         dragging = true
         let item = NSDraggingItem(pasteboardWriter: PaneDragPayload.pane(session).string as NSString)
-        item.setDraggingFrame(bounds, contents: snapshot())
+        // A tab-chip-sized image, not the whole header (as wide as the
+        // pane): the pointer holds it near its dot, as if picking up a tab.
+        let size = TabChipMetrics.dragSize
+        item.setDraggingFrame(CGRect(x: start.x - 16, y: start.y - size.height / 2,
+                                     width: size.width, height: size.height),
+                              contents: Self.chipImage(title: title, dot: dot, favicon: isWeb ? favicon : nil))
         Self.draggingSession = session
         InternalDrag.pane = session
         beginDraggingSession(with: [item], event: event, source: self)
@@ -786,13 +830,44 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         dragging = false
     }
 
-    private func snapshot() -> NSImage {
-        let image = NSImage(size: bounds.size)
-        if let rep = bitmapImageRepForCachingDisplay(in: bounds) {
-            cacheDisplay(in: bounds, to: rep)
-            image.addRepresentation(rep)
+    /// The drag image: a tab chip of the fixed `TabChipMetrics.dragSize`
+    /// (every pane the same), with the session's dot or site icon and the
+    /// title, cut short with … when it is long. Also the ghost that follows a
+    /// tab chip pulled down over the panes (`PaneTreeView.showChipGhost`).
+    static func chipImage(title: String, dot: NSColor, favicon: NSImage?) -> NSImage {
+        let size = TabChipMetrics.dragSize
+        let fill = NSColor(Theme.controlFill), text = NSColor(Theme.tabText), dotSize = Self.dotSize
+        return NSImage(size: size, flipped: true) { rect in
+            let chip = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+            fill.setFill()
+            chip.fill()
+            NSColor.white.withAlphaComponent(0.18).setStroke()
+            chip.lineWidth = 1
+            chip.stroke()
+            let markX: CGFloat = 10
+            if let favicon {
+                favicon.draw(in: CGRect(x: markX, y: (rect.height - 12) / 2, width: 12, height: 12),
+                             from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            } else {
+                dot.setFill()
+                NSBezierPath(ovalIn: CGRect(x: markX, y: (rect.height - dotSize) / 2,
+                                            width: dotSize, height: dotSize)).fill()
+            }
+            let style = NSMutableParagraphStyle()
+            style.lineBreakMode = .byTruncatingTail
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: TabChipMetrics.font,
+                .foregroundColor: text,
+                .paragraphStyle: style,
+            ]
+            let textX = markX + dotSize + 7
+            let textHeight = ceil(TabChipMetrics.font.boundingRectForFont.height)
+            (title as NSString).draw(with: CGRect(x: textX, y: (rect.height - textHeight) / 2,
+                                                  width: rect.width - textX - 10, height: textHeight),
+                                     options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                                     attributes: attributes)
+            return true
         }
-        return image
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
