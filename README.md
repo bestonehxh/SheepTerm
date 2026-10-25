@@ -5,7 +5,7 @@
 <h1 align="center">SheepTerm</h1>
 
 <p align="center"><b>The terminal built for network engineers.</b><br>
-SSH, serial and local shell with highlighting that knows your vendor — plus device web UIs and an AI that reads the output with you.</p>
+SSH, Telnet, serial and local shell with highlighting that knows your vendor — plus file transfer (SFTP, SCP, FTP, TFTP), SSH port forwarding, Ping, device web UIs and an AI that reads the output with you.</p>
 
 <p align="center">本应用支持 <b>简体中文（zh-Hans）</b>，界面跟随系统语言。</p>
 
@@ -19,14 +19,15 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 
 <p align="center"><img src="docs/images/hero.webp" width="900" alt="SheepTerm with three panes: Cisco, Aruba CX and FortiGate output highlighted per vendor, beside a sidebar of saved hosts"></p>
 
-## ✨ New in 5.0
+## ✨ New in 6.0
 
-- **Browser tabs** — a device's web UI next to its console; self-signed certificates trusted like SSH host keys; Fill Login only when you click.
-- **AI panel** — ask Claude or ChatGPT about the output with your own subscription. Secrets masked, never runs commands.
-- **Real MAC / ARP on macOS 27** — in local tabs and View ▸ Network Info.
-- **Password retry** — a wrong password asks again on the same connection.
-- **Bundled terminal fonts** and easier-to-read themes.
-- **简体中文 (Simplified Chinese, `zh-Hans`)** — the interface follows your system language, with English as the fallback.
+- **Open File** — browse and copy files on a device over SFTP, SCP, FTP or TFTP. From an SSH tab it rides the same connection: no second login, through a jump host too.
+- **Serve File** — a TFTP / SFTP / SCP / FTP server in the bottom bar: pick the file, copy the command for your device family. Off until you start it; stops itself after 10 idle minutes; uploads never overwrite.
+- **Transfer progress & Transfer Log** — percent and size in the bottom bar, Success or Failed (with the reason) after, every past transfer in one log.
+- **Ping** — ping many devices at once: latency, OK / Failed, rate and a live graph per device, a packet log to copy or save as CSV; split it beside an SSH tab to watch a reload.
+- **Telnet** — sessions, and `telnet://` links from GNS3 / EVE-NG.
+- **Port forwarding** — local, remote and SOCKS forwards over SSH.
+- **Connection status** — Wool, Packet or Sheep in the bottom bar.
 
 ## Features
 
@@ -34,6 +35,13 @@ SSH, serial and local shell with highlighting that knows your vendor — plus de
 <tr>
 <td width="50%"><img src="docs/images/highlight.webp" alt="Cisco and Aruba CX output highlighted per vendor"><br><b>Vendor-aware highlighting</b> — Cisco, Aruba, Fortinet, Huawei, Juniper, Palo Alto and more.</td>
 <td width="50%"><img src="docs/images/web.webp" alt="A console beside its device web UI, with the certificate trust card"><br><b>Device web UIs in a tab</b> — beside the console, certificates trusted like host keys.</td>
+</tr>
+<tr>
+<td><img src="docs/images/files-open.webp" alt="The plus menu with Open File, and the Open File form"><br><b>Open File</b> — SFTP, SCP, FTP or TFTP; rides an open SSH tab.</td>
+<td><img src="docs/images/files-serve.webp" alt="The Serve File panel with an Aruba CX copy command, beside the Transfer Log"><br><b>Serve File &amp; Transfer Log</b> — a file server in the bottom bar, every transfer logged.</td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/images/ping-split.webp" alt="A Ping tab beside a terminal while a core switch reloads: the switch shows Fail"><br><b>Ping, beside the console</b> — many hosts at once with latency, OK / Failed, rate and a last-minute graph; split it next to an SSH tab to watch a reload.</td>
 </tr>
 <tr>
 <td><img src="docs/images/ai.webp" alt="AI panel explaining an err-disabled port with secrets removed"><br><b>AI panel</b> — Claude or ChatGPT, your own login; secrets removed first.</td>
