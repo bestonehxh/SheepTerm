@@ -10,7 +10,7 @@ SSH, Telnet, serial and local shell with highlighting that knows your vendor —
 <p align="center">本应用支持 <b>简体中文（zh-Hans）</b>，界面跟随系统语言。</p>
 
 <p align="center">
-  <a href="https://github.com/bestonehxh/SheepTerm/releases/latest/download/SheepTerm-6.0-7.dmg"><img src="https://img.shields.io/badge/Download-SheepTerm_6.0_%287%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
+  <a href="https://github.com/bestonehxh/SheepTerm/releases/latest/download/SheepTerm-6.0-8.dmg"><img src="https://img.shields.io/badge/Download-SheepTerm_6.0_%288%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
   <a href="https://github.com/bestonehxh/SheepTerm-Windows/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download SheepTerm for Windows"></a>
   <a href="https://github.com/bestonehxh/SheepTerm-Linux/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Linux-E95420?style=for-the-badge&logo=linux&logoColor=white" alt="Download SheepTerm for Linux"></a>
 </p>
@@ -74,7 +74,7 @@ brew install --cask bestonehxh/tap/sheepterm
 
 **Or manually:**
 
-1. Download `SheepTerm-6.0-7.dmg`, open it and drag **SheepTerm** onto **Applications** (already installed? choose **Replace**).
+1. Download `SheepTerm-6.0-8.dmg`, open it and drag **SheepTerm** onto **Applications** (already installed? choose **Replace**).
 2. Signed with Developer ID and notarized by Apple: it opens like any other app.
 3. Updates are built in and verified with an Ed25519 signature.
 
@@ -96,7 +96,7 @@ SheepTerm is one of a few small native apps for network engineers:
 
 |  | App | What it does | macOS | Windows | Linux |
 |---|---|---|:---:|:---:|:---:|
-| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTerm/main/.github/icon.png?v=3" width="48" height="48" alt="SheepTerm"> | **[SheepTerm](https://github.com/bestonehxh/SheepTerm)** | SSH / Serial / local-shell terminal for network engineers | [⬇️ Download](https://github.com/bestonehxh/SheepTerm/releases/latest/download/SheepTerm-6.0-7.dmg) | [⬇️ Download](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest) | [⬇️ Download](https://github.com/bestonehxh/SheepTerm-Linux/releases/latest) |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTerm/main/.github/icon.png?v=3" width="48" height="48" alt="SheepTerm"> | **[SheepTerm](https://github.com/bestonehxh/SheepTerm)** | SSH / Serial / local-shell terminal for network engineers | [⬇️ Download](https://github.com/bestonehxh/SheepTerm/releases/latest/download/SheepTerm-6.0-8.dmg) | [⬇️ Download](https://github.com/bestonehxh/SheepTerm-Windows/releases/latest) | [⬇️ Download](https://github.com/bestonehxh/SheepTerm-Linux/releases/latest) |
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepText/main/.github/icon.png?v=3" width="48" height="48" alt="SheepText"> | **[SheepText](https://github.com/bestonehxh/SheepText)** | Fast text editor with tree-sitter highlighting and a JavaScript plugin system | [⬇️ Download](https://github.com/bestonehxh/SheepText/releases/latest) | Coming Soon | Coming Soon |
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepDrop/main/.github/icon.png?v=3" width="48" height="48" alt="SheepDrop"> | **[SheepDrop](https://github.com/bestonehxh/SheepDrop)** | SFTP / SCP / FTP / TFTP file transfer — client and built-in server | [⬇️ Download](https://github.com/bestonehxh/SheepDrop/releases/latest) | Coming Soon | Coming Soon |
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepTap/main/.github/icon.png?v=3" width="48" height="48" alt="SheepTap"> | **[SheepTap](https://github.com/bestonehxh/SheepTap)** | Menu-bar viewer for your Mac's network interfaces with click-to-copy | [⬇️ Download](https://github.com/bestonehxh/SheepTap/releases/latest) | Coming Soon | Coming Soon |

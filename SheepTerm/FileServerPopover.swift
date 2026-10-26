@@ -85,6 +85,7 @@ struct FileServerPopover: View {
     @State private var userDraft = ""
     @State private var passwordDraft = ""
     @State private var loginProblem: String?
+    @State private var loginHover = false
 
     private var tab: SessionTab? { model.selectedTab }
 
@@ -164,7 +165,7 @@ struct FileServerPopover: View {
                         .buttonStyle(.borderless).help("Back to a new random password every launch")
                 }
             }
-            .font(.system(size: 11))
+            .font(.system(size: 12))
             .noAutoFill()
             if let loginProblem {
                 Text(loginProblem).font(.system(size: 11)).foregroundStyle(Theme.warn)
@@ -177,15 +178,25 @@ struct FileServerPopover: View {
                     loginProblem = nil
                     editingLogin = true
                 } label: {
+                    // 12 pt like the rows below it (it was 11 and read as a footnote).
                     Text("\(server.username) · \(String(repeating: "•", count: 8))")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.dimText)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(loginHover ? Theme.tabText : Theme.dimText)
+                        // Under the pointer the user and the password get the
+                        // icon buttons' soft box: it reads as something to click.
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.white.opacity(loginHover ? 0.08 : 0)))
+                        .contentShape(Rectangle())
+                        .padding(.horizontal, -6)
                 }
                 .buttonStyle(.plain)
+                .onHover { loginHover = $0 }
                 .help(server.hasOwnPassword ? "Login for SCP / SFTP / FTP — click to change"
                       : "Login for SCP / SFTP / FTP — a new password every launch; click to set your own")
                 CopyButton(text: server.password, help: "Copy password", secret: true)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                 Spacer()
             }
             .onAppear { server.loadSavedLogin() }
