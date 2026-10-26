@@ -352,7 +352,8 @@ private struct CopyButton: View {
         } label: {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
         }
-        .buttonStyle(.borderless)
+        // The app's icon box: a soft rounded background under the pointer (the AI panel's Copy).
+        .buttonStyle(ChromeIconButtonStyle(width: 22, height: 20))
         .help(help)
     }
 }
@@ -433,7 +434,7 @@ struct CommandRow: View {
                 } label: {
                     Image(systemName: "return")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(ChromeIconButtonStyle(width: 22, height: 20))
                 .help("Type into the terminal (you press Return)")
             }
             CopyButton(text: command.text, help: command.carriesPassword ? "Copy (includes the password)" : "Copy",
