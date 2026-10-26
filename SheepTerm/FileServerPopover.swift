@@ -335,14 +335,22 @@ private struct CopyButton: View {
     var help: LocalizedStringKey = "Copy"
     /// Holds the login password: concealed and cleared after a minute.
     var secret = false
+    /// A check for a moment after the copy, like the AI panel's Copy: the
+    /// password is never shown, so the click had nothing to show for it.
+    @State private var copied = false
 
     var body: some View {
         Button {
-            if secret { SecretPasteboard.copy(text); return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            if secret {
+                SecretPasteboard.copy(text)
+            } else {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
         } label: {
-            Image(systemName: "doc.on.doc")
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
         }
         .buttonStyle(.borderless)
         .help(help)
