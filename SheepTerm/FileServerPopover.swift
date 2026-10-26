@@ -182,23 +182,17 @@ struct FileServerPopover: View {
                     Text("\(server.username) · \(String(repeating: "•", count: 8))")
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(loginHover ? Theme.tabText : Theme.dimText)
-                        // Under the pointer the user and the password get the
-                        // icon buttons' soft box: it reads as something to click.
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.white.opacity(loginHover ? 0.08 : 0)))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
-                        .padding(.horizontal, -6)
                 }
                 .buttonStyle(.plain)
-                .onHover { loginHover = $0 }
                 .help(server.hasOwnPassword ? "Login for SCP / SFTP / FTP — click to change"
                       : "Login for SCP / SFTP / FTP — a new password every launch; click to set your own")
                 CopyButton(text: server.password, help: "Copy password", secret: true)
                     .font(.system(size: 12))
-                Spacer()
             }
+            .modifier(RowHover(hover: loginHover))
+            .onHover { loginHover = $0 }
             .onAppear { server.loadSavedLogin() }
         }
     }
@@ -223,9 +217,8 @@ struct FileServerPopover: View {
         .buttonStyle(.plain)
         .font(.system(size: 12))
         .help(server.servedFile?.path ?? String(localized: "Choose the file a device can pull — or drop one here"))
-        .padding(.vertical, 2)
-        .background { if fileHover { ControlFill(zone: .sidebar, cornerRadius: 6).padding(-4) } }
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(dropTargeted ? Theme.accent : Color.clear, lineWidth: 1.5).padding(-4))
+        .modifier(RowHover(hover: fileHover))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(dropTargeted ? Theme.accent : Color.clear, lineWidth: 1.5))
         .onHover { inside in
             guard inside != fileHover else { return }
             fileHover = inside
@@ -300,6 +293,8 @@ struct FileServerPopover: View {
                     .contextMenu { Button("Choose Folder…") { server.chooseWriteFolder() } }
             }
         }
+        // In line with the rows above (their text sits 8 pt in).
+        .padding(.horizontal, 8)
     }
 }
 
@@ -309,6 +304,7 @@ struct FileServerPopover: View {
 private struct ServerChip: View {
     let proto: FileServerPlan.Proto
     @ObservedObject private var server = FileServerModel.shared
+    @State private var hover = false
 
     var body: some View {
         let kind = FileServerModel.server(for: proto)
@@ -331,9 +327,12 @@ private struct ServerChip: View {
             .padding(.vertical, 3)
             .background(Capsule().fill(shown ? Theme.ok.opacity(0.22) : on ? Theme.ok.opacity(0.08) : Color.primary.opacity(0.06)))
             .overlay(Capsule().strokeBorder(shown ? Theme.ok.opacity(0.5) : Color.clear, lineWidth: 1))
+            // Under the pointer: the icon buttons' shade (6.0 (9)).
+            .overlay(Capsule().fill(Color.white.opacity(hover ? 0.08 : 0)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { hover = $0 }
         .fixedSize()
         .opacity(server.starting.contains(kind) ? 0.5 : 1)
         .help(!on ? "Start \(proto.label) — turns itself off after 10 minutes without a transfer"
@@ -629,5 +628,20 @@ struct TransferBar: View {
             }
         }
         .frame(height: 4)
+    }
+}
+
+/// One rule for the panel's clickable rows (the user, 6.0 (9): the login,
+/// the file and Device Family each lit up differently): the Device Family
+/// box's size — edge to edge, 8 pt inside, corner radius 8 — and its fill,
+/// shown under the pointer.
+private struct RowHover: ViewModifier {
+    let hover: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background { if hover { ControlFill(zone: .sidebar, cornerRadius: 8) } }
     }
 }
