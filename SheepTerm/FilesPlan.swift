@@ -94,7 +94,8 @@ nonisolated enum FilesPlan {
     static func validName(_ raw: String) -> String? {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != ".", name != "..", !name.contains("/"),
-              !name.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else { return nil }
+              !name.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }),
+              !InvisibleFormatting.found(in: name) else { return nil }
         return name
     }
 
@@ -102,8 +103,10 @@ nonisolated enum FilesPlan {
     /// component (a hostile server can list `../../x` or `a/b`). Nil = skip.
     /// A leading dot becomes "_" (a listing offering `.zshrc` must not
     /// land as a hidden file over the user's own); over 255 bytes = refuse.
+    /// Invisible formatting (a bidi override hiding the real extension) is
+    /// dropped, so the Mac shows the name in its true order.
     static func localName(forRemote name: String) -> String? {
-        guard let valid = validName(name), !valid.hasPrefix(".."), valid.utf8.count <= 255 else { return nil }
+        guard let valid = validName(InvisibleFormatting.stripped(name)), !valid.hasPrefix(".."), valid.utf8.count <= 255 else { return nil }
         return valid.hasPrefix(".") ? "_" + valid.dropFirst() : valid
     }
 

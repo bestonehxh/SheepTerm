@@ -1,4 +1,12 @@
 import Foundation
+#if os(Windows)
+// Only what WebDownloadPath.finish needs: a whole `import WinSDK` makes
+// `UUID` ambiguous (WinSDK has its own) in the rest of this shared file.
+import func WinSDK.MoveFileExW
+import var WinSDK.MOVEFILE_REPLACE_EXISTING
+import var WinSDK.MOVEFILE_WRITE_THROUGH
+import typealias WinSDK.DWORD
+#endif
 #if canImport(SheepWebScripts)
 import SheepWebScripts
 #endif
@@ -927,12 +935,23 @@ public nonisolated enum WebDownloadPath {
     /// Move the finished temporary file over the destination (atomically
     /// replacing one that exists).
     public static func finish(temporary: URL, destination: URL) throws {
+        #if os(Windows)
+        // Foundation's replaceItemAt is "not yet implemented" on Windows (it
+        // throws): MoveFileEx with REPLACE_EXISTING is the atomic replace there.
+        let ok = temporary.path.withCString(encodedAs: UTF16.self) { from in
+            destination.path.withCString(encodedAs: UTF16.self) { to in
+                MoveFileExW(from, to, DWORD(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            }
+        }
+        guard ok else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: destination.path]) }
+        #else
         let fm = FileManager.default
         if fm.fileExists(atPath: destination.path) {
             _ = try fm.replaceItemAt(destination, withItemAt: temporary)
         } else {
             try fm.moveItem(at: temporary, to: destination)
         }
+        #endif
     }
 
     public static func discard(temporary: URL) {

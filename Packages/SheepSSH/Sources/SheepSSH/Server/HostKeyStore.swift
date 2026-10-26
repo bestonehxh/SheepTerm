@@ -80,7 +80,7 @@ public enum HostKeyStore {
         } catch {
             throw HostKeyStoreError.storageFailed("cannot create \(path): \(error.localizedDescription)")
         }
-        chmod(path, 0o700)
+        restrict(path, 0o700)
         let ed = try ensureEd25519(path: directory.appendingPathComponent(ed25519FileName).path)
         let rsa = try ensureRSA(path: directory.appendingPathComponent(rsaFileName).path)
         return [ed, rsa]
@@ -104,7 +104,7 @@ public enum HostKeyStore {
     /// Loads or generates an Ed25519 host key (OpenSSH container).
     public static func ensureEd25519(path: String) throws -> SSHPrivateKey {
         if let key = load(path: path), case .ed25519 = key.kind {
-            chmod(path, 0o600)
+            restrict(path, 0o600)
             return key
         }
         let seed = Array(Curve25519.Signing.PrivateKey().rawRepresentation)
@@ -116,7 +116,7 @@ public enum HostKeyStore {
     /// Loads or generates an RSA host key (`rsaBits`), stored as PKCS#1 PEM.
     public static func ensureRSA(path: String) throws -> SSHPrivateKey {
         if let key = load(path: path), case .rsa = key.kind, key.publicKey.bits >= 2048 {
-            chmod(path, 0o600)
+            restrict(path, 0o600)
             return key
         }
         #if canImport(Security)
@@ -187,6 +187,15 @@ public enum HostKeyStore {
             + Data(body.bytes).base64EncodedString().chunks(ofCount: 64).joined(separator: "\n")
             + "\n" + OpenSSHPrivateKeyFile.armorEnd + "\n"
         try writePrivate(text, path: path)
+    }
+
+    /// Owner-only permissions. Not on Windows: there `chmod` is a deprecated
+    /// alias that only toggles read-only — the profile folder's ACL is what
+    /// keeps a key private (as in `writePrivate`).
+    private static func restrict(_ path: String, _ mode: Int) {
+        #if !os(Windows)
+        chmod(path, mode_t(mode))
+        #endif
     }
 
     /// Replaces whatever is at `path` (a corrupt key, a symlink — unlink

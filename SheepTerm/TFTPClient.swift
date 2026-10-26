@@ -15,6 +15,10 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
     static let blockSize = 1428          // fits a 1500-byte MTU with IP/UDP/TFTP headers
     static let timeout: TimeInterval = 2
     static let retries = 5
+    /// No step forward (a new block, the right ACK) for this long ends the
+    /// transfer, whatever else arrives: strays from another port, or a server
+    /// repeating an old block, used to keep it alive forever (review 6.0 (4)).
+    static var stallLimit: TimeInterval { timeout * Double(retries + 1) }
     /// A download larger than this is refused — nothing on a TFTP server
     /// needs more, and the transfer would never end on a wrap bug.
     static let maximumBytes: Int64 = 4 * 1024 * 1024 * 1024
@@ -40,7 +44,7 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
 
     // MARK: Transfers
 
-    func download(_ remotePath: String, to local: URL, progress: @escaping TransferProgress) async throws {
+    func download(_ remotePath: String, to local: URL, replacing: Bool, progress: @escaping TransferProgress) async throws {
         let name = Self.wireName(remotePath)
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: local.path, isDirectory: &isDirectory), isDirectory.boolValue {
@@ -49,7 +53,7 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
         let temp = local.deletingLastPathComponent().appendingPathComponent(".sheepterm-tftp-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: temp.path, contents: nil),
               let handle = try? FileHandle(forWritingTo: temp) else {
-            throw RemoteFileError.permissionDenied(local.deletingLastPathComponent().path)
+            throw RemoteFileError.permissionDenied(local.deletingLastPathComponent().lastPathComponent)
         }
         do {
             // Never past the free space less a reserve (a hostile server
@@ -59,12 +63,9 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
                 try self.receive(name: name, into: handle, limit: limit, progress: progress, cancelled: cancelled)
             }
             try handle.close()
-            // A plain rename (as SFTP / FTP): replaces a file the user agreed
-            // to replace, and fails on a folder instead of swapping with it.
-            guard Darwin.rename(temp.path, local.path) == 0 else {
-                throw RemoteFileError.permissionDenied(local.path)
-            }
-            Quarantine.mark(local)
+            // Marked, then renamed: over a file only when the user said
+            // Replace; never swapped with a folder.
+            try DownloadCommit.commit(temp, to: local, replacing: replacing)
         } catch {
             try? handle.close()
             unlink(temp.path)
@@ -74,7 +75,7 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
 
     func upload(_ local: URL, to remotePath: String, progress: @escaping TransferProgress) async throws {
         let name = Self.wireName(remotePath)
-        guard let handle = try? FileHandle(forReadingFrom: local) else { throw RemoteFileError.notFound(local.path) }
+        guard let handle = try? FileHandle(forReadingFrom: local) else { throw RemoteFileError.notFound(local.lastPathComponent) }
         defer { try? handle.close() }
         let size = (try? FileManager.default.attributesOfItem(atPath: local.path)[.size] as? Int64) ?? nil
         try await run { cancelled in
@@ -136,6 +137,9 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
         var server: sockaddr_storage
         /// The server's transfer TID, locked on its first reply.
         var peer: sockaddr_storage?
+        /// ERROR 5 answers sent to other TIDs: a few, then strays are just
+        /// dropped (this client must not become a reflector).
+        var unknownTIDReplies = 0
 
         static func open(to address: sockaddr_storage) throws -> Socket {
             let fd = socket(Int32(address.ss_family), SOCK_DGRAM, 0)
@@ -176,6 +180,8 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
                 if let peer {
                     guard Self.port(of: from) == Self.port(of: peer) else {
                         // Another TID: RFC 1350 says answer ERROR 5 to it.
+                        guard unknownTIDReplies < 8 else { continue }
+                        unknownTIDReplies += 1
                         var other = from
                         let err: [UInt8] = [0, 5, 0, 5] + Array("unknown transfer ID".utf8) + [0]
                         _ = withUnsafePointer(to: &other) {
@@ -264,10 +270,14 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
         var tries = 0
         var lastReport = Date.distantPast
         var first = true
+        var lastAdvance = Date()
         while true {
             if cancelled() {
                 socket.send([0, 5, 0, 0] + Array("cancelled".utf8) + [0])
                 throw RemoteFileError.cancelled
+            }
+            guard Date().timeIntervalSince(lastAdvance) < Self.stallLimit else {
+                throw RemoteFileError.connection("TFTP server did not answer")
             }
             let received = socket.receive()
             if received?.isEmpty == true { continue }      // strays only: look at cancel, keep going
@@ -289,6 +299,7 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
                 socket.send(last)
                 first = false
                 tries = 0
+                lastAdvance = Date()
             case 3 where packet.count >= 4:
                 first = false
                 let block = UInt16(packet[2]) << 8 | UInt16(packet[3])
@@ -301,6 +312,7 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
                     socket.send(last)
                     expected &+= 1
                     tries = 0
+                    lastAdvance = Date()
                     if Date().timeIntervalSince(lastReport) > 0.1 {
                         progress(written, total)
                         lastReport = Date()
@@ -333,6 +345,7 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
         var finalSent = false
         var lastReport = Date.distantPast
         var first = true
+        var lastAdvance = Date()
         func nextData() throws {
             let chunk = try handle.read(upToCount: blockSize) ?? Data()
             block &+= 1
@@ -341,11 +354,15 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
             finalSent = chunk.count < blockSize
             socket.send(last)
             tries = 0
+            lastAdvance = Date()
         }
         while true {
             if cancelled() {
                 socket.send([0, 5, 0, 0] + Array("cancelled".utf8) + [0])
                 throw RemoteFileError.cancelled
+            }
+            guard Date().timeIntervalSince(lastAdvance) < Self.stallLimit else {
+                throw RemoteFileError.connection("TFTP server did not answer")
             }
             let received = socket.receive()
             if received?.isEmpty == true { continue }      // strays only: look at cancel, keep going

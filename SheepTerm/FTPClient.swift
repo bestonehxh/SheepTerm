@@ -458,11 +458,11 @@ nonisolated final class FTPClient: RemoteFileClient, @unchecked Sendable {
         }
     }
 
-    func download(_ remotePath: String, to local: URL, progress: @escaping TransferProgress) async throws {
-        try await run { c, op in try c.doDownload(remotePath, local, progress, op) }
+    func download(_ remotePath: String, to local: URL, replacing: Bool, progress: @escaping TransferProgress) async throws {
+        try await run { c, op in try c.doDownload(remotePath, local, replacing, progress, op) }
     }
 
-    private func doDownload(_ remotePath: String, _ local: URL, _ progress: @escaping TransferProgress, _ op: Op) throws {
+    private func doDownload(_ remotePath: String, _ local: URL, _ replacing: Bool, _ progress: @escaping TransferProgress, _ op: Op) throws {
         let arg = try clean(remotePath)
         var total: Int64?
         if hasSIZE {
@@ -476,9 +476,9 @@ nonisolated final class FTPClient: RemoteFileClient, @unchecked Sendable {
         let cap = DownloadCap.bytes(for: local)
         if let total, total > cap { throw RemoteFileError.remote("Not enough free space for \(remotePath)") }
         let directory = local.deletingLastPathComponent()
-        let temp = directory.appendingPathComponent(".\(local.lastPathComponent).sheepterm-part-\(UUID().uuidString)")
+        let temp = directory.appendingPathComponent(DownloadCommit.partName(for: local, tag: String(UUID().uuidString.prefix(8))))
         let file = open(temp.path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
-        guard file >= 0 else { throw RemoteFileError.permissionDenied(local.path) }
+        guard file >= 0 else { throw RemoteFileError.permissionDenied(local.lastPathComponent) }
         var fileOpen = true
         var committed = false
         defer {
@@ -506,7 +506,7 @@ nonisolated final class FTPClient: RemoteFileClient, @unchecked Sendable {
                 if op.cancelled { abortTransfer(op); throw RemoteFileError.cancelled }
                 guard FTPSocket.writeToFile(file, Array(bytes[..<count])) else {
                     abortTransfer(op)
-                    throw RemoteFileError.permissionDenied(local.path)
+                    throw RemoteFileError.permissionDenied(local.lastPathComponent)
                 }
                 received += Int64(count)
                 if received > cap {
@@ -529,9 +529,8 @@ nonisolated final class FTPClient: RemoteFileClient, @unchecked Sendable {
         }
         if total == nil, !cleanEnd { throw RemoteFileError.connection("The data connection was reset") }
         Darwin.close(file); fileOpen = false
-        guard Darwin.rename(temp.path, local.path) == 0 else { throw RemoteFileError.permissionDenied(local.path) }
+        try DownloadCommit.commit(temp, to: local, replacing: replacing)
         committed = true
-        Quarantine.mark(local)      // it came from the network, like a download
     }
 
     func upload(_ local: URL, to remotePath: String, progress: @escaping TransferProgress) async throws {
@@ -541,7 +540,7 @@ nonisolated final class FTPClient: RemoteFileClient, @unchecked Sendable {
     private func doUpload(_ local: URL, _ remotePath: String, _ progress: @escaping TransferProgress, _ op: Op) throws {
         let arg = try clean(remotePath)
         let file = open(local.path, O_RDONLY)
-        guard file >= 0 else { throw RemoteFileError.notFound(local.path) }
+        guard file >= 0 else { throw RemoteFileError.notFound(local.lastPathComponent) }
         defer { Darwin.close(file) }
         var info = stat()
         fstat(file, &info)
@@ -556,7 +555,7 @@ nonisolated final class FTPClient: RemoteFileClient, @unchecked Sendable {
         var bytes = [UInt8](repeating: 0, count: Self.chunk)
         while true {
             let count = read(file, &bytes, bytes.count)
-            if count < 0 { if errno == EINTR { continue }; abortTransfer(op); throw RemoteFileError.notFound(local.path) }
+            if count < 0 { if errno == EINTR { continue }; abortTransfer(op); throw RemoteFileError.notFound(local.lastPathComponent) }
             if count == 0 { break }
             if op.cancelled { abortTransfer(op); throw RemoteFileError.cancelled }
             let ok = FTPSocket.writeAll(data, Array(bytes[..<count]), timeoutMs: Int32(Self.stallTimeout * 1000),
@@ -713,9 +712,11 @@ nonisolated final class FTPClient: RemoteFileClient, @unchecked Sendable {
     }
 
     private static func parseMLSTTime(_ text: String) -> Date? {
-        let digits = Array(text.prefix(14))
-        guard digits.count == 14, digits.allSatisfy(\.isNumber) else { return nil }
-        func n(_ a: Int, _ b: Int) -> Int { Int(String(digits[a..<b]))! }
+        // ASCII digits only: `isNumber` also passes "½" or "٣", which Int()
+        // refuses — a server's listing must never be able to trap the app.
+        let digits = Array(text.utf8.prefix(14))
+        guard digits.count == 14, digits.allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }) else { return nil }
+        func n(_ a: Int, _ b: Int) -> Int { digits[a..<b].reduce(0) { $0 * 10 + Int($1 - 0x30) } }
         return utc(n(0, 4), n(4, 6), n(6, 8), n(8, 10), n(10, 12), n(12, 14))
     }
 

@@ -48,6 +48,14 @@ nonisolated enum FileServerPlan {
         incoming != .active && (previous == nil || previous == .active)
     }
 
+    /// Whether switching Receive files on starts a fresh budget. Not when
+    /// the login servers restart for a new user name / password: that turns
+    /// writes off and on again, and used to hand devices a new 1,000 files
+    /// and half the disk again (review 6.0 (4)).
+    static func startsNewBudget(wasOn: Bool, isOn: Bool, restartingForLogin: Bool) -> Bool {
+        isOn && !wasOn && !restartingForLogin
+    }
+
     /// Files devices may leave while Receive files is on (the byte budget
     /// does not count empty ones): past it Receive files turns itself off.
     static let maximumUploadFiles = 1000
@@ -179,7 +187,7 @@ nonisolated enum FileServerPlan {
 
     static func isPlainName(_ name: String) -> Bool {
         guard !name.isEmpty, name.utf8.count <= 255, !name.hasPrefix("."),
-              name != "..", !name.contains(":") else { return false }
+              name != "..", !name.contains(":"), !InvisibleFormatting.found(in: name) else { return false }
         return !name.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F || (0x80...0x9F).contains($0.value) }
     }
 

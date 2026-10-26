@@ -86,11 +86,11 @@ nonisolated final class SFTPClient: RemoteFileClient {
         return try await engine.perform { e, op in try e.list(path, op) }
     }
 
-    func download(_ remotePath: String, to local: URL, progress: @escaping TransferProgress) async throws {
+    func download(_ remotePath: String, to local: URL, replacing: Bool, progress: @escaping TransferProgress) async throws {
         let browse = canBrowse
         try await engine.perform { e, op in
-            if browse { try e.download(remotePath, to: local, progress: progress, op) }
-            else { try e.scp(push: false, local: local, remote: remotePath, progress: progress, op) }
+            if browse { try e.download(remotePath, to: local, replacing: replacing, progress: progress, op) }
+            else { try e.scp(push: false, local: local, remote: remotePath, replacing: replacing, progress: progress, op) }
         }
     }
 
@@ -305,6 +305,13 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
     /// A listing longer than this is cut off with an error: a server that
     /// answers READDIR forever must not grow memory without bound.
     static let maximumListing = 100_000
+    /// And at most this many bytes of names: 100,000 names of 4 MB each fit
+    /// the count (review 6.0 (4)). FTP caps its listing at 16 MB too.
+    #if SHEEPTERM_TESTING
+    nonisolated(unsafe) static var maximumListingBytes = 32 * 1024 * 1024
+    #else
+    static let maximumListingBytes = 32 * 1024 * 1024
+    #endif
     /// No byte from the server for this long during an operation = dead.
     static let idleLimit: Duration = .seconds(30)
 #if SHEEPTERM_TESTING
@@ -1011,6 +1018,7 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
         guard case .handle(let handle) = open else { throw failure(open, path: path, what: "list") }
         var entries: [RemoteEntry] = []
         var links: [Int] = []
+        var nameBytes = 0
         do {
             reading: while true {
                 let reply = try roundTrip(wire.readDir(handle), op)
@@ -1018,6 +1026,10 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
                 case .names(let names):
                     guard entries.count + names.count <= Self.maximumListing else {
                         throw RemoteFileError.remote("\(path) lists more than \(Self.maximumListing) entries")
+                    }
+                    nameBytes += names.reduce(0) { $0 + $1.name.utf8.count }
+                    guard nameBytes <= Self.maximumListingBytes else {
+                        throw RemoteFileError.remote("\(path) lists more than \(Self.maximumListingBytes / 1024 / 1024) MB of names")
                     }
                     for item in names where item.name != "." && item.name != ".." {
                         let attrs = item.attrs
@@ -1078,31 +1090,22 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
         throw failure(reply, path: from, what: "rename")
     }
 
-    /// ".name.sheepterm-<random>.part" beside the destination.
+    /// ".name.sheepterm-<random>.part" beside the destination (≤ 255 bytes).
     static func partURL(for destination: URL) -> URL {
-        let token = UUID().uuidString.prefix(8)
-        return destination.deletingLastPathComponent()
-            .appendingPathComponent(".\(destination.lastPathComponent).sheepterm-\(token).part")
-    }
-
-    /// Moves the finished part file over the destination (atomic rename).
-    private static func commit(_ part: URL, to destination: URL) throws {
-        guard Darwin.rename(part.path, destination.path) == 0 else {
-            let why = String(cString: strerror(errno))
-            throw RemoteFileError.permissionDenied("\(destination.path) (\(why))")
-        }
+        destination.deletingLastPathComponent()
+            .appendingPathComponent(DownloadCommit.partName(for: destination, tag: String(UUID().uuidString.prefix(8))))
     }
 
     private static func makePart(for destination: URL) throws -> (URL, FileHandle) {
         let part = partURL(for: destination)
         guard FileManager.default.createFile(atPath: part.path, contents: nil, attributes: [.posixPermissions: 0o644]),
               let handle = try? FileHandle(forWritingTo: part) else {
-            throw RemoteFileError.permissionDenied(destination.deletingLastPathComponent().path)
+            throw RemoteFileError.permissionDenied(destination.deletingLastPathComponent().lastPathComponent)
         }
         return (part, handle)
     }
 
-    func download(_ remotePath: String, to local: URL, progress: @escaping TransferProgress, _ op: SFTPOp) throws {
+    func download(_ remotePath: String, to local: URL, replacing: Bool, progress: @escaping TransferProgress, _ op: SFTPOp) throws {
         let wire = try liveWire()
         let statReply = try roundTrip(wire.stat(remotePath), op)
         guard case .attrs(let attrs) = statReply else { throw failure(statReply, path: remotePath, what: "read") }
@@ -1190,15 +1193,14 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
         } catch {
             throw RemoteFileError.remote("Cannot write \(local.lastPathComponent): \(error.localizedDescription)")
         }
-        try Self.commit(part, to: local)
+        try DownloadCommit.commit(part, to: local, replacing: replacing)
         committed = true
-        Quarantine.mark(local)      // it came from the network, like a download
         throttle.finish(done, total ?? done)
     }
 
     func upload(_ local: URL, to remotePath: String, progress: @escaping TransferProgress, _ op: SFTPOp) throws {
         let wire = try liveWire()
-        guard let input = try? FileHandle(forReadingFrom: local) else { throw RemoteFileError.notFound(local.path) }
+        guard let input = try? FileHandle(forReadingFrom: local) else { throw RemoteFileError.notFound(local.lastPathComponent) }
         defer { try? input.close() }
         let total = Int64((try? local.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
 
@@ -1264,7 +1266,7 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
         return .remote(text.isEmpty ? "SCP failed" : text)
     }
 
-    func scp(push: Bool, local: URL, remote: String, progress: @escaping TransferProgress, _ op: SFTPOp) throws {
+    func scp(push: Bool, local: URL, remote: String, replacing: Bool = false, progress: @escaping TransferProgress, _ op: SFTPOp) throws {
         if let lost { throw RemoteFileError.connection(lost) }
         guard let channels else { throw RemoteFileError.connection("not connected") }
         var part: URL?
@@ -1274,7 +1276,7 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
         if push {
             let (location, name) = Self.splitRemotePath(remote, fallbackName: local.lastPathComponent)
             guard let made = try? SCPTransfer(push: location, name: name, localURL: local) else {
-                throw RemoteFileError.notFound(local.path)
+                throw RemoteFileError.notFound(local.lastPathComponent)
             }
             transfer = made
         } else {
@@ -1282,7 +1284,7 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
             try? handle.close()
             part = url
             guard let made = try? SCPTransfer(pull: remote, localURL: url, maximumBytes: DownloadCap.bytes(for: url)) else {
-                throw RemoteFileError.permissionDenied(local.deletingLastPathComponent().path)
+                throw RemoteFileError.permissionDenied(local.deletingLastPathComponent().lastPathComponent)
             }
             transfer = made
         }
@@ -1341,9 +1343,8 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
             throw Self.scpError(scpStderr, path: remote)
         }
         if let part {
-            try Self.commit(part, to: local)
+            try DownloadCommit.commit(part, to: local, replacing: replacing)
             committed = true
-            Quarantine.mark(local)      // it came from the network, like a download
         }
         throttle.finish(transfer.done, transfer.total)
     }

@@ -398,13 +398,18 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                     acked.append((name, "\(blockSize)"))
                 case "tsize":
                     if isWrite {
-                        expectedTotal = Int(value)
-                        acked.append((name, value))
+                        // Echo only a number (RFC 2349); anything else is
+                        // left out of the OACK, never reflected back.
+                        guard let size = Int(value), size >= 0 else { break }
+                        expectedTotal = size
+                        acked.append((name, "\(size)"))
                     } else {
                         acked.append((name, "\(fileSize)"))
                     }
                 case "timeout":
-                    acked.append((name, value))
+                    // RFC 2349: 1–255 seconds.
+                    guard let seconds = Int(value), (1...255).contains(seconds) else { break }
+                    acked.append((name, "\(seconds)"))
                 default:
                     break
                 }
@@ -627,12 +632,19 @@ nonisolated final class TFTPServer: @unchecked Sendable {
 
         // MARK: Progress
 
-        /// Throttled to ~128 KB so a big image doesn't flood main.
+        /// Throttled to ~128 KB so a big image doesn't flood main. Nothing
+        /// shows until the peer is proven (its first DATA block, or an ACK on
+        /// the transfer port): a bare or spoofed request repeated every few
+        /// minutes kept an "active" bar up, so the server never turned itself
+        /// off and the Transfer Log filled with timeouts (review 6.0 (4)).
+        private var shown = false
         private func reportProgress(done: Int, total: Int, force: Bool = false) {
+            guard peerProven else { return }
             let t = ServerTransfer(token: token, peer: peerHost, name: filename, isUpload: isWrite,
                                  done: Int64(done), total: Int64(total))
             lastActive = t
-            if force || done - lastReported >= 128 * 1024 || (total > 0 && done >= total) {
+            if !shown || force || done - lastReported >= 128 * 1024 || (total > 0 && done >= total) {
+                shown = true
                 lastReported = done
                 server.onProgress(t)
             }

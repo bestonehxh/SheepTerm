@@ -393,12 +393,13 @@ final class FilesTabController: ObservableObject {
         for entry in entries where !entry.isDirectory {
             guard let name = FilesPlan.localName(forRemote: entry.name) else { continue }
             let target = localPath.appendingPathComponent(name)
-            guard confirmReplace(name, exists: FileManager.default.fileExists(atPath: target.path)) else { continue }
+            let exists = FileManager.default.fileExists(atPath: target.path)
+            guard confirmReplace(name, exists: exists) else { continue }
             // The folder as it is NOW — a queued download must not read a
             // folder the user browsed to after queueing it.
             let source = FilesPlan.join(remotePath, entry.name)
-            enqueue(name: name, upload: false, total: entry.size) { client, progress in
-                try await client.download(source, to: target, progress: progress)
+            enqueue(name: name, upload: false, total: entry.size, saving: target) { client, progress in
+                try await client.download(source, to: target, replacing: exists, progress: progress)
             }
         }
     }
@@ -409,9 +410,10 @@ final class FilesTabController: ObservableObject {
         let last = trimmed.split(whereSeparator: { $0 == "/" || $0 == ":" }).last.map(String.init) ?? ""
         guard let name = FilesPlan.localName(forRemote: last) else { NSSound.beep(); return }
         let target = localPath.appendingPathComponent(name)
-        guard confirmReplace(name, exists: FileManager.default.fileExists(atPath: target.path)) else { return }
-        enqueue(name: name, upload: false, total: nil) { client, progress in
-            try await client.download(trimmed, to: target, progress: progress)
+        let exists = FileManager.default.fileExists(atPath: target.path)
+        guard confirmReplace(name, exists: exists) else { return }
+        enqueue(name: name, upload: false, total: nil, saving: target) { client, progress in
+            try await client.download(trimmed, to: target, replacing: exists, progress: progress)
         }
     }
 
@@ -457,7 +459,9 @@ final class FilesTabController: ObservableObject {
 
     /// One transfer at a time per tab, in order (the engines serialise
     /// anyway; a queue keeps the bars honest).
-    private func enqueue(name: String, upload: Bool, total: Int64?,
+    /// `saving`: a download's destination — a volume that would not keep the
+    /// quarantine mark says so in the Transfer Log.
+    private func enqueue(name: String, upload: Bool, total: Int64?, saving: URL? = nil,
                          _ body: @escaping @MainActor (RemoteFileClient, @escaping TransferProgress) async throws -> Void) {
         guard let client else { return }
         var item = Transfer(name: name, isUpload: upload)
@@ -478,7 +482,8 @@ final class FilesTabController: ObservableObject {
                     }
                 }
                 self.update(id) { $0.state = .done; if let t = $0.total { $0.done = t } }
-                self.log(id, ok: true)
+                let unmarked = saving.map { !Quarantine.isMarked($0) } ?? false
+                self.log(id, ok: true, reason: unmarked ? Quarantine.unmarkedNote : "")
                 if upload { await self.list(self.remotePath) } else { self.refreshLocal() }
             } catch {
                 let why = (error as? RemoteFileError) ?? .remote(String(describing: error))

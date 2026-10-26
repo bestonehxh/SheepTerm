@@ -42,6 +42,10 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
     let hostKeyDirectory: URL
     /// Version + kex + login must finish within this.
     var handshakeTimeout: TimeInterval = 30
+    /// Version + key exchange alone: a device does that in well under a
+    /// second; a connection that sits silent holds one of the 16 slots, so
+    /// it gets this long, not the whole login time (review 6.0 (4)).
+    var keyExchangeTimeout: TimeInterval = 10
     /// No byte from the client for this long ends the connection.
     var idleTimeout: TimeInterval = 600
 
@@ -54,11 +58,20 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
     /// Failed logins per peer and when the last one was (lock).
     private var peerFailures: [String: (count: Int, last: Date)] = [:]
 
-    fileprivate func noteLogin(from peer: String, ok: Bool) {
+    /// False = this address is now locked out: the session ends at once,
+    /// so the connections it already holds cannot keep guessing, and a
+    /// login that lands while it is locked is not let in (review 6.0 (4)).
+    @discardableResult
+    fileprivate func noteLogin(from peer: String, ok: Bool) -> Bool {
         lock.withLock {
-            if ok { peerFailures[peer] = nil; return }
+            if ok {
+                guard !isLockedOut(peer) else { return false }
+                peerFailures[peer] = nil
+                return true
+            }
             let previous = peerFailures[peer]
             peerFailures[peer] = ((previous?.count ?? 0) + 1, Date())
+            return !isLockedOut(peer)
         }
     }
 
@@ -272,9 +285,16 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
         private let connection: SSHServerConnection
         private var dead = false
         private var deadline: Date
+        private let keyExchangeDeadline: Date
         private var seenAbort: Int
         private var sftp: (channel: UInt32, handler: SFTPServerHandler)?
         private var sftpInbox: [UInt8] = []
+        /// The client sent EOF on the sftp channel; exit + CLOSE go out once
+        /// the inbox is answered — still under the 2 MB back-pressure, so a
+        /// client that queues 16 MB of READs and stops reading cannot make
+        /// us buffer the gigabytes they ask for (security review 6.0 (4)).
+        private var sftpEOF = false
+        private var sftpExited = false
         private var scp: (channel: UInt32, io: ChannelIO)?
         private var serviceChosen = false
         private var channelClosed = false
@@ -287,6 +307,7 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
             connection = SSHServerConnection(transport: transport, configuration: .init(
                 username: server.access.username, password: server.access.password))
             deadline = Date().addingTimeInterval(server.handshakeTimeout)
+            keyExchangeDeadline = Date().addingTimeInterval(min(server.keyExchangeTimeout, server.handshakeTimeout))
             seenAbort = server.currentAbortGeneration
         }
 
@@ -333,7 +354,7 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
                 sftp?.handler.abortWrites()
                 scp?.io.abortWrites = true
             }
-            if Date() >= deadline {
+            if Date() >= deadline || (transport.sessionID == nil && Date() >= keyExchangeDeadline) {
                 transport.disconnect(reason: .byApplication, description: "timed out")
                 flush()
                 dead = true
@@ -388,16 +409,16 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
             for event in events {
                 switch event {
                 case .authenticated:
-                    server.noteLogin(from: peer, ok: true)
+                    guard server.noteLogin(from: peer, ok: true) else { lockedOut(); return }
                     deadline = Date().addingTimeInterval(server.idleTimeout)
                 case .passwordRejected:
-                    server.noteLogin(from: peer, ok: false)
+                    guard server.noteLogin(from: peer, ok: false) else { lockedOut(); return }
                 case .channelOpened:
                     break
                 case .channelRequest(let id, let request):
                     choose(id, request)
                 case .data(let id, let bytes):
-                    if id == sftp?.channel {
+                    if id == sftp?.channel, !sftpEOF {
                         sftpInbox += bytes
                         // A real client keeps a few MB in flight at most.
                         if sftpInbox.count > 16 * 1024 * 1024 { dead = true; return }
@@ -410,9 +431,8 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
                         // Like sftp-server on stdin EOF: status 0, then EOF +
                         // CLOSE once the last replies are out (OpenSSH `sftp`
                         // waits for our CLOSE).
-                        serviceSFTPInbox(force: true)
-                        connection.sendExitStatus(channel: id, code: 0)
-                        try? connection.finish(id)
+                        sftpEOF = true
+                        serviceSFTPInbox()
                     }
                 case .closed(let id):
                     if id == sftp?.channel || id == scp?.channel {
@@ -421,6 +441,12 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
                     }
                 }
             }
+        }
+
+        private func lockedOut() {
+            transport.disconnect(reason: .byApplication, description: "too many failed logins")
+            flush()
+            dead = true
         }
 
         /// One service per connection: the sftp subsystem or an scp exec.
@@ -448,11 +474,12 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
 
         /// Answers every complete SFTP packet, while the replies already
         /// queued for the client stay under 2 MB (READs are cheap to ask for).
-        private func serviceSFTPInbox(force: Bool = false) {
-            guard let (channel, handler) = sftp else { return }
+        private func serviceSFTPInbox() {
+            guard let (channel, handler) = sftp, !sftpExited else { return }
             var consumed = 0
+            var waiting = false
             while sftpInbox.count - consumed >= 4 {
-                if !force, connection.pendingOutput(channel) > 2 * 1024 * 1024 { break }
+                if connection.pendingOutput(channel) > 2 * 1024 * 1024 { waiting = true; break }
                 let b = sftpInbox[consumed..<(consumed + 4)].map(UInt32.init)
                 let length = Int(b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3])
                 guard length >= 1, length <= 256 * 1024 else { dead = true; return }
@@ -465,6 +492,12 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
                 }
             }
             if consumed > 0 { sftpInbox.removeFirst(consumed) }
+            if sftpEOF, !waiting {
+                sftpExited = true
+                sftpInbox.removeAll()
+                connection.sendExitStatus(channel: channel, code: 0)
+                try? connection.finish(channel)
+            }
         }
 
         // MARK: SCP channel plumbing
@@ -670,11 +703,18 @@ nonisolated final class ServerUpload {
         return .success(ServerUpload(final: final, temp: temp, fd: fd, limit: limit, factory: factory))
     }
 
-    /// False: past the limit, or the disk refused.
+    /// How far past what is written a WRITE may start. Clients write in
+    /// order with a few MB in flight; one byte at the 16 GB mark would make
+    /// a disk (NTFS, FAT, exFAT, SMB) fill the gap with zeros before any
+    /// budget sees it (review 6.0 (4)).
+    static let maximumGap: Int64 = 64 * 1024 * 1024
+
+    /// False: past the limit, too far ahead, or the disk refused.
     func write(_ bytes: ArraySlice<UInt8>, at offset: Int64) -> Bool {
         // `offset <= limit - count`, not `offset + count <= limit`: an SFTP
         // WRITE at Int64.max must be refused, not trap (review 6.0 (2)).
-        guard fd >= 0, offset >= 0, offset <= limit - Int64(bytes.count) else { return false }
+        guard fd >= 0, offset >= 0, offset <= limit - Int64(bytes.count),
+              offset - size <= Self.maximumGap else { return false }
         var done = 0
         while done < bytes.count {
             let n = bytes[(bytes.startIndex + done)...].withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, off_t(offset) + off_t(done)) }

@@ -161,7 +161,10 @@ nonisolated final class SCPServerHandler {
         var sent: Int64 = 0
         var buffer = [UInt8](repeating: 0, count: 256 * 1024)
         while sent < size {
-            let n = buffer.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, off_t(sent)) }
+            // Never past the size announced in the C line: a file that grew
+            // under us would put the sink out of step.
+            let want = Int(min(Int64(buffer.count), size - sent))
+            let n = buffer.withUnsafeMutableBytes { pread(fd, $0.baseAddress, want, off_t(sent)) }
             guard n > 0 else { break }
             guard io.write(Array(buffer[0..<n])) else { report.failed("connection lost"); return false }
             sent += Int64(n)
@@ -171,7 +174,9 @@ nonisolated final class SCPServerHandler {
             // The file shrank under us: pad so the sink stays in step, then
             // report the error in the trailing status.
             report.failed("short read")
-            _ = io.write([UInt8](repeating: 0, count: Int(size - sent)))
+            for chunk in Self.padding(size - sent) {
+                guard io.write([UInt8](repeating: 0, count: chunk)) else { break }
+            }
             warn("\(raw): read error")
             return false
         }
@@ -312,5 +317,16 @@ nonisolated final class SCPServerHandler {
 
     private func fatal(_ message: String) {
         _ = io.write([2] + Array("scp: \(message)\n".utf8))
+    }
+}
+
+extension SCPServerHandler {
+    /// The zero padding for a file that shrank under us, in pieces: one
+    /// array the size of the gap was a multi-GB allocation (review 6.0 (4)).
+    nonisolated static func padding(_ count: Int64, chunk: Int = 256 * 1024) -> [Int] {
+        guard count > 0 else { return [] }
+        let full = Int(count / Int64(chunk))
+        let rest = Int(count % Int64(chunk))
+        return Array(repeating: chunk, count: full) + (rest > 0 ? [rest] : [])
     }
 }

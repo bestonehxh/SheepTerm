@@ -184,7 +184,7 @@ struct FileServerPopover: View {
                 .buttonStyle(.plain)
                 .help(server.hasOwnPassword ? "Login for SCP / SFTP / FTP — click to change"
                       : "Login for SCP / SFTP / FTP — a new password every launch; click to set your own")
-                CopyButton(text: server.password, help: "Copy password")
+                CopyButton(text: server.password, help: "Copy password", secret: true)
                     .font(.system(size: 11))
                 Spacer()
             }
@@ -333,9 +333,12 @@ private struct ServerChip: View {
 private struct CopyButton: View {
     let text: String
     var help: LocalizedStringKey = "Copy"
+    /// Holds the login password: concealed and cleared after a minute.
+    var secret = false
 
     var body: some View {
         Button {
+            if secret { SecretPasteboard.copy(text); return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         } label: {
@@ -425,7 +428,8 @@ struct CommandRow: View {
                 .buttonStyle(.borderless)
                 .help("Type into the terminal (you press Return)")
             }
-            CopyButton(text: command.text, help: command.carriesPassword ? "Copy (includes the password)" : "Copy")
+            CopyButton(text: command.text, help: command.carriesPassword ? "Copy (includes the password)" : "Copy",
+                       secret: command.carriesPassword)
         }
         .font(.system(size: 12))
         .padding(.horizontal, 8)

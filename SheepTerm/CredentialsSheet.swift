@@ -156,16 +156,9 @@ struct CredentialsSheet: View {
     /// something else was copied meanwhile.
     private func copy(_ text: String, secret: Bool = false) {
         guard !text.isEmpty else { NSSound.beep(); return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        guard secret else { return }
-        // Clipboard managers skip what is marked concealed (nspasteboard.org).
-        pasteboard.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
-        let count = pasteboard.changeCount
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
-            if NSPasteboard.general.changeCount == count { NSPasteboard.general.clearContents() }
-        }
+        if secret { SecretPasteboard.copy(text); return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     /// Delete asks first, in the app's centred alert. Cancel is the default (Return).

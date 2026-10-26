@@ -80,7 +80,9 @@ final class FileServerModel: ObservableObject {
             options.update { $0.writes = allowWrites }
             if !allowWrites { engines.values.forEach { $0.abortWrites() } }
             // A new budget each time it is switched on (half the free space).
-            if allowWrites && !oldValue { resetUploadBudget() }
+            if FileServerPlan.startsNewBudget(wasOn: oldValue, isOn: allowWrites, restartingForLogin: restartingForLogin) {
+                resetUploadBudget()
+            }
         }
     }
     @Published private(set) var writeFolder: URL {
@@ -155,8 +157,12 @@ final class FileServerModel: ObservableObject {
         restartLoginServers()
     }
 
+    private var restartingForLogin = false
+
     private func restartLoginServers() {
         let writes = allowWrites      // a stop of the last server would reset it
+        restartingForLogin = true
+        defer { restartingForLogin = false }
         for kind in Server.allCases where kind.needsLogin && running[kind] != nil {
             stop(kind)
             start(kind)

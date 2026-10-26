@@ -60,11 +60,20 @@ nonisolated final class FTPServer: @unchecked Sendable {
     /// Failed logins per peer address and when the last one was (lock).
     private var peerFailures: [String: (count: Int, last: Date)] = [:]
 
-    fileprivate func noteLogin(from ip: String, ok: Bool) {
+    /// False = this address is now locked out: the connection closes at
+    /// once, and a login that lands while it is locked is refused (review
+    /// 6.0 (4) — the other connections it held could keep guessing).
+    @discardableResult
+    fileprivate func noteLogin(from ip: String, ok: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        if ok { peerFailures[ip] = nil; return }
+        if ok {
+            guard !isLockedOut(ip) else { return false }
+            peerFailures[ip] = nil
+            return true
+        }
         let previous = peerFailures[ip]
         peerFailures[ip] = ((previous?.count ?? 0) + 1, Date())
+        return !isLockedOut(ip)
     }
 
     /// Locked: an address with too many recent failures waits out `lockout`.
@@ -397,14 +406,16 @@ nonisolated final class FTPServer: @unchecked Sendable {
             let passOK = FTPServer.constantTimeEqual(password, access.password)
             let named = user.lowercased()
             if userOK && passOK && !access.password.isEmpty && named != "anonymous" && named != "ftp" {
-                server?.noteLogin(from: peerIP, ok: true)
+                guard server?.noteLogin(from: peerIP, ok: true) != false else {
+                    reply("421 Too many failed logins"); done = true; return
+                }
                 loggedIn = true
                 reply("230 Logged in")
                 return
             }
             failures += 1
-            server?.noteLogin(from: peerIP, ok: false)
-            if failures >= FTPServer.maximumAuthFailures {
+            let allowed = server?.noteLogin(from: peerIP, ok: false) != false
+            if failures >= FTPServer.maximumAuthFailures || !allowed {
                 reply("421 Too many failed logins"); done = true
             } else {
                 reply("530 Login incorrect")
@@ -598,6 +609,10 @@ nonisolated final class FTPServer: @unchecked Sendable {
                 if n == 0 { done = true; return true }
                 if n > 0 { buffer.append(contentsOf: chunk[..<n]) }
             }
+            // A few queued commands are fine; a client streaming the control
+            // connection during a transfer is cut off, not buffered without
+            // bound (review 6.0 (4)).
+            if buffer.count > FTPServer.maximumLine * 4 { done = true; return true }
             return buffer.split(separator: 0x0A).contains {
                 String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("ABOR")
             }

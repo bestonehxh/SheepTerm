@@ -77,6 +77,20 @@ nonisolated enum DownloadCap {
     }
 }
 
+/// Characters that make a name read as something it is not: a bidi override
+/// (U+202E turns "cfg\u{202E}gpj.exe" around on screen), zero-width and
+/// other format characters (Unicode category Cf). A device can send any of
+/// them; they never belong in a file name here (review 6.0 (4)).
+nonisolated enum InvisibleFormatting {
+    static func found(in name: String) -> Bool {
+        name.unicodeScalars.contains { $0.properties.generalCategory == .format }
+    }
+
+    static func stripped(_ name: String) -> String {
+        String(String.UnicodeScalarView(name.unicodeScalars.filter { $0.properties.generalCategory != .format }))
+    }
+}
+
 /// What to do with a host key that is not (yet) trusted — the answer to
 /// `RemoteFileError.hostKeyUnknown`.
 nonisolated enum HostKeyDecision: Sendable, Equatable {
@@ -124,12 +138,22 @@ nonisolated protocol RemoteFileClient: AnyObject, Sendable {
     /// The directory the session starts in ("/" when unknown).
     func home() async throws -> String
     func list(_ path: String) async throws -> [RemoteEntry]
-    func download(_ remotePath: String, to local: URL, progress: @escaping TransferProgress) async throws
+    /// `replacing`: the user said Replace for a file at `local`. Otherwise a
+    /// file there — or one that appeared since — fails the download
+    /// (`.alreadyExists`) instead of being overwritten.
+    func download(_ remotePath: String, to local: URL, replacing: Bool, progress: @escaping TransferProgress) async throws
     func upload(_ local: URL, to remotePath: String, progress: @escaping TransferProgress) async throws
     func makeDirectory(_ path: String) async throws
     func remove(_ path: String, isDirectory: Bool) async throws
     func rename(_ from: String, to: String) async throws
     func close()
+}
+
+nonisolated extension RemoteFileClient {
+    /// Never over an existing file.
+    func download(_ remotePath: String, to local: URL, progress: @escaping TransferProgress) async throws {
+        try await download(remotePath, to: local, replacing: false, progress: progress)
+    }
 }
 
 /// One device transfer as the File Server popover shows it (every server
