@@ -559,9 +559,6 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
             }
             return false
         }
-        guard !endpoint.username.trimmingCharacters(in: .whitespaces).isEmpty else {
-            throw RemoteFileError.connection("No username given")
-        }
         var legacy = false
         var established: SSHLink
         switch handshake(legacy: false, op) {
@@ -579,6 +576,12 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
         }
         link = established
 
+        // No username yet (Open File's field left empty): the host key is
+        // settled, so the card asks for one now — like an SSH tab, after
+        // KEX — instead of failing (the user, 6.0 (11)).
+        guard !endpoint.username.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw RemoteFileError.passwordRequired
+        }
         try authenticate(established, legacy: legacy, op)
 
         let connection = SSHConnection(transport: established.transport)

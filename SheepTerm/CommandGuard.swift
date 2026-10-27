@@ -341,6 +341,49 @@ extension CommandGuard {
     public static func dangerousLines(_ lines: [String], vendor name: String) -> [Int] {
         dangerousLines(lines, vendor: Vendor(rawValue: name) ?? .auto)
     }
+
+    /// The command as the dangerous-command card shows it: one line of at
+    /// most `maxChars` characters (a monospaced line) that always keeps the
+    /// part that made it dangerous in view — `show int ; reload ; show …`
+    /// must not read as a harmless `show int…` (review 6.0 (11)). A part
+    /// longer than the line keeps its start and its end; context around it
+    /// is added both ways while it fits, `…` marking what was cut. Any
+    /// family's rule counts (the card does not know the session's).
+    public static func shown(_ command: String, maxChars: Int) -> String {
+        let chars = Array(command)
+        guard chars.count > maxChars, maxChars >= 3 else { return command }
+        // The raw parts, at `;`, `&&` and `||` as `segments(of:)` splits them.
+        var parts: [Range<Int>] = []
+        var start = 0, i = 0
+        while i < chars.count {
+            let c = chars[i], next: Character? = i + 1 < chars.count ? chars[i + 1] : nil
+            if c == ";" || (c == "&" && next == "&") || (c == "|" && next == "|") {
+                parts.append(start..<i)
+                i += c == ";" ? 1 : 2
+                start = i
+            } else { i += 1 }
+        }
+        parts.append(start..<chars.count)
+        let every = Set(Vendor.allCases)
+        var hit = parts.first { isDangerous(String(chars[$0]), anyOf: every) } ?? 0..<chars.count
+        // Without the blanks around it.
+        while hit.lowerBound < hit.upperBound, chars[hit.lowerBound] == " " { hit = (hit.lowerBound + 1)..<hit.upperBound }
+        while hit.upperBound > hit.lowerBound, chars[hit.upperBound - 1] == " " { hit = hit.lowerBound..<(hit.upperBound - 1) }
+        if hit.count + 2 >= maxChars {
+            // The part alone is too long: its start and its end.
+            let room = maxChars - 1, head = (room + 1) / 2, tail = room - head
+            return String(chars[hit.lowerBound..<(hit.lowerBound + head)]) + "…" + String(chars[(hit.upperBound - tail)..<hit.upperBound])
+        }
+        var lo = hit.lowerBound, hi = hit.upperBound
+        func width() -> Int { (hi - lo) + (lo > 0 ? 1 : 0) + (hi < chars.count ? 1 : 0) }
+        var grew = true
+        while grew {
+            grew = false
+            if lo > 0 { lo -= 1; if width() > maxChars { lo += 1 } else { grew = true } }
+            if hi < chars.count { hi += 1; if width() > maxChars { hi -= 1 } else { grew = true } }
+        }
+        return (lo > 0 ? "…" : "") + String(chars[lo..<hi]) + (hi < chars.count ? "…" : "")
+    }
 }
 
 /// What the user has typed on the current line, rebuilt from the keys —

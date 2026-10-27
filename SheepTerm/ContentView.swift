@@ -587,10 +587,11 @@ struct EmptyPaneView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            // The round sheep of the password popup (the user's pick,
-            // 2026-10-09), without its badge — the same picture as the
-            // connection card, so the app has one face.
-            SheepLockBadge(symbol: nil)
+            // The Dock icon's own sheep-cloud, without its tile (the user's
+            // pick, 6.0 (10)): the app has one face.
+            Image("SheepCloud")
+                .resizable()
+                .interpolation(.high)
                 .frame(width: 64, height: 64)
                 .padding(10)
                 .opacity(hovering ? 1.0 : 0.8)

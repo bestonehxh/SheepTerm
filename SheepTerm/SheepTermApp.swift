@@ -89,6 +89,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.debugPingDemoBeside() }
             }
         }
+        // SHEEPTERM_DEBUG_CARD_GALLERY=<path>: every connection-card page, sample data.
+        if let path = env["SHEEPTERM_DEBUG_CARD_GALLERY"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { ConnectionCardGallery.show(writingTo: path) }
+        }
         // SHEEPTERM_DEBUG_PING_PNG=<path>: a demo Ping tab drawn off screen.
         if let path = env["SHEEPTERM_DEBUG_PING_PNG"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {

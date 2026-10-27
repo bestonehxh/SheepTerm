@@ -2,9 +2,8 @@ import AppKit
 import SwiftUI
 
 /// The question Confirm Dangerous Commands puts over the tab (5.0 (22)):
-/// the connection card's parts (`popupChrome`, `SheepLockBadge`, the
-/// fingerprint's boxed block, `TrustButtonStyle` capsules) at a smaller
-/// size — the host's name, the command, Cancel and Send.
+/// since 6.0 (11) the connection card's own layout and size (card J,
+/// `CommandGuardCardContent`) — the host's name, the command, Cancel and Send.
 ///
 /// Cancel is what Return and Escape do; Send takes a click. No
 /// `.keyboardShortcut` (another pane's Return would answer it — the
@@ -75,46 +74,73 @@ final class CommandGuardCardView: NSView {
     }
 }
 
+/// Card J (6.0 (11)): the connection card's four slots at the same heights
+/// and the same size — a red capsule ("Dangerous command") where the stage
+/// track is, the session's name over "Can restart or erase the device", the
+/// command in a red-edged box on the field's line (its reserved red line
+/// under it), Cancel and a red Send. No icon; the old card's red.
 struct CommandGuardCardContent: View {
     let title: String
     let command: String
     let answer: (Bool) -> Void
     let tap: () -> Void
 
+    /// How many 13 pt semibold monospaced characters the command's line
+    /// holds: the column (card 480 − 2 × 28) less the box's padding, the
+    /// glyph and its gap.
+    static let lineChars: Int = {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+        let advance = ("M" as NSString).size(withAttributes: [.font: font]).width
+        let room = ConnectionCardView.cardWidth - 2 * 28 - 2 * 12 - 13 - 8
+        return max(10, Int(room / advance))
+    }()
+
     var body: some View {
-        VStack(spacing: 16) {
-            SheepLockBadge(symbol: "exclamationmark.triangle.fill", danger: true)
-                .frame(width: 64, height: 64)
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            Text(command)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color(nsColor: SheepAlert.destructiveRed))
-                .lineLimit(3)
-                .truncationMode(.middle)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 12)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.07)))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.14), lineWidth: 1))
-            HStack(spacing: 8) {
-                Button { answer(false) } label: { Text("Cancel").frame(minWidth: 96).padding(.horizontal, 10) }
-                    .buttonStyle(TrustButtonStyle(fill: Color.primary.opacity(0.12), foreground: .primary))
-                    .focusable(false)
-                    .help("Don't send — the command stays typed (Return / Esc)")
-                Button { answer(true) } label: { Text("Send").frame(minWidth: 96).padding(.horizontal, 10) }
-                    .buttonStyle(TrustButtonStyle(fill: Color(nsColor: SheepAlert.destructiveRed), foreground: .white))
-                    .focusable(false)
-                    .help("Send it to the device")
+        VStack(spacing: ConnectionCardContent.slotGap) {
+            StageTrack(nodes: [StageTrack.Node(label: String(localized: "Dangerous command"), symbol: "exclamationmark.triangle.fill")],
+                       current: 0, failed: true)
+            VStack(spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1).truncationMode(.middle)
+                Text("Can restart or erase the device")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .frame(height: 30)
+            .frame(height: ConnectionCardContent.titlesHeight, alignment: .top)
+            CardPage(content: {
+                HStack(spacing: 8) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    // One line that always shows the part that made it
+                    // dangerous (`CommandGuard.shown`, review 6.0 (11)).
+                    Text(CommandGuard.shown(command, maxChars: Self.lineChars))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: SheepAlert.destructiveRed))
+                        .lineLimit(1)
+                        .textSelection(.enabled)
+                }
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity)
+                .frame(height: CardBand.size.field)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.07)))
+                .overlay(RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color(nsColor: SheepAlert.destructiveRed).opacity(0.7), lineWidth: 1))
+                // A long command is cut; the whole of it here.
+                .help(command)
+            }, buttons: {
+                CardButton(String(localized: "Cancel"), role: .neutral,
+                           help: String(localized: "Don't send — the command stays typed (Return / Esc)")) { answer(false) }
+                CardButton(String(localized: "Send"), role: .danger,
+                           help: String(localized: "Send it to the device")) { answer(true) }
+            })
         }
-        .padding(28)
-        .frame(width: 400)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 20)
+        .frame(width: ConnectionCardView.cardWidth)
+        // The connection card's height (`popupChrome` adds 10 pt each side).
+        .frame(height: ConnectionCardView.cardSize.height - 20, alignment: .top)
         .contentShape(Rectangle())
         .onTapGesture { tap() }
         .popupChrome()
