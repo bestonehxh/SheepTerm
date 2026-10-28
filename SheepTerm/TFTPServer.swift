@@ -12,14 +12,22 @@ import Network
 /// - Network.framework UDP: the listener hands us one NWConnection per remote
 ///   endpoint; each accepted transfer moves to its own ephemeral port (RFC
 ///   1350's server TID), so ACKs cannot be forged blind on port 69.
-/// - Port 69 is preferred; if something else holds it, 6969 (CX copy URLs
-///   take an explicit :port).
+/// - Port 69 only (6.0 (12)): a fallback port broke the devices' copy
+///   commands (most forms cannot carry one). A restart waits for the
+///   listener the last stop left closing — any server object's, they are
+///   tracked app-wide in `Retired` — and retries 69 for
+///   `FileServerPlan.tftpBindWindow`; still busy = the start fails with
+///   "Port 69 is in use by <process>" (`PortOwner.udp`).
 /// - Everything runs on one serial queue; the app hears about transfers only
 ///   through the @Sendable callbacks.
 nonisolated final class TFTPServer: @unchecked Sendable {
-    static let fallbackPort: UInt16 = 6969
-
     struct Failure: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Port still held after `FileServerPlan.tftpBindWindow`: the popover
+    /// shows `description` as it is ("Port 69 is in use by …").
+    struct PortInUse: Error, CustomStringConvertible {
         let description: String
     }
 
@@ -46,24 +54,97 @@ nonisolated final class TFTPServer: @unchecked Sendable {
         self.onProgress = onProgress
     }
 
-    /// Binds and returns the actual port (preferred, or the fallback).
+    /// Binds `preferredPort` and nothing else (69 in the app; a free high
+    /// port in the tests) and returns it.
     func start(preferredPort: UInt16 = 69) async throws -> UInt16 {
-        // Retry the standard port briefly: on a restart the previous
-        // listener's cancel is still in flight.
-        for attempt in 0..<4 {
+        let deadline = Date().addingTimeInterval(FileServerPlan.tftpBindWindow)
+        // A stop → start: the listener the stop cancelled (this object's or
+        // an earlier server's — the app makes a new one per start) may still
+        // hold the port. Wait for it first, then retry the port itself.
+        while Retired.busy, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        var lastError: Error?
+        repeat {
             do {
                 return try await listen(on: preferredPort)
             } catch {
-                guard preferredPort != Self.fallbackPort else { throw error }
-                if attempt < 3 { try? await Task.sleep(for: .milliseconds(150)) }
+                lastError = error
+                guard Self.isAddressInUse(error) else { throw error }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+        } while Date() < deadline
+        if let lastError, Self.isAddressInUse(lastError) {
+            throw PortInUse(description: FileServerPlan.portBusyMessage(port: preferredPort,
+                                                                     owner: PortOwner.udp(port: preferredPort)))
+        }
+        throw lastError ?? Failure(description: "cannot listen on port \(preferredPort)")
+    }
+
+    private static func isAddressInUse(_ error: Error) -> Bool {
+        if case .posix(let code) = error as? NWError { return code == .EADDRINUSE }
+        return false
+    }
+
+    /// What a listener's state means to `listen` before it has answered.
+    enum ListenerOutcome: Equatable {
+        case ready
+        /// Never bound: cancel it and hand `start` the error (an
+        /// address-in-use is retried there until `tftpBindWindow`, then
+        /// `PortInUse`).
+        case failed(NWError)
+        case cancelled
+        case keepWaiting
+    }
+
+    /// `.waiting` with EADDRINUSE is the port taken, not a passing network
+    /// change: left alone (`default: break`) the listener waited there and
+    /// `start` never returned (6.0 (12) review) — it is a failure like
+    /// `.failed`. Any other `.waiting` (no network yet) keeps waiting.
+    static func listenerOutcome(_ state: NWListener.State) -> ListenerOutcome {
+        switch state {
+        case .ready: return .ready
+        case .failed(let error): return .failed(error)
+        case .waiting(let error) where isAddressInUse(error): return .failed(error)
+        case .cancelled: return .cancelled
+        default: return .keepWaiting
+        }
+    }
+
+    /// Listeners a stop cancelled that have not reported `.cancelled` yet,
+    /// across every TFTPServer object.
+    enum Retired {
+        private static let lock = NSLock()
+        /// Held strongly: a listener nobody holds never reports `.cancelled`
+        /// (the server object, and with it the listener, is dropped on stop).
+        nonisolated(unsafe) private static var closing: [ObjectIdentifier: (listener: NWListener, since: Date)] = [:]
+
+        static func add(_ listener: NWListener) {
+            // Only one that may still hold the port: a failed or cancelled
+            // listener reports nothing more and would hold up every start.
+            switch listener.state {
+            case .cancelled, .failed: return
+            default: break
+            }
+            lock.withLock { closing[ObjectIdentifier(listener)] = (listener, Date()) }
+        }
+        /// By identifier: the listener's own state handler calls this, and
+        /// capturing the listener there would keep it alive.
+        static func remove(_ id: ObjectIdentifier) {
+            _ = lock.withLock { closing.removeValue(forKey: id) }
+        }
+        /// A listener that never reports back is forgotten after 5 s.
+        static var busy: Bool {
+            lock.withLock {
+                closing = closing.filter { $0.value.since.timeIntervalSinceNow > -5 }
+                return !closing.isEmpty
             }
         }
-        return try await listen(on: Self.fallbackPort)
     }
 
     func stop() {
         queue.async { [self] in
-            listener?.cancel()
+            if let listener { Retired.add(listener); listener.cancel() }
             listener = nil
             for session in sessions.values { session.cancel() }
             sessions.removeAll()
@@ -86,10 +167,12 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                 }
                 // Resume exactly once across ready/failed/cancelled.
                 let resumed = Box(false)
+                let candidateID = ObjectIdentifier(candidate)
                 candidate.stateUpdateHandler = { [weak self] state in
+                    if case .cancelled = state { Retired.remove(candidateID) }
                     guard let self else { return }
                     self.queue.async {
-                        switch state {
+                        switch Self.listenerOutcome(state) {
                         case .ready:
                             if !resumed.value {
                                 resumed.value = true
@@ -98,6 +181,9 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                         case .failed(let error):
                             if !resumed.value {
                                 resumed.value = true
+                                // Never bound: not a listener to wait for
+                                // (the retry must not "retire" it).
+                                if self.listener === candidate { self.listener = nil }
                                 candidate.cancel()
                                 continuation.resume(throwing: error)
                             } else if self.listener === candidate {
@@ -109,7 +195,7 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                                 resumed.value = true
                                 continuation.resume(throwing: Failure(description: "server stopped before it began listening"))
                             }
-                        default:
+                        case .keepWaiting:
                             break
                         }
                     }
@@ -118,7 +204,7 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                     guard let self else { connection.cancel(); return }
                     self.queue.async { self.accept(connection) }
                 }
-                listener?.cancel()
+                if let old = listener { Retired.add(old); old.cancel() }
                 listener = candidate
                 candidate.start(queue: queue)
             }
@@ -742,5 +828,46 @@ nonisolated final class TFTPServer: @unchecked Sendable {
             }
             server.sessionEnded(self)
         }
+    }
+}
+
+/// Who holds a local UDP port, for "Port 69 is in use by …": every process
+/// this user may inspect (libproc, in-process, ~5 ms). A root-owned holder
+/// (launchd's tftpd socket) is not visible → nil, and the message says only
+/// "in use".
+nonisolated enum PortOwner {
+    static func udp(port: UInt16) -> String? {
+        let needed = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard needed > 0 else { return nil }
+        var pids = [pid_t](repeating: 0, count: Int(needed) / MemoryLayout<pid_t>.size + 64)
+        let got = pids.withUnsafeMutableBytes { proc_listpids(UInt32(PROC_ALL_PIDS), 0, $0.baseAddress, Int32($0.count)) }
+        guard got > 0 else { return nil }
+        for pid in pids.prefix(Int(got) / MemoryLayout<pid_t>.size) where pid > 0 {
+            if holds(pid: pid, udpPort: port) {
+                var name = [CChar](repeating: 0, count: 256)
+                guard proc_name(pid, &name, UInt32(name.count)) > 0 else { return nil }
+                let text = String(decoding: name.prefix { $0 != 0 }.map(UInt8.init(bitPattern:)), as: UTF8.self)
+                return text.isEmpty ? nil : text
+            }
+        }
+        return nil
+    }
+
+    private static func holds(pid: pid_t, udpPort port: UInt16) -> Bool {
+        let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard size > 0 else { return false }
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(size) / MemoryLayout<proc_fdinfo>.size + 8)
+        let got = fds.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count)) }
+        guard got > 0 else { return false }
+        for fd in fds.prefix(Int(got) / MemoryLayout<proc_fdinfo>.size) where fd.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
+            var info = socket_fdinfo()
+            let length = Int32(MemoryLayout<socket_fdinfo>.size)
+            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDSOCKETINFO, &info, length) == length else { continue }
+            let socket = info.psi
+            guard socket.soi_protocol == IPPROTO_UDP,
+                  socket.soi_family == AF_INET || socket.soi_family == AF_INET6 else { continue }
+            if UInt16(bigEndian: UInt16(truncatingIfNeeded: socket.soi_proto.pri_in.insi_lport)) == port { return true }
+        }
+        return false
     }
 }

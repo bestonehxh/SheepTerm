@@ -447,3 +447,21 @@ public nonisolated struct TypedLine: Sendable, Equatable {
         }
     }
 }
+
+/// What a held Return lets go of when it is released (the echo came in
+/// clean, or the user said Send): the Return itself and the keys typed
+/// before it went out, but NOT what was typed behind a later Return — those
+/// keys are a new line, and `show ver⏎reload⏎` typed fast used to send the
+/// `reload⏎` with nobody asked. `again` goes back through the gate as if
+/// just typed, so its first Return is checked (and held) like any other.
+public nonisolated enum HeldKeys {
+    /// Return, CR LF (LNM) or ⌃J — what the gate holds.
+    public static func isReturn(_ key: [UInt8]) -> Bool {
+        key == [0x0D] || key == [0x0D, 0x0A] || key == [0x0A]
+    }
+
+    public static func release(_ keys: [[UInt8]]) -> (now: [[UInt8]], again: [[UInt8]]) {
+        guard let first = keys.firstIndex(where: isReturn) else { return (keys, []) }
+        return (Array(keys[...first]), Array(keys[(first + 1)...]))
+    }
+}

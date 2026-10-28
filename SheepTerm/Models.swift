@@ -78,16 +78,14 @@ struct Host: Identifiable, Codable, Hashable {
     var port: Int = 22
     var username: String = ""
     var credentialID: UUID? = nil
-    /// Sub-heading inside the host's group — a floor, a rack, a role. A
-    /// LABEL, not a container: the group still holds a flat array of hosts
-    /// and the sidebar gathers the ones that share a label under a row of
-    /// their own, so there is nothing to keep in step and nothing to orphan.
-    /// One level: a host is either loose in its group or under one of the
-    /// group's sections.
-    ///
-    /// Optional so every file written before this build decodes unchanged,
-    /// and so a file written by this build opens in an older build (which
-    /// ignores the key and shows every host loose).
+    /// A subgroup PATH below the host's group ("Bldg 1/Floor 2") — in
+    /// TRANSIT only (6.0 (12)). **In the store it is always nil**: since
+    /// nested groups a host is filed by the group it sits in, and
+    /// `GroupTree.fileLabels` turns a label into that group on the way in.
+    /// Three things still carry one: a hosts.json from before nested groups
+    /// (a label was a one-level section, read as ONE name), a `.sheepterm`
+    /// export (`GroupTree.exportable` flattens a subtree into its top group),
+    /// and an Add Hosts / CSV row (the Group column).
     ///
     /// Deliberately NOT part of `connectionKey`/`sameConnection`: it says
     /// where a host is FILED, not what it is, so re-filing a host must not
@@ -384,49 +382,70 @@ struct HostGroup: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
     var hosts: [Host]
-    /// The group's own sub-headings, in the order the sidebar shows them.
+    /// The group this one is filed under; nil = a top-level group (6.0 (12)).
     ///
-    /// **The group owns the list; a host only points at one of its entries**
-    /// (`Host.section`). That is what makes an EMPTY heading possible — a row
-    /// you create first and drop hosts into — and what gives the headings an
-    /// order of their own instead of "wherever the first host happens to sit".
+    /// Groups stay ONE flat list (`HostStore.groups`) — Sync's records, the
+    /// merge-on-save union and every host lookup keep working on it — and the
+    /// tree is this pointer plus the list's order: siblings are ordered as
+    /// they appear in the list. Every reader of the shape goes through
+    /// `GroupTree`, which also repairs it (a cycle, a missing parent, too
+    /// deep) wherever a list arrives.
     ///
-    /// Never read this to draw or offer headings: read `displayedSections`,
-    /// which is the list plus any label a host carries that is not in it yet
-    /// (an old file, or a group edited by a build that predates the list).
+    /// Always WRITTEN, `null` included: a group without the key was written
+    /// by a build that predates nesting (or SheepTerm for Windows before it
+    /// caught up), and `HostStore` then keeps the parent it knew instead of
+    /// reading the gap as "moved to the top" (`GroupTree.parentlessIDs`).
+    var parentID: UUID? = nil
+    /// Subgroup PATHS below this group to create even with no host in them —
+    /// in TRANSIT only, like `Host.section`; **in the store it is always
+    /// empty**. Carried by a hosts.json from before nested groups (its
+    /// one-level section list, empty sections included) and by a `.sheepterm`
+    /// export (`GroupTree.exportable`).
     var sections: [String] = []
 
-    /// Written by hand for ONE reason, and it is `sections` alone: a
-    /// synthesized `init(from:)` throws `keyNotFound` for a missing key even
-    /// when the property has a default value (measured — see ARCHITECTURE
-    /// §11). Every hosts.json written before 4.1 (2) lacks `sections`, and a
-    /// throw there does not mean "no headings", it means the whole file is
-    /// unreadable — which quarantines it and starts the user's host list empty.
+    enum CodingKeys: String, CodingKey { case id, name, hosts, parentID, sections }
+
+    /// Written by hand: a synthesized `init(from:)` throws `keyNotFound` for
+    /// a missing key even when the property has a default value (measured —
+    /// see ARCHITECTURE §11), and neither `sections` (before 4.1 (2)) nor
+    /// `parentID` (before 6.0 (12)) is in every file. A throw there does not
+    /// mean "no headings", it means the whole file is unreadable — which
+    /// quarantines it and starts the user's host list empty.
     ///
     /// `id`, `name` and `hosts` stay REQUIRED. A group without an id is a file
     /// we do not understand, and inventing one would quietly split the user's
     /// data on the next merge; quarantining the file (as a host without an id
-    /// already does) leaves it for them to look at. `sections` is the
-    /// opposite: it is bookkeeping the hosts can rebuild
-    /// (`sanitizeHeadings`), so a missing key AND a malformed one both mean
-    /// "no list", never "unreadable file".
+    /// already does) leaves it for them to look at. The other two are the
+    /// opposite: a wrong-shaped `sections` is a list the hosts' labels rebuild,
+    /// and a wrong-shaped `parentID` is a group put at the top level — both
+    /// `try?`, never "unreadable file".
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         hosts = try container.decode([Host].self, forKey: .hosts)
-        // `try?`, not `try`: a `sections` that is there but is the WRONG SHAPE
-        // (a string, numbers, an object — a hand edit, another tool, a
-        // truncated sync) is a heading list we cannot read, and the headings
-        // are all recoverable from the hosts. Throwing would have quarantined
-        // the whole hosts.json over a field that is bookkeeping.
+        parentID = (try? container.decodeIfPresent(UUID.self, forKey: .parentID)) ?? nil
         sections = (try? container.decodeIfPresent([String].self, forKey: .sections)) ?? []
     }
 
-    init(id: UUID = UUID(), name: String, hosts: [Host], sections: [String] = []) {
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(hosts, forKey: .hosts)
+        if let parentID {
+            try container.encode(parentID, forKey: .parentID)
+        } else {
+            try container.encodeNil(forKey: .parentID)
+        }
+        if !sections.isEmpty { try container.encode(sections, forKey: .sections) }
+    }
+
+    init(id: UUID = UUID(), name: String, hosts: [Host], parentID: UUID? = nil, sections: [String] = []) {
         self.id = id
         self.name = name
         self.hosts = hosts
+        self.parentID = parentID
         self.sections = sections
     }
 }
@@ -485,6 +504,438 @@ extension HostGroup {
         return true
     }
 }
+
+/// The SHAPE of the group list (6.0 (12), nested groups) — pure, so the
+/// harness pins every rule without a store or a window.
+///
+/// The list stays flat: a group points at its parent (`HostGroup.parentID`)
+/// and siblings are ordered as they appear in the list. The top level is
+/// depth 1. A list that has not been through `repair` yet (straight off a
+/// disk, a sync, a backup) may hold a cycle or a dangling parent; every
+/// reader here stops at either instead of looping, and treats a group whose
+/// parent is missing as top level.
+enum GroupTree {
+    /// What the DATA may hold: Site › Building › Floor › Room. `repair`
+    /// files anything deeper at this level, so a list written by another
+    /// build, a sync or a backup with four levels loads as it is — never
+    /// flattened.
+    static let maxDepth = 4
+    /// What the USER may make (6.0 (12), design G): New Group…, a move, an
+    /// Add Hosts path, a `.sheepterm` / Share Link import build at most three
+    /// levels — one bar colour each (`levelColor`). A fourth level that
+    /// already exists stays, may move UP, and is never pushed deeper
+    /// (`canMove`).
+    static let userDepth = 3
+
+    /// Design G's bar in front of a group row, by level (1 = top level):
+    /// blue, teal, purple; a level-4 group (old data, a sync) takes level 3's.
+    /// One palette for both platforms' sidebars (dark only).
+    static let levelColors: [UInt32] = [0x4F9CF7, 0x3FB6A8, 0xA78BFA]
+    static func levelColor(depth: Int) -> UInt32 {
+        levelColors[max(0, min(depth, levelColors.count) - 1)]
+    }
+
+    /// The bars are DIM while the user is not working in the sidebar and in
+    /// full colour while they are (the user, 6.0 (12)): the pointer over it,
+    /// its list or search field focused, or a drag over it. No timers.
+    static func barsActive(pointerInside: Bool, focused: Bool, dragging: Bool) -> Bool {
+        pointerInside || focused || dragging
+    }
+    static let idleBarOpacity = 0.35
+    /// View → Group Colors / Settings → Sidebar (on unless set). Off = no bar
+    /// at all; the rows keep their places (the bar sits in the gutter).
+    static let groupColorsKey = "sidebarGroupColors"
+    static let groupColorsDefault = true
+    static func groupColorsShown(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: groupColorsKey) as? Bool ?? groupColorsDefault
+    }
+    /// A bar's opacity; level 0 (a row that is not a group) has none, and
+    /// none at all while Group Colors is off.
+    static func barOpacity(active: Bool, depth: Int, shown: Bool = true) -> Double {
+        !shown || depth < 1 ? 0 : active ? 1 : idleBarOpacity
+    }
+    /// The fade between the two, in seconds; none under Reduce Motion.
+    static func barFade(reduceMotion: Bool) -> Double { reduceMotion ? 0 : 0.18 }
+    /// Between the names of a path as TYPED — the Add Hosts Group column, a
+    /// `.sheepterm` label: "Bldg 1/Floor 2".
+    static let separator: Character = "/"
+    /// Between the names of a path as SHOWN — menus, ⌘K, summaries.
+    static let shownSeparator = " › "
+
+    // MARK: Reading
+
+    /// Each id's FIRST position: a list can carry an id twice (imports,
+    /// shares and restores copy ids) and the merge keeps the first.
+    static func positions(_ groups: [HostGroup]) -> [UUID: Int] {
+        var out: [UUID: Int] = [:]
+        for (at, group) in groups.enumerated() where out[group.id] == nil { out[group.id] = at }
+        return out
+    }
+
+    private static func childIDs(_ groups: [HostGroup]) -> [UUID: [UUID]] {
+        var out: [UUID: [UUID]] = [:]
+        for group in groups {
+            if let parent = group.parentID, parent != group.id { out[parent, default: []].append(group.id) }
+        }
+        return out
+    }
+
+    /// The children of `parent` in list order; nil = the top level, which
+    /// also takes every group whose parent is not in the list.
+    static func children(of parent: UUID?, in groups: [HostGroup]) -> [HostGroup] {
+        guard let parent else {
+            let ids = Set(groups.map(\.id))
+            return groups.filter { group in group.parentID.map { !ids.contains($0) || $0 == group.id } ?? true }
+        }
+        return groups.filter { $0.parentID == parent && $0.id != parent }
+    }
+
+    /// The chain above `id`, top level first, `id` itself not included.
+    static func ancestors(of id: UUID, in groups: [HostGroup]) -> [HostGroup] {
+        ancestors(of: id, in: groups, positions: positions(groups))
+    }
+
+    private static func ancestors(of id: UUID, in groups: [HostGroup], positions: [UUID: Int]) -> [HostGroup] {
+        var chain: [HostGroup] = []
+        var seen: Set<UUID> = [id]
+        var next = positions[id].flatMap { groups[$0].parentID }
+        while let parent = next, seen.insert(parent).inserted, let at = positions[parent] {
+            chain.append(groups[at])
+            next = groups[at].parentID
+        }
+        return chain.reversed()
+    }
+
+    /// 1 = top level.
+    static func depth(of id: UUID, in groups: [HostGroup]) -> Int {
+        ancestors(of: id, in: groups).count + 1
+    }
+
+    /// `id` and everything below it, in tree order (each group before its
+    /// children, siblings in list order).
+    static func subtreeIDs(of id: UUID, in groups: [HostGroup]) -> [UUID] {
+        let kids = childIDs(groups)
+        var out: [UUID] = []
+        var seen = Set<UUID>()
+        func walk(_ group: UUID) {
+            guard seen.insert(group).inserted else { return }
+            out.append(group)
+            for child in kids[group] ?? [] { walk(child) }
+        }
+        walk(id)
+        return out
+    }
+
+    /// The levels from `id` down to its deepest descendant, itself included
+    /// (a group with no subgroup is 1) — what a move must fit under the cap.
+    static func height(of id: UUID, in groups: [HostGroup]) -> Int {
+        let kids = childIDs(groups)
+        var seen = Set<UUID>()
+        func levels(_ group: UUID) -> Int {
+            guard seen.insert(group).inserted else { return 0 }
+            return 1 + ((kids[group] ?? []).map(levels).max() ?? 0)
+        }
+        return levels(id)
+    }
+
+    /// The whole tree in sidebar order, each group with its depth.
+    static func preorder(_ groups: [HostGroup]) -> [(group: HostGroup, depth: Int)] {
+        let kids = childIDs(groups)
+        let at = positions(groups)
+        var out: [(group: HostGroup, depth: Int)] = []
+        var seen = Set<UUID>()
+        func walk(_ id: UUID, _ depth: Int) {
+            guard let index = at[id], seen.insert(id).inserted else { return }
+            out.append((groups[index], depth))
+            for child in kids[id] ?? [] { walk(child, depth + 1) }
+        }
+        for root in children(of: nil, in: groups) { walk(root.id, 1) }
+        return out
+    }
+
+    /// The names from the top level down to `id`, itself included.
+    static func path(of id: UUID, in groups: [HostGroup]) -> [String] {
+        guard let at = positions(groups)[id] else { return [] }
+        return ancestors(of: id, in: groups).map(\.name) + [groups[at].name]
+    }
+
+    /// "Site A › Bldg 1 › Floor 2".
+    static func shownPath(of id: UUID, in groups: [HostGroup]) -> String {
+        path(of: id, in: groups).joined(separator: shownSeparator)
+    }
+
+    /// The path of `id` below `root` as typed ("Bldg 1/Floor 2"): "" for
+    /// `root` itself, nil when `id` is not under it.
+    static func relativePath(of id: UUID, below root: UUID, in groups: [HostGroup]) -> String? {
+        if id == root { return "" }
+        let chain = ancestors(of: id, in: groups)
+        guard let top = chain.firstIndex(where: { $0.id == root }),
+              let at = positions(groups)[id] else { return nil }
+        return (chain[(top + 1)...].map(\.name) + [groups[at].name]).joined(separator: String(separator))
+    }
+
+    /// Every subgroup below `root` as a typed path, in tree order — what the
+    /// Add Hosts Group column offers.
+    static func relativePaths(below root: UUID, in groups: [HostGroup]) -> [String] {
+        subtreeIDs(of: root, in: groups).dropFirst().compactMap { relativePath(of: $0, below: root, in: groups) }
+    }
+
+    /// Whether every group in `ids` may move under `parent` (nil = the top
+    /// level): never into itself or its own subtree, and its deepest
+    /// subgroup within `userDepth` once there — or, for a branch that
+    /// already reaches deeper (a fourth level from old data), no deeper than
+    /// it reaches now: such a branch can move up or sideways, never down.
+    static func canMove(_ ids: Set<UUID>, under parent: UUID?, in groups: [HostGroup]) -> Bool {
+        guard !ids.isEmpty else { return false }
+        var base = 0
+        if let parent {
+            guard positions(groups)[parent] != nil, !ids.contains(parent),
+                  !ancestors(of: parent, in: groups).contains(where: { ids.contains($0.id) }) else { return false }
+            base = depth(of: parent, in: groups)
+        }
+        return ids.allSatisfy { id in
+            let levels = height(of: id, in: groups)
+            let bottom = base + levels
+            let bottomNow = depth(of: id, in: groups) + levels - 1
+            return bottom <= maxDepth && (bottom <= userDepth || bottom <= bottomNow)
+        }
+    }
+
+    /// Whether the user may make a NEW subgroup under `parent`: not below
+    /// level `userDepth`.
+    static func canAddChild(to parent: UUID, in groups: [HostGroup]) -> Bool {
+        positions(groups)[parent] != nil && depth(of: parent, in: groups) < userDepth
+    }
+
+    /// A typed path as its names: split on `/`, each cleaned the way a group
+    /// name is, empty ones dropped ("Bldg 1//Floor 2 " → ["Bldg 1", "Floor 2"]).
+    static func components(_ path: String) -> [String] {
+        path.split(separator: separator).map { HostStore.cleanGroupName(String($0)) }.filter { !$0.isEmpty }
+    }
+
+    // MARK: Repairing
+
+    /// Puts right whatever shape a list arrived in — every load, merge,
+    /// import and restore runs it — and says whether anything moved. Nothing
+    /// is ever dropped:
+    /// - a parent that is the group itself, or is not in the list → top level;
+    /// - a CYCLE (two Macs moved A under B and B under A before they synced)
+    ///   → broken at the member with the smallest id, which goes to the top
+    ///   level — the same member on every Mac, so they agree without talking;
+    /// - deeper than `maxDepth` → filed under its ancestor at `maxDepth − 1`,
+    ///   i.e. at the deepest level allowed (its own subgroups follow on the
+    ///   next pass).
+    @discardableResult
+    static func repair(_ groups: inout [HostGroup]) -> Bool {
+        var changed = false
+        let ids = Set(groups.map(\.id))
+        for index in groups.indices {
+            if let parent = groups[index].parentID, parent == groups[index].id || !ids.contains(parent) {
+                groups[index].parentID = nil
+                changed = true
+            }
+        }
+        while let victim = cycleMember(groups) {
+            groups[positions(groups)[victim]!].parentID = nil
+            changed = true
+        }
+        while true {
+            let at = positions(groups)
+            var moved = false
+            for index in groups.indices where at[groups[index].id] == index {
+                let chain = ancestors(of: groups[index].id, in: groups, positions: at)
+                guard chain.count >= maxDepth else { continue }
+                groups[index].parentID = chain[maxDepth - 2].id
+                moved = true
+            }
+            guard moved else { break }
+            changed = true
+        }
+        return changed
+    }
+
+    /// The smallest id on some cycle, or nil when there is none.
+    private static func cycleMember(_ groups: [HostGroup]) -> UUID? {
+        let at = positions(groups)
+        var reachesTop = Set<UUID>()
+        for start in groups {
+            var chain: [UUID] = []
+            var onChain = Set<UUID>()
+            var current: UUID? = start.id
+            while let id = current, !reachesTop.contains(id) {
+                guard onChain.insert(id).inserted else {
+                    let loop = chain[chain.firstIndex(of: id)!...]
+                    return loop.min { $0.uuidString < $1.uuidString }
+                }
+                chain.append(id)
+                current = at[id].flatMap { groups[$0].parentID }
+            }
+            reachesTop.formUnion(chain)
+        }
+        return nil
+    }
+
+    /// The ids of the groups whose record in a hosts.json has NO `parentID`
+    /// key at all — written by a build that predates nested groups. A
+    /// `"parentID": null` is a top-level group and is not in here.
+    static func parentlessIDs(in data: Data) -> Set<UUID> {
+        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return Set(list.compactMap { record in
+            record["parentID"] == nil ? (record["id"] as? String).flatMap(UUID.init(uuidString:)) : nil
+        })
+    }
+
+    // MARK: Labels → subgroups
+
+    /// A STABLE id for the subgroup a label names below `parent`: two Macs
+    /// migrating the same old hosts.json — or one re-reading it at every
+    /// launch until the next save — meet in ONE subgroup, never two.
+    /// FNV-1a over two lanes: not cryptography, an id that must agree.
+    static func subgroupID(parent: UUID, key: String) -> UUID {
+        let text = Array("\(parent.uuidString)/\(key)".utf8)
+        func lane(_ seed: UInt64) -> UInt64 {
+            var hash = seed
+            for byte in text {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x0000_0100_0000_01B3
+            }
+            return hash
+        }
+        let low = lane(0xCBF2_9CE4_8422_2325), high = lane(0x8422_2325_CBF2_9CE4)
+        var b = [UInt8](repeating: 0, count: 16)
+        for k in 0..<8 {
+            b[k] = UInt8(truncatingIfNeeded: low >> (8 * UInt64(k)))
+            b[8 + k] = UInt8(truncatingIfNeeded: high >> (8 * UInt64(k)))
+        }
+        b[6] = (b[6] & 0x0F) | 0x80    // version 8: vendor-defined
+        b[8] = (b[8] & 0x3F) | 0x80    // RFC 4122 variant
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                           b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
+
+    /// Turns the TRANSIT labels into subgroups, on every group that carries
+    /// any (`HostGroup.sections`, `Host.section`): each label names a
+    /// subgroup, every host with a label moves to the END of its subgroup in
+    /// its own order, and nothing carries a label afterwards. Declared labels
+    /// come first, so an EMPTY one still becomes a subgroup and the old
+    /// section order is the new sibling order.
+    ///
+    /// A step of a label takes the child that READS the same
+    /// (`HostStore.headingKey`: case and spacing folded), then the group with
+    /// that step's stable id wherever it sits now (a migrated subgroup the
+    /// user has since moved), and only then makes one — appended, so it is the
+    /// last of its siblings. A step is only MADE down to level `makeUpTo`
+    /// (`userDepth` for whatever the user brings in — a `.sheepterm`, Add
+    /// Hosts, a Share Link; `maxDepth` for the load-time pass); an existing
+    /// subgroup is still followed down to `maxDepth` (what exists is kept).
+    /// A path deeper than that files into the deepest group reached.
+    ///
+    /// `splitPaths`: a label is a PATH ("Bldg 1/Floor 2") — a `.sheepterm`
+    /// and an Add Hosts row. false: it is ONE name — a hosts.json written
+    /// before nested groups, whose one-level sections could contain a "/".
+    ///
+    /// Linear: lookups go through maps kept up to date as groups are made. A
+    /// hostile file with 20,000 declared sections runs this at LOAD, and a
+    /// scan per label was quadratic in it.
+    @discardableResult
+    static func fileLabels(_ groups: inout [HostGroup], splitPaths: Bool, makeUpTo limit: Int) -> Bool {
+        let owners = groups.filter { group in
+            !group.sections.isEmpty || group.hosts.contains { $0.section != nil }
+        }.map(\.id)
+        guard !owners.isEmpty else { return false }
+        var at = positions(groups)
+        var childByKey: [UUID: [String: UUID]] = [:]
+        for group in groups {
+            guard let parent = group.parentID, parent != group.id, let key = HostStore.headingKey(group.name),
+                  childByKey[parent]?[key] == nil else { continue }
+            childByKey[parent, default: [:]][key] = group.id
+        }
+        var depthOf: [UUID: Int] = [:]
+        func depth(_ id: UUID) -> Int {
+            if let known = depthOf[id] { return known }
+            var chain: [UUID] = []
+            var seen = Set<UUID>()
+            var current: UUID? = id
+            var base = 0
+            while let node = current, seen.insert(node).inserted {
+                if let known = depthOf[node] { base = known; break }
+                chain.append(node)
+                current = at[node].flatMap { groups[$0].parentID }
+            }
+            for (offset, node) in chain.reversed().enumerated() { depthOf[node] = base + offset + 1 }
+            return depthOf[id] ?? 1
+        }
+        func resolve(_ names: [String], below root: UUID) -> UUID {
+            var current = root
+            for name in names {
+                guard depth(current) < maxDepth else { break }
+                guard let key = HostStore.headingKey(name) else { continue }
+                if let child = childByKey[current]?[key] {
+                    current = child
+                    continue
+                }
+                guard depth(current) < min(limit, maxDepth) else { break }
+                let id = subgroupID(parent: current, key: key)
+                if at[id] == nil {
+                    groups.append(HostGroup(id: id, name: name, hosts: [], parentID: current))
+                    at[id] = groups.count - 1
+                    childByKey[current, default: [:]][key] = id
+                    depthOf[id] = depth(current) + 1
+                }
+                current = id
+            }
+            return current
+        }
+        for owner in owners {
+            guard let home = at[owner] else { continue }
+            let labels = groups[home].displayedSections
+            groups[home].sections = []
+            var target: [String: UUID] = [:]
+            for label in labels {
+                guard let key = HostStore.headingKey(label), target[key] == nil else { continue }
+                let names = splitPaths ? components(label) : [HostStore.cleanGroupName(label)].filter { !$0.isEmpty }
+                guard !names.isEmpty else { continue }
+                target[key] = resolve(names, below: owner)
+            }
+            var staying: [Host] = []
+            var moving: [(to: UUID, host: Host)] = []
+            for var host in groups[home].hosts {
+                let key = HostStore.headingKey(host.sectionName)
+                host.section = nil
+                if let key, let to = target[key], to != owner {
+                    moving.append((to, host))
+                } else {
+                    staying.append(host)
+                }
+            }
+            groups[home].hosts = staying
+            for move in moving {
+                if let to = at[move.to] { groups[to].hosts.append(move.host) }
+            }
+        }
+        return true
+    }
+
+    /// A subtree as ONE group, for a `.sheepterm`: the top group's own hosts,
+    /// then each subgroup's in tree order labelled with its path below the
+    /// top, and every subgroup's path in `sections` so an empty one travels
+    /// too. This build rebuilds the subtree from it (`fileLabels(splitPaths:
+    /// true)`); an older one shows the paths as one-level sections. A name
+    /// with a "/" in it comes back split — the one thing the format loses.
+    static func exportable(_ id: UUID, in groups: [HostGroup]) -> HostGroup? {
+        let at = positions(groups)
+        guard let top = at[id] else { return nil }
+        var out = HostGroup(id: id, name: groups[top].name,
+                            hosts: groups[top].hosts.map { host in var copy = host; copy.section = nil; return copy })
+        for sub in subtreeIDs(of: id, in: groups).dropFirst() {
+            guard let index = at[sub], let path = relativePath(of: sub, below: id, in: groups) else { continue }
+            out.sections.append(path)
+            out.hosts += groups[index].hosts.map { host in var copy = host; copy.section = path; return copy }
+        }
+        return out
+    }
+}
+
 
 /// `port` is a plain `Int` on disk and it means two different things: a TCP
 /// port for `.ssh` and the BAUD RATE for `.serial`. Nothing on the way in
@@ -785,7 +1236,9 @@ enum ConfigurationHygiene {
             // second that already WAS "Lab A". This way every order ends with
             // distinct names, and an already-clean group keeps its name. A
             // kept-raw name is not counted: nothing about it changed.
-            let taken = groups.indices.contains { $0 != index && groups[$0].name == cleaned }
+            let taken = groups.indices.contains {
+                $0 != index && groups[$0].parentID == groups[index].parentID && groups[$0].name == cleaned
+            }
             if cleaned != groups[index].name, !taken {
                 groups[index].name = cleaned
                 report.shortenedNames += 1
@@ -932,6 +1385,11 @@ enum ConfigurationHygiene {
             do {
                 var groups = try JSONDecoder().decode([HostGroup].self, from: data)
                 report = report + sanitize(&groups, emptyGroupName: String(localized: "Untitled Group"))
+                // A backup from before nested groups: its sections become
+                // subgroups (one name each, as the load pass reads them), and
+                // whatever shape the file had is repaired before it lands.
+                GroupTree.fileLabels(&groups, splitPaths: false, makeUpTo: GroupTree.maxDepth)
+                GroupTree.repair(&groups)
                 files["hosts.json"] = try encoder.encode(groups)
             } catch {
                 throw HygieneError.undecodable(name: "hosts.json", reason: error.localizedDescription)
@@ -1319,8 +1777,10 @@ enum BulkHostParser {
         case name
         case address
         case credential
-        /// The host's own sub-heading inside its group (`Host.section`).
-        /// Per ROW: two hosts of one paste can go under two headings.
+        /// The GROUP column (6.0 (12); "Section" before nested groups): a
+        /// subgroup path below the group the rows are added to, "Bldg 1/Floor
+        /// 2", carried as `Host.section` until `applyImport` files it. Per
+        /// ROW: two hosts of one paste can go into two subgroups.
         case section
     }
 
@@ -1711,12 +2171,16 @@ enum BulkHostParser {
         "host / ip": .address, "host/ip": .address,
         "host": .address, "ip": .address, "address": .address,
         "credential": .credential,
-        "section": .section,
+        // "Section" is what this column was called before nested groups: a
+        // sheet saved then still imports. "Subgroup" is what the grid's own
+        // column header says now — a paste copied out of the sheet must be
+        // readable back in, refused under the name the user just saw.
+        "group": .section, "section": .section, "subgroup": .section,
     ]
 
     /// What the alert offers when a header is refused.
     static let acceptedHeadingSummary =
-        "Name, Host / IP, Credential, Section (any order; Host, IP or Address also mean Host / IP)"
+        "Name, Host / IP, Credential, Group (any order; Host, IP or Address also mean Host / IP; Section or Subgroup also means Group)"
 
     /// Is this row a HEADER at all? A data row always carries a TARGET, so a
     /// first line with no address anywhere in it is a header — right or
@@ -2521,6 +2985,57 @@ enum BulkHostParser {
         return (count, labels.count)
     }
 
+    /// The Add Hosts answer, filed the way the STORE will file it. The label
+    /// count above cannot see `GroupTree.fileLabels`' depth rule: a labeled
+    /// row into a group already at the user's cap (`GroupTree.userDepth`) stays loose in that group, and the
+    /// status line claimed it was filed. So the new rows are filed over a
+    /// copy of the real tree (`splitPaths: true`, exactly `applyImport`'s
+    /// door) and only the hosts that actually moved into a subgroup — and
+    /// the subgroups that received one — are counted.
+    static func filedSummary(hosts: [Host], existing: [Host], declared: [String] = [],
+                             groups tree: [HostGroup], root: UUID?) -> (hosts: Int, sections: Int) {
+        var byKey: [String: String] = [:]
+        for name in declared + existing.compactMap(\.sectionName) {
+            guard let key = HostStore.headingKey(name), byKey[key] == nil else { continue }
+            byKey[key] = name
+        }
+        let seeded = hosts.map { host -> Host in
+            var copy = host
+            guard let asked = host.section,
+                  let key = HostStore.headingKey(ConfigurationHygiene.sanitizedName(asked)) else {
+                copy.section = nil
+                return copy
+            }
+            copy.section = byKey[key] ?? ConfigurationHygiene.cleanedName(asked)
+            return copy
+        }
+        let taken = Set(existing.map(\.connectionKey))
+        let rows = snappedHostsWithinBatch(seeded).filter { !taken.contains($0.connectionKey) }
+        var sim = tree
+        let home: UUID
+        if let root, let index = sim.firstIndex(where: { $0.id == root }) {
+            sim[index].sections = declared
+            sim[index].hosts.append(contentsOf: rows)
+            home = root
+        } else {
+            // ".new": the sheet makes a fresh top-level group, so the paths
+            // start from depth 1 and never hit the cap first.
+            let fresh = HostGroup(name: "landing", hosts: rows, sections: declared)
+            home = fresh.id
+            sim.append(fresh)
+        }
+        GroupTree.fileLabels(&sim, splitPaths: true, makeUpTo: GroupTree.userDepth)
+        let stayed = Set((sim.first { $0.id == home }?.hosts ?? []).map(\.id))
+        let movedIDs = Set(rows.map(\.id)).subtracting(stayed)
+        var subgroups = Set<UUID>()
+        for group in sim where group.id != home {
+            if group.hosts.contains(where: { movedIDs.contains($0.id) }) {
+                subgroups.insert(group.id)
+            }
+        }
+        return (movedIDs.count, subgroups.count)
+    }
+
     /// One table row → one `Host`, or nil when the address is not a usable
     /// target (the sheet counts those and says so rather than landing a host
     /// that can never connect).
@@ -2634,25 +3149,6 @@ final class HostStore: ObservableObject {
     /// newer recents.json on the next merge. Cleared by `noteRecent`, because
     /// connecting to that target again is the user asking for it back.
     private var deletedRecentKeys = Set<String>()
-    /// The same tombstone for HEADINGS, keyed `"<groupID>/<headingKey>"`.
-    ///
-    /// A heading is a row of its group's list, and "on disk, not in memory"
-    /// reads as "another copy added it" — which is exactly what a heading this
-    /// copy just removed (or renamed) looks like once any other copy saves
-    /// anything. Without this, A renaming Alpha → Beta and B saving an
-    /// unrelated edit put "Alpha" back, with A's host under it, and left
-    /// "Beta" behind as a phantom empty row.
-    ///
-    /// Two rules keep it coherent:
-    ///  - a heading that is DECLARED in memory again is not tombstoned any
-    ///    more (`pruneHeadingTombstones`, run before every merge) — that is
-    ///    how a deliberate re-creation by any route survives, without every
-    ///    declaring call site having to remember to clear it;
-    ///  - a host arriving from disk UNDER a tombstoned label keeps its label
-    ///    and lifts the tombstone: the other copy filed it there after we
-    ///    removed the heading, so their action is the newer one.
-    private var deletedHeadingKeys = Set<String>()
-
     /// Set when a corrupt file was found at launch: blocks automatic
     /// writes until the first explicit user mutation, so a corrupt
     /// original is never overwritten by empty in-memory state.
@@ -2696,7 +3192,24 @@ final class HostStore: ObservableObject {
     init() {
         let groupsLoad = Self.loadList([HostGroup].self, from: Self.fileURL)
         var loadedGroups = groupsLoad.value
-        Self.materialiseHeadings(&loadedGroups)
+        // The same old-build gap `reloadFromDisk` guards: a record with NO
+        // `parentID` key is "I don't know", not "top level". At launch there
+        // is no in-memory list to keep, but the rolling `.bak` this copy last
+        // wrote still holds the tree, so the parents come from there. Best
+        // effort: a group the `.bak` never saw stays top level, and one moved
+        // since its save gets the older parent — both still beat the first
+        // edit writing `parentID: null` and flattening the subtree on every
+        // Mac. The recovered list then differs from disk, which keeps
+        // `syncSnapshot` from re-uploading the parentless file.
+        if let data = try? Data(contentsOf: Self.fileURL) {
+            let parentless = GroupTree.parentlessIDs(in: data)
+            if !parentless.isEmpty, groupsLoad.warning == nil,
+               let bakData = try? Data(contentsOf: Self.fileURL.appendingPathExtension("bak")),
+               let known = try? JSONDecoder().decode([HostGroup].self, from: bakData), !known.isEmpty {
+                Self.keepKnownParents(&loadedGroups, parentless: parentless, known: known)
+            }
+        }
+        Self.materialise(&loadedGroups)
         groups = loadedGroups
         let recentsLoad = Self.loadList([Host].self, from: Self.recentsURL)
         recents = Self.cleanedRecents(recentsLoad.value)
@@ -2775,7 +3288,15 @@ final class HostStore: ObservableObject {
         let groupsLoad = Self.loadList([HostGroup].self, from: Self.fileURL)
         let recentsLoad = Self.loadList([Host].self, from: Self.recentsURL)
         var loadedGroups = groupsLoad.value
-        Self.materialiseHeadings(&loadedGroups)
+        // A group whose record has NO `parentID` key was written by a build
+        // that predates nested groups — another Mac on an older build, or
+        // SheepTerm for Windows, through Sync. That is "I don't know", not
+        // "top level": keep the parent this copy knew, or one edit there
+        // would flatten the subtree on every Mac.
+        if let data = try? Data(contentsOf: Self.fileURL) {
+            Self.keepKnownParents(&loadedGroups, parentless: GroupTree.parentlessIDs(in: data), known: groups)
+        }
+        Self.materialise(&loadedGroups)
         groups = loadedGroups
         recents = Self.cleanedRecents(recentsLoad.value)
         let warnings = [groupsLoad.warning, recentsLoad.warning].compactMap { $0 }
@@ -2793,29 +3314,40 @@ final class HostStore: ObservableObject {
         deletedHostIDs.removeAll()
         deletedGroupIDs.removeAll()
         deletedRecentKeys.removeAll()
-        deletedHeadingKeys.removeAll()
     }
 
-    /// Writes each group's heading list from what the group DISPLAYS, in
-    /// memory, on every load.
-    ///
-    /// Every hosts.json written before 4.1 (2) carries labels on hosts and no
-    /// list at all, so all of a group's headings are "implied". A method that
-    /// appends to `sections` then put its heading FIRST in a group whose other
-    /// headings were not in the list yet: a renamed heading jumped to the top,
-    /// and New Section… landed above the existing rows. One pass here and the
-    /// list always describes what is on screen.
+    /// The load-time pass, in memory, on every load: the transit labels of a
+    /// hosts.json from before nested groups become subgroups (one-level
+    /// sections, so a label is ONE name — `GroupTree.fileLabels`), names are
+    /// cleaned, and the tree is repaired (`GroupTree.repair`).
     ///
     /// No `save()` and no `noteUserMutation()`: reading a file is not the
     /// user's change, and a file that was quarantined stays write-suppressed
-    /// until they make one. The list reaches disk with their next edit —
-    /// which is what a restore's hygiene would have written anyway.
-    private static func materialiseHeadings(_ groups: inout [HostGroup]) {
+    /// until they make one. The new shape reaches disk with their next edit;
+    /// until then every launch derives the same subgroups with the same ids
+    /// (`GroupTree.subgroupID`), so nothing forks in between.
+    private static func materialise(_ groups: inout [HostGroup]) {
         for index in groups.indices {
+            // Cleans and folds the labels first, so two spellings of one old
+            // section become one subgroup.
             _ = ConfigurationHygiene.sanitizeHeadings(&groups[index])
             cleanHostNames(&groups[index].hosts)
         }
+        GroupTree.fileLabels(&groups, splitPaths: false, makeUpTo: GroupTree.maxDepth)
         cleanGroupNames(&groups)
+        GroupTree.repair(&groups)
+    }
+
+    /// See `reloadFromDisk`: `parentless` groups take the parent `known` gave
+    /// them, while that parent is still in the list.
+    static func keepKnownParents(_ groups: inout [HostGroup], parentless: Set<UUID>, known: [HostGroup]) {
+        guard !parentless.isEmpty else { return }
+        let ids = Set(groups.map(\.id))
+        var parentOf: [UUID: UUID] = [:]
+        for group in known { if let parent = group.parentID, parentOf[group.id] == nil { parentOf[group.id] = parent } }
+        for index in groups.indices where parentless.contains(groups[index].id) {
+            if let parent = parentOf[groups[index].id], ids.contains(parent) { groups[index].parentID = parent }
+        }
     }
 
     /// Host NAMES saved before rounds 10–11 can carry U+2028/U+2029 (Edit
@@ -2851,7 +3383,7 @@ final class HostStore: ObservableObject {
     /// the group differently.
     ///
     /// `cleanGroupName`, and ONLY when the result is non-empty, differs, and
-    /// no other group already has that exact name: the uniqueness rule
+    /// no SIBLING already has that exact name: the uniqueness rule
     /// `addGroup`/`renameGroup` enforce. On a collision the raw name stays —
     /// renaming one group onto another's name at launch would make them
     /// indistinguishable in every picker, which is worse than a name that
@@ -2860,7 +3392,9 @@ final class HostStore: ObservableObject {
         for index in groups.indices {
             let cleaned = cleanGroupName(groups[index].name)
             guard !cleaned.isEmpty, cleaned != groups[index].name,
-                  !groups.indices.contains(where: { $0 != index && groups[$0].name == cleaned })
+                  !groups.indices.contains(where: {
+                      $0 != index && groups[$0].parentID == groups[index].parentID && groups[$0].name == cleaned
+                  })
             else { continue }
             groups[index].name = cleaned
         }
@@ -2889,32 +3423,6 @@ final class HostStore: ObservableObject {
             cleanHostName(&copy)
             return copy
         }
-    }
-
-    /// A heading tombstone's key: the group and the FOLDED heading, so
-    /// "Floor 2" and "floor  2" are the same row being remembered.
-    private static func headingTombstone(group: UUID, label: String) -> String? {
-        guard let key = headingKey(label) else { return nil }
-        return "\(group.uuidString)/\(key)"
-    }
-
-    /// Drops tombstones for headings this copy has since declared again.
-    ///
-    /// ONE rule instead of a `remove` at every declaring call site: after any
-    /// user write, what the group declares is the truth, and a tombstone for a
-    /// row that is back is stale by definition. Run before the merge union,
-    /// which is the only reader.
-    private func pruneHeadingTombstones() {
-        guard !deletedHeadingKeys.isEmpty else { return }
-        var live = Set<String>()
-        for group in groups {
-            for label in group.displayedSections {
-                if let key = Self.headingTombstone(group: group.id, label: label) {
-                    live.insert(key)
-                }
-            }
-        }
-        deletedHeadingKeys.subtract(live)
     }
 
     /// Every public mutator calls this first — the user's own change is
@@ -3007,7 +3515,6 @@ final class HostStore: ObservableObject {
     }
 
     private func mergeGroupsFromDiskIfNeeded() {
-        pruneHeadingTombstones()
         guard let diskMtime = Self.mtime(of: Self.fileURL),
               knownGroupsMtime == nil || diskMtime > knownGroupsMtime! else { return }
         guard let data = try? Data(contentsOf: Self.fileURL),
@@ -3038,78 +3545,26 @@ final class HostStore: ObservableObject {
             guard let diskGroup = diskGroupsByID[merged[i].id] else { continue }
             // Deduped by id for the same reason the group merge below is: a
             // disk group can carry the same host id twice, and appending both
-            // puts two rows with one identity into the outline.
-            // Adopted hosts get their LABEL cleaned on the way in — the same
-            // pass `sanitizeHeadings` would give it at the next launch. A raw
-            // label is a heading as soon as the host carries it
-            // (`displayedSections` reads the hosts too), so leaving it raw put
-            // a second, visually identical row beside our cleaned one until
-            // that launch.
+            // puts two rows with one identity into the outline. A host that
+            // arrives with a LABEL (the other copy is a build from before
+            // nested groups) keeps it here and is filed by the pass below.
             let hostsOnlyOnDisk = diskGroup.hosts.filter { seenHostIDs.insert($0.id).inserted }
                 .map { host -> Host in
                     var copy = host
                     // The NAME too, with the load pass's own rule — an adopted
                     // host was otherwise kept raw in memory AND written raw.
                     Self.cleanHostName(&copy)
-                    guard let raw = host.section else { return copy }
-                    let cleaned = ConfigurationHygiene.cleanedName(raw)
-                    copy.section = cleaned.isEmpty ? nil : cleaned
                     return copy
                 }
             if !hostsOnlyOnDisk.isEmpty {
                 merged[i].hosts.append(contentsOf: hostsOnlyOnDisk)
                 changed = true
             }
-            // The HEADING LIST is merged too, the way `applyImport(.merge)`
-            // does it: ours first in our order, then the disk's entries we do
-            // not have. Without this, the other copy's work on its headings —
-            // an EMPTY section, a reorder — was overwritten by whatever this
-            // copy happened to hold, and an empty section has no host to bring
-            // it back the way the host union brings a new host back.
-            //
-            // Ours-first means the ORDER is this copy's; two copies that both
-            // reorder the same group cannot both win, and the one saving is
-            // the one the user is looking at.
-            var keys = Set(merged[i].sections.compactMap { Self.headingKey($0) })
-            for name in diskGroup.sections {
-                // CLEANED before it is keyed or kept, exactly as
-                // `applyImport(.merge)` does: `headingKey` folds case and
-                // whitespace but does not strip control characters or cap at
-                // 64, so a raw disk entry ("A" × 200, or "Floor\u{1} 2")
-                // keyed as a DIFFERENT heading from our cleaned spelling of
-                // it — a second, visually identical row, in memory and in the
-                // file we then wrote, until the next launch folded it.
-                let cleaned = ConfigurationHygiene.cleanedName(name)
-                guard let key = Self.headingKey(cleaned), keys.insert(key).inserted else { continue }
-                // …unless THIS copy removed or renamed that heading. Adding it
-                // back is the heading twin of resurrecting a deleted host, and
-                // it took the hosts with it: the row reappeared with our host
-                // under its old name while the new name sat empty beside it.
-                guard !deletedHeadingKeys.contains("\(merged[i].id.uuidString)/\(key)") else {
-                    keys.remove(key)
-                    continue
-                }
-                merged[i].sections.append(cleaned)
-                changed = true
-            }
-            // And the labels of the hosts that just arrived: after any write
-            // a label on a host is in its group's list (see
-            // `materialiseHeadings`), and these came in behind that rule.
-            for host in hostsOnlyOnDisk {
-                // Same cleaning as above — the label is a heading as soon as
-                // it is declared, and a raw one declares a duplicate row.
-                // (The host's own copy of it is cleaned by the next
-                // `sanitizeHeadings`; what must not happen is the LIST
-                // carrying two spellings of one heading.)
-                guard let label = host.sectionName.map({
-                          ConfigurationHygiene.cleanedName($0)
-                      }), let key = Self.headingKey(label),
-                      keys.insert(key).inserted else { continue }
-                // A host arriving UNDER a heading we removed lifts the
-                // tombstone: the other copy filed it there after our removal,
-                // so theirs is the newer action and the row is wanted again.
-                deletedHeadingKeys.remove("\(merged[i].id.uuidString)/\(key)")
-                merged[i].sections.append(label)
+            // An old build's heading list (its empty sections) comes along so
+            // the pass below can make subgroups of it. Our own `parentID`
+            // wins, like every other attribute of a group both sides hold.
+            if !diskGroup.sections.isEmpty {
+                merged[i].sections = diskGroup.sections
                 changed = true
             }
         }
@@ -3118,7 +3573,8 @@ final class HostStore: ObservableObject {
         // id twice (imports, LAN shares and restores all copy ids), and
         // appending both would put two groups with one id into `groups` —
         // colliding SwiftUI row identities, the same class of bug that made
-        // recents get a fresh id per entry.
+        // recents get a fresh id per entry. Its `parentID` comes with it; a
+        // parent this copy deleted leaves it at the top level (`repair`).
         var seenGroupIDs = knownIDs.union(deletedGroupIDs)
         let groupsOnlyOnDisk = diskGroups.filter { seenGroupIDs.insert($0.id).inserted }
             .map { group -> HostGroup in
@@ -3126,27 +3582,23 @@ final class HostStore: ObservableObject {
                 // elsewhere or have deleted — same rule as above.
                 var g = group
                 g.hosts = g.hosts.filter { seenHostIDs.insert($0.id).inserted }
-                // A whole group arriving from disk gets the load-time pass —
-                // all of it: its heading list and its hosts' labels are
-                // cleaned and reconciled (so it cannot bring two spellings of
-                // one heading with it), and its hosts' names are cleaned.
-                _ = ConfigurationHygiene.sanitizeHeadings(&g)
                 Self.cleanHostNames(&g.hosts)
                 return g
             }
         if !groupsOnlyOnDisk.isEmpty {
             merged.append(contentsOf: groupsOnlyOnDisk)
-            // …and its NAME, under the load pass's collision rule, checked
-            // against every group now in the list. For OUR groups this is a
-            // no-op with one exception: a name kept raw at load because of a
-            // collision that has since gone away (the other group was renamed)
-            // is cleaned HERE — one launch early — and written with this save.
-            // Harmless: a group's identity is its id everywhere, never its name.
-            Self.cleanGroupNames(&merged)
             changed = true
         }
 
         if changed {
+            // The load pass over the result: labels an old build left become
+            // subgroups, names are cleaned (a name kept raw at load for a
+            // collision that has since gone away is cleaned HERE — one launch
+            // early — and written with this save; harmless, a group's
+            // identity is its id everywhere), and the tree is repaired — the
+            // other copy may have moved a group under one this copy moved
+            // under it.
+            Self.materialise(&merged)
             groups = merged
         }
     }
@@ -3289,17 +3741,39 @@ final class HostStore: ObservableObject {
 
     // MARK: Group management
 
-    func addGroup(named name: String) {
+    /// A new group at the END of `parent`'s subgroups (nil = the top level).
+    /// Returns its id, or nil when refused: an empty name, a name a SIBLING
+    /// already has (two "Floor 2" under different buildings are fine — one
+    /// building with two is not), a parent that is gone, or one already at
+    /// `GroupTree.userDepth` (the user's cap; data may hold `maxDepth`).
+    @discardableResult
+    func addGroup(named name: String, parent: UUID? = nil) -> UUID? {
         // Hygiene here, not only on the import path: a group name becomes a
         // sidebar row, a menu item and part of a `.sheepterm` file name, and
         // this door was the one that took whatever was typed.
         let trimmed = Self.cleanGroupName(name)
-        guard !trimmed.isEmpty, !groups.contains(where: { $0.name == trimmed }) else { return }
+        guard !trimmed.isEmpty, !nameTaken(trimmed, under: parent, except: nil) else { return nil }
+        if let parent, !GroupTree.canAddChild(to: parent, in: groups) { return nil }
         // After the guard, like `renameGroup`: a rejected add is not a user
         // change and must not re-arm writes over a quarantined file.
         noteUserMutation()
-        groups.append(HostGroup(name: trimmed, hosts: []))
+        let group = HostGroup(name: trimmed, hosts: [], parentID: parent)
+        groups.append(group)
         save()
+        return group.id
+    }
+
+    /// Whether a sibling under `parent` (other than `except`) has exactly
+    /// this name — the one uniqueness rule for group names.
+    func nameTaken(_ name: String, under parent: UUID?, except: UUID?) -> Bool {
+        GroupTree.children(of: parent, in: groups).contains { $0.id != except && $0.name == name }
+    }
+
+    /// What a group picker lists (Quick Connect, Add Host, Web Host): every
+    /// group as its path, in sidebar order. `quickConnectGroupIndex` reads
+    /// the choice back.
+    var groupChoiceLabels: [String] {
+        GroupTree.preorder(groups).map { GroupTree.shownPath(of: $0.group.id, in: groups) }
     }
 
     /// The group a Quick Connect "Save to group → New group…" names. It was
@@ -3319,6 +3793,11 @@ final class HostStore: ObservableObject {
     /// group would be created under. nil = create it. The lookup and the
     /// stored name agree because both go through `quickConnectGroupName`.
     func quickConnectGroupIndex(for raw: String) -> Int? {
+        // A PATH first ("Site A › Bldg 1", what the pickers list since nested
+        // groups — two subgroups may share a name), then a bare name.
+        if let path = GroupTree.preorder(groups).first(where: {
+            GroupTree.shownPath(of: $0.group.id, in: groups) == raw
+        }), let at = groups.firstIndex(where: { $0.id == path.group.id }) { return at }
         if let exact = groups.firstIndex(where: { $0.name == raw }) { return exact }
         let name = Self.quickConnectGroupName(raw)
         return groups.firstIndex { $0.name == name }
@@ -3346,7 +3825,9 @@ final class HostStore: ObservableObject {
         // Same pass as `addGroup`, for the same reason.
         let trimmed = Self.cleanGroupName(name)
         guard !trimmed.isEmpty, let index = groups.firstIndex(where: { $0.id == group.id }) else { return false }
-        guard !groups.contains(where: { $0.id != group.id && $0.name == trimmed }) else { return false }
+        guard !nameTaken(trimmed, under: groups[index].parentID, except: group.id) else { return false }
+        // Its own name again is not a change: no write, no re-armed saving.
+        guard groups[index].name != trimmed else { return true }
         // AFTER validation: a rejected rename is not a user change, and
         // re-arming writes on one would let the next automatic save overwrite
         // a file that was deliberately quarantined.
@@ -3361,7 +3842,10 @@ final class HostStore: ObservableObject {
     }
 
     /// Deletes several groups with ONE write, and cleans up after their hosts
-    /// the way `removeHosts` does.
+    /// the way `removeHosts` does. A group goes with its whole SUBTREE —
+    /// what the confirmation counts (`hostCount(ofGroupIDs:)`,
+    /// `subgroupCount(ofGroupIDs:)`), and the returned number is the groups
+    /// the user picked, not the subgroups that went with them.
     ///
     /// The loop this replaces wrote hosts.json once per group — three groups,
     /// three writes for one confirmed action — and left every deleted group's
@@ -3369,8 +3853,10 @@ final class HostStore: ObservableObject {
     /// exist anywhere.
     @discardableResult
     func deleteGroups(withIDs ids: Set<UUID>) -> Int {
-        let victims = groups.filter { ids.contains($0.id) }
-        guard !victims.isEmpty else { return 0 }
+        let picked = groups.filter { ids.contains($0.id) }.count
+        guard picked > 0 else { return 0 }
+        let doomed = Set(ids.flatMap { GroupTree.subtreeIDs(of: $0, in: groups) })
+        let victims = groups.filter { doomed.contains($0.id) }
         noteUserMutation()
         var keys = Set<String>()
         for group in victims {
@@ -3380,16 +3866,17 @@ final class HostStore: ObservableObject {
                 keys.insert(host.connectionKey)
             }
         }
-        groups.removeAll { ids.contains($0.id) }
+        groups.removeAll { doomed.contains($0.id) }
         // Same rule as `removeHosts`: a target another group still holds
         // keeps its recent, and is not tombstoned.
         pruneRecents(forRemovedKeys: keys)
         save()
-        return victims.count
+        return picked
     }
 
     /// The group an import would merge into — same id first, then same
-    /// name — or nil when the import lands as a brand-new group (0.4 ก).
+    /// name at the TOP LEVEL (an import lands there) — or nil when it lands
+    /// as a brand-new group (0.4 ก).
     func existingGroup(matching incoming: HostGroup) -> HostGroup? {
         // By the CLEANED name: every door that WRITES a group name puts the
         // cleaned form in the store (`cleanGroupName`), so a `.sheepterm`
@@ -3399,15 +3886,15 @@ final class HostStore: ObservableObject {
         // apart from the first.
         let wanted = Self.cleanGroupName(incoming.name)
         return groups.first { $0.id == incoming.id }
-            ?? groups.first { Self.cleanGroupName($0.name) == wanted }
+            ?? GroupTree.children(of: nil, in: groups).first { Self.cleanGroupName($0.name) == wanted }
     }
 
-    /// "Name 2", "Name 3", … — the first numbered variant not taken, so an
-    /// import never creates an accidental duplicate group name (0.4 ค4).
-    func uniqueGroupName(base: String) -> String {
-        if !groups.contains(where: { $0.name == base }) { return base }
+    /// "Name 2", "Name 3", … — the first numbered variant no SIBLING has, so
+    /// an import never creates an accidental duplicate group name (0.4 ค4).
+    func uniqueGroupName(base: String, parent: UUID? = nil) -> String {
+        if !nameTaken(base, under: parent, except: nil) { return base }
         var number = 2
-        while groups.contains(where: { $0.name == "\(base) \(number)" }) { number += 1 }
+        while nameTaken("\(base) \(number)", under: parent, except: nil) { number += 1 }
         return "\(base) \(number)"
     }
 
@@ -3500,15 +3987,30 @@ final class HostStore: ObservableObject {
     func conflictingHosts(incoming: HostGroup,
                           existing: HostGroup) -> [(incomingIndex: Int, incoming: Host, existing: Host)] {
         // Deduped first, exactly as `applyImport` does it — the same function,
-        // so the indices mean the same thing on both sides.
+        // so the indices mean the same thing on both sides. Against the
+        // matched group's WHOLE subtree, as the merge pairs it: a re-import of
+        // your own export finds the hosts that sit in its subgroups.
         let rows = Self.importRows(incoming.hosts)
-        return Self.mergePairing(existing: existing.hosts, incoming: rows).compactMap { pair in
+        let held = subtreeHosts(of: existing.id).map(\.host)
+        return Self.mergePairing(existing: held, incoming: rows).compactMap { pair in
             guard let existingIndex = pair.existingIndex else { return nil }
-            let current = existing.hosts[existingIndex]
+            let current = held[existingIndex]
             let inc = rows[pair.incomingIndex]
             guard !Self.sameForImport(current, inc) else { return nil }
             return (incomingIndex: pair.incomingIndex, incoming: inc, existing: current)
         }
+    }
+
+    /// Every host of `groupID` and its subgroups in tree order, with where it
+    /// sits — the one list an import pairs against.
+    func subtreeHosts(of groupID: UUID) -> [(group: Int, index: Int, host: Host)] {
+        let at = GroupTree.positions(groups)
+        var out: [(group: Int, index: Int, host: Host)] = []
+        for id in GroupTree.subtreeIDs(of: groupID, in: groups) {
+            guard let g = at[id] else { continue }
+            for (h, host) in groups[g].hosts.enumerated() { out.append((g, h, host)) }
+        }
+        return out
     }
 
     /// The rows an import actually works through: EXACT repeats collapsed,
@@ -3580,151 +4082,89 @@ final class HostStore: ObservableObject {
         var incoming = rawIncoming
         incoming.hosts = Self.importRows(incoming.hosts)
         stats.repeatedRows = rawIncoming.hosts.count - incoming.hosts.count
-        switch action {
-        case .createNew:
-            var group = incoming
-            group.id = UUID()
-            group.name = uniqueGroupName(base: Self.cleanGroupName(incoming.name))
-            // The batch is snapped against ITSELF: three spellings of one
-            // heading in a single import must not open three rows. Then
-            // against the file's DECLARED list, which comes with the group —
-            // including headings no host is in (an empty section is a row the
-            // user made, and exporting a group has to bring it along).
-            group.hosts = Self.freshIDs(BulkHostParser.snappedHostsWithinBatch(group.hosts))
-            _ = ConfigurationHygiene.sanitizeHeadings(&group)
-            groups.append(group)
+        // The file's labels are PATHS below the group it names (a subtree
+        // flattened by `GroupTree.exportable`, or an Add Hosts Group column),
+        // and `fileLabels(splitPaths: true)` makes the subgroups — the
+        // declared ones too, so an empty subgroup travels. A step that reads
+        // like an existing subgroup IS that subgroup.
+        var updated = groups
+        let wanted = Self.cleanGroupName(incoming.name)
+        let match: Int? = action == .createNew ? nil
+            : updated.firstIndex(where: { $0.id == incoming.id })
+                ?? GroupTree.children(of: nil, in: updated).first { Self.cleanGroupName($0.name) == wanted }
+                    .flatMap { top in updated.firstIndex { $0.id == top.id } }
+        if let index = match {
+            // `.merge`. 0.4 (ค)2: never rename the existing group after the file.
+            stats.groupName = updated[index].name
+            let rootID = updated[index].id
+            // ONE pairing, shared with the dialog (`conflictingHosts`), taken
+            // over the PRE-merge subtree: which host each row is about was
+            // decided when the user answered, and every row is about a
+            // DIFFERENT host (see `mergePairing`'s claiming rule).
+            let held = subtreeHosts(of: rootID)
+            let pairs = Self.mergePairing(existing: held.map(\.host), incoming: incoming.hosts)
+            var added: [Host] = []
+            for pair in pairs {
+                let inc = incoming.hosts[pair.incomingIndex]
+                guard let slot = pair.existingIndex.map({ held[$0] }) else {
+                    var row = inc
+                    row.id = UUID()
+                    added.append(row)
+                    continue
+                }
+                let current = slot.host
+                guard !Self.sameForImport(current, inc) else { continue }
+                // No decision (aborted dialog) defaults to keep. Keyed by the
+                // ROW, not the host id: two rows sharing an id used to share
+                // one answer.
+                guard replace[pair.incomingIndex] == true else { continue }
+                // 0.4 (ค)1: a replaced host keeps OUR credential reference —
+                // the file carries none — and OUR id, and it stays in the
+                // subgroup it is in: open tabs and the sidebar keep pointing
+                // at it, and where you file a host is not the file's to say.
+                var merged = inc.carryingLocalFiling(from: current)
+                merged.credentialID = current.credentialID
+                // Same for what this Mac hands the server: the file's
+                // values were reset on import (ShareCodec.stripForImport),
+                // so taking them would silently switch OUR agent
+                // forwarding off and our cipher policy back to auto.
+                merged.agentForward = current.agentForward
+                merged.cipherMode = current.cipherMode
+                // Both jump fields are ours: a file never carries a path
+                // (ShareCodec strips it), so Replace keeps what we had.
+                merged.jumpHostID = current.jumpHostID
+                merged.jumpSpec = current.jumpSpec
+                // So are the port forwards (the file carries none).
+                merged.forwards = current.forwards
+                // A web host's trusted certificate is ours too (the file
+                // never carries one) — kept while the URL is the same.
+                merged.webTrustedCertSHA256 = merged.address == current.address
+                    ? current.webTrustedCertSHA256 : nil
+                // In place: the slot is claimed by this row alone, so no
+                // later row can read or overwrite what was just written.
+                updated[slot.group].hosts[slot.index] = merged
+                // As `updateHost` does: the recent keyed by the old target
+                // follows the edit instead of pointing at a connection that
+                // no longer exists.
+                updateRecents(from: current, to: merged)
+                stats.replacedHosts += 1
+            }
+            updated[index].hosts.append(contentsOf: added)
+            updated[index].sections = incoming.sections
+            stats.addedHosts = added.count
+        } else {
+            // `.createNew` — or a `.merge` whose match vanished between the
+            // dialog and now: land as a new top-level group rather than fail
+            // silently.
+            let group = HostGroup(id: UUID(), name: uniqueGroupName(base: wanted),
+                                  hosts: Self.freshIDs(incoming.hosts), sections: incoming.sections)
+            updated.append(group)
             stats.addedGroup = true
             stats.groupName = group.name
             stats.addedHosts = group.hosts.count
-        case .merge:
-            // The same test `existingGroup(matching:)` answers the dialog
-            // with — the two must not disagree about the destination.
-            let wanted = Self.cleanGroupName(incoming.name)
-            guard let index = groups.firstIndex(where: { $0.id == incoming.id })
-                ?? groups.firstIndex(where: { Self.cleanGroupName($0.name) == wanted }) else {
-                // The match vanished between dialog and apply — land as a
-                // new group instead of failing silently.
-                var group = incoming
-                group.id = UUID()
-                group.name = uniqueGroupName(base: Self.cleanGroupName(incoming.name))
-                // Same pass as `.createNew` — this IS a new group, so it
-                // brings the file's declared headings with it (cleaned) and
-                // declares whatever its rows carry.
-                group.hosts = Self.freshIDs(BulkHostParser.snappedHostsWithinBatch(group.hosts))
-                _ = ConfigurationHygiene.sanitizeHeadings(&group)
-                groups.append(group)
-                stats.addedGroup = true
-                stats.groupName = group.name
-                stats.addedHosts = group.hosts.count
-                break
-            }
-            stats.groupName = groups[index].name
-            // Hoisted out of the loop: `sections(in:)` walks the group's
-            // hosts and the old conflict test walked them again, so 2,000 rows
-            // into a 2,000-host group was 2,000 × 4,000 scans — measured at
-            // 3.2 s. The heading list is maintained as labels are written, and
-            // the pairing below is one pass with dictionaries.
-            // OURS first, in our order, then the file's headings we do not
-            // have: a merge must not reorder the sidebar the user arranged,
-            // and it must not drop an empty section the file carries.
-            var headings = sections(in: groups[index].id)
-            // Keyed for the loop below: `normalizedHeading(existing:)` scans
-            // the list per row, so 2,000 rows into a group with 2,000 headings
-            // was four million comparisons.
-            var byKey: [String: String] = [:]
-            for name in headings { if let key = Self.headingKey(name) { byKey[key] = name } }
-            for name in incoming.sections {
-                let cleaned = ConfigurationHygiene.cleanedName(name)
-                guard let key = Self.headingKey(cleaned), byKey[key] == nil else { continue }
-                byKey[key] = cleaned
-                headings.append(cleaned)
-            }
-            // ONE pairing, shared with the dialog (`conflictingHosts`), taken
-            // over the PRE-merge array: which host each row is about was
-            // decided when the user answered, and every row is about a
-            // DIFFERENT host (see `mergePairing`'s claiming rule).
-            let pairs = Self.mergePairing(existing: groups[index].hosts, incoming: incoming.hosts)
-            // 0.4 (ค)2: never rename the existing group after the file.
-            for pair in pairs {
-                let inc = incoming.hosts[pair.incomingIndex]
-                if let hostIndex = pair.existingIndex {
-                    let current = groups[index].hosts[hostIndex]
-                    guard !Self.sameForImport(current, inc) else { continue }
-                    // No decision (aborted dialog) defaults to keep. Keyed by
-                    // the ROW, not the host id: two rows sharing an id used to
-                    // share one answer.
-                    guard replace[pair.incomingIndex] == true else { continue }
-                    // 0.4 (ค)1: a replaced host keeps OUR credential
-                    // reference — the file carries none — and OUR id and
-                    // heading, so open tabs and the sidebar keep pointing at
-                    // it and it stays where it was filed. The heading is not
-                    // part of `sameForImport` and not in the Replace/Keep
-                    // diff either, so taking the file's nil would have
-                    // unfiled the host with nothing on screen to say so.
-                    var merged = inc.carryingLocalFiling(from: current)
-                    merged.credentialID = current.credentialID
-                    // Same for what this Mac hands the server: the file's
-                    // values were reset on import (ShareCodec.stripForImport),
-                    // so taking them would silently switch OUR agent
-                    // forwarding off and our cipher policy back to auto.
-                    merged.agentForward = current.agentForward
-                    merged.cipherMode = current.cipherMode
-                    // Both jump fields are ours: a file never carries a path
-                    // (ShareCodec strips it), so Replace keeps what we had.
-                    merged.jumpHostID = current.jumpHostID
-                    merged.jumpSpec = current.jumpSpec
-                    // So are the port forwards (the file carries none).
-                    merged.forwards = current.forwards
-                    // A web host's trusted certificate is ours too (the file
-                    // never carries one) — kept while the URL is the same.
-                    merged.webTrustedCertSHA256 = merged.address == current.address
-                        ? current.webTrustedCertSHA256 : nil
-                    // In place: the slot is claimed by this row alone, so no
-                    // later row can read or overwrite what was just written.
-                    groups[index].hosts[hostIndex] = merged
-                    if let label = merged.sectionName, let key = Self.headingKey(label),
-                       byKey[key] == nil {
-                        byKey[key] = label
-                        headings.append(label)
-                    }
-                    // As `updateHost` does: the recent keyed by the old
-                    // target follows the edit instead of pointing at a
-                    // connection that no longer exists.
-                    updateRecents(from: current, to: merged)
-                    stats.replacedHosts += 1
-                } else {
-                    var added = inc
-                    added.id = UUID()
-                    // A heading that reads like one the destination already
-                    // has IS that heading. This is the ADD path; the other
-                    // three writers do the same through the same normaliser —
-                    // `setSection` (re-filing), `moveHosts` (a drop) and
-                    // `snappedHostsWithinBatch` (a brand-new group).
-                    // Snapped through the dictionary rather than
-                    // `normalizedHeading(existing:)`, which scans: same
-                    // answer, one lookup.
-                    if let asked = added.sectionName,
-                       let key = Self.headingKey(ConfigurationHygiene.sanitizedName(asked)) {
-                        if let existing = byKey[key] {
-                            added.section = existing
-                        } else {
-                            let cleaned = ConfigurationHygiene.cleanedName(asked)
-                            added.section = cleaned
-                            byKey[key] = cleaned
-                            headings.append(cleaned)
-                        }
-                    } else {
-                        added.section = nil
-                    }
-                    groups[index].hosts.append(added)
-                    stats.addedHosts += 1
-                }
-            }
-            // `headings` grew as labels were written, and it started as the
-            // DISPLAYED order, so this both declares what the loop added and
-            // folds in any label an older build left on a host alone.
-            if groups[index].sections != headings { groups[index].sections = headings }
         }
+        GroupTree.fileLabels(&updated, splitPaths: true, makeUpTo: GroupTree.userDepth)
+        groups = updated
         save()
         return stats
     }
@@ -3930,335 +4370,7 @@ final class HostStore: ObservableObject {
         if changedRecents { saveRecents() }
     }
 
-    // MARK: Sections (sub-headings INSIDE a group)
-
-    /// The headings one group shows, in order — `HostGroup.displayedSections`
-    /// by id. THE one question, asked in one place: the group's declared list
-    /// first, then any label a host still carries that the list has not
-    /// caught up with.
-    func sections(in groupID: UUID) -> [String] {
-        groups.first { $0.id == groupID }?.displayedSections ?? []
-    }
-
-    /// The headings to offer for a SELECTION of hosts: the union of the
-    /// headings of the groups those hosts are in, in first-appearance order.
-    ///
-    /// One pass, because the menu asks this for every selected row: the
-    /// submenu used to call `sections(in:)` per host, each with a linear
-    /// search for the host's group and a linear `contains` for the dedupe —
-    /// ⌘A then right-click on 2,000 hosts across 800 headings measured at
-    /// 3.8 s before the menu appeared.
-    func offeredSections(forHostIDs ids: Set<UUID>) -> [String] {
-        // Which groups the selection touches: ONE pass over the hosts, not a
-        // group lookup per selected host.
-        var wanted = Set<Int>()
-        for (groupIndex, group) in groups.enumerated()
-        where group.hosts.contains(where: { ids.contains($0.id) }) {
-            wanted.insert(groupIndex)
-        }
-        // In GROUP order, not selection order, so two right-clicks on the
-        // same selection cannot offer two orders. Deduped by folded key.
-        var offered: [String] = []
-        var seen = Set<String>()
-        for groupIndex in groups.indices where wanted.contains(groupIndex) {
-            for label in groups[groupIndex].displayedSections {
-                guard let key = Self.headingKey(label), seen.insert(key).inserted else { continue }
-                offered.append(label)
-            }
-        }
-        return offered
-    }
-
-    /// Creates a heading in a group with no hosts in it — the group's own
-    /// menu item, since a section belongs to the group.
-    ///
-    /// Returns the label that is now in the list: the existing spelling when
-    /// one reads the same ("Floor  2" joins "Floor 2"), the cleaned name when
-    /// it is new, and **nil when the name had nothing usable in it** or the
-    /// group is gone. A name that is already there is not a failure — the
-    /// caller gets the label back — but it writes nothing, so a quarantined
-    /// file stays quarantined (the same rule as `addGroup`/`renameGroup`).
-    @discardableResult
-    func declareSection(_ name: String, inGroup groupID: UUID) -> String? {
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return nil }
-        // On a COPY: `groups[index].declareHeading(...)` would mutate through
-        // the subscript and fire the @Published didSet even when the heading
-        // was already there — a no-op that re-arms writes over a quarantined
-        // file is the one thing every store method here avoids.
-        var group = groups[index]
-        // The list is written from what the group DISPLAYS first, the way
-        // `moveSection` does it: on a group whose headings are only implied
-        // (a file from an older build, a merge from another machine)
-        // appending to an empty list would put the new heading ABOVE the rows
-        // already on screen. `materialiseHeadings` does this on load too; this
-        // is the belt to that brace.
-        group.sections = group.displayedSections
-        guard let label = Self.normalizedHeading(name, existing: group.sections) else { return nil }
-        guard group.declareHeading(label) else { return label }
-        noteUserMutation()
-        groups[index] = group
-        save()
-        return label
-    }
-
-    /// Moves a heading one place up or down in its group's list.
-    ///
-    /// Returns false when it cannot move (already at the end, or the group or
-    /// heading is gone) — which is also what the menu asks to decide whether
-    /// to disable the item. A heading a host carries but the list has not
-    /// caught up with is written into the list first: reordering is the write
-    /// that makes an implied heading an explicit one.
-    @discardableResult
-    func moveSection(in groupID: UUID, _ name: String, direction: SectionMove) -> Bool {
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return false }
-        // The DISPLAYED order is what the user is looking at, so that is the
-        // order being rearranged; writing it back declares any label that was
-        // only ever on a host.
-        var order = groups[index].displayedSections
-        guard let at = order.firstIndex(where: { $0 == name || Self.sameHeading($0, name) })
-        else { return false }
-        let to = direction == .up ? at - 1 : at + 1
-        guard order.indices.contains(to) else { return false }
-        order.swapAt(at, to)
-        guard order != groups[index].sections else { return false }
-        noteUserMutation()
-        groups[index].sections = order
-        save()
-        return true
-    }
-
-    /// A heading as a drag carries it: its group and its DISPLAYED spelling
-    /// (the row's title, which is what `sections(in:)` returns).
-    struct SectionReference: Codable, Hashable {
-        let groupID: UUID
-        let name: String
-    }
-
-    /// Moves a heading — and, across groups, every host under it — as ONE
-    /// write. `index` is a pre-removal position in the destination's displayed
-    /// heading order (`SidebarLayout.headingSlot`).
-    ///
-    /// Returns the heading's spelling in the destination, or nil when there is
-    /// nothing to move (the source group or heading is gone). A same-group
-    /// drop that changes nothing returns the name WITHOUT writing: a no-op must
-    /// not re-arm writes over a quarantined file.
-    ///
-    /// Across groups, a destination heading that READS the same is the same
-    /// heading (the user's decision): the moved hosts take the destination's
-    /// spelling and JOIN it — no second row, no "Alpha (2)". The source heading
-    /// leaves the source list and is tombstoned, so a stale copy's file cannot
-    /// put it back.
-    @discardableResult
-    func moveSection(_ source: SectionReference, toGroupID destinationID: UUID,
-                     atIndex index: Int) -> String? {
-        guard let from = groups.firstIndex(where: { $0.id == source.groupID }),
-              let to = groups.firstIndex(where: { $0.id == destinationID }) else { return nil }
-        var updated = groups
-        let sourceOrder = updated[from].displayedSections
-        guard let sourceIndex = sourceOrder.firstIndex(of: source.name) else { return nil }
-        var order = updated[to].displayedSections
-        let insertion = max(0, min(index, order.count))
-        if from == to {
-            order.remove(at: sourceIndex)
-            order.insert(source.name, at: insertion - (sourceIndex < insertion ? 1 : 0))
-            if order == sourceOrder { return source.name }
-            updated[from].sections = order
-        } else {
-            // MERGE on a read-alike heading: the destination's own spelling
-            // wins, and that heading is MOVED to where the user dropped — the
-            // line was drawn there, so that is where the heading must land
-            // (the same principle as a host drop).
-            let existing = order.firstIndex { Self.sameHeading($0, source.name) }
-            let label = existing.map { order[$0] } ?? source.name
-            var moved = updated[from].hosts.filter { Self.sameHeading($0.sectionName, source.name) }
-            let movedIDs = Set(moved.map(\.id))
-            updated[from].hosts.removeAll { movedIDs.contains($0.id) }
-            updated[from].sections = sourceOrder.filter { $0 != source.name }
-            for i in moved.indices { moved[i].section = label }
-            updated[to].hosts.append(contentsOf: moved)
-            if let existing {
-                order.remove(at: existing)
-                let landing = insertion - (existing < insertion ? 1 : 0)
-                order.insert(label, at: max(0, min(landing, order.count)))
-            } else {
-                order.insert(label, at: insertion)
-            }
-            updated[to].sections = order
-            noteUserMutation()
-            groups = updated
-            if let key = Self.headingTombstone(group: source.groupID, label: source.name) {
-                deletedHeadingKeys.insert(key)
-            }
-            save()
-            return label
-        }
-        noteUserMutation()
-        groups = updated
-        save()
-        return source.name
-    }
-
-    /// Which way `moveSection` moves a heading. An enum rather than a Bool
-    /// because `moveSection(in:label, up: false)` reads like a refusal.
-    enum SectionMove { case up, down }
-
-    /// Files the given hosts under `name` (nil = loose in their group).
-    /// Returns how many hosts actually changed.
-    ///
-    /// Hosts keep their group: this only writes the label, so a selection
-    /// spanning two groups files each host under that label in ITS OWN group.
-    /// The label is not identity (`connectionKey` ignores it), so there is no
-    /// recents work and no tombstone — the same reason `moveHosts` has none.
-    @discardableResult
-    func setSection(_ name: String?, forHostIDs ids: Set<UUID>) -> Int {
-        // `normalizedHeading` per group below does the hygiene, the trim and
-        // the snap; this only has to know whether a label was asked for.
-        let asked = name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let value = (asked?.isEmpty ?? true) ? nil : asked
-        // A label the user ASKED for that hygiene leaves empty ("\u{1}") is a
-        // refusal, not "no section": treating it as nil unfiled every host in
-        // the selection, which is the opposite of what was typed.
-        if value != nil, Self.normalizedHeading(value, existing: []) == nil { return 0 }
-        // Snapped to a heading the group already has that READS the same —
-        // see the loop below: "Floor  2" typed into New Section… joins
-        // "Floor 2" instead of opening a second row nobody can tell apart.
-        // Worked out before anything is written: `noteUserMutation` re-arms
-        // saving over a quarantined file, and a call that changes nothing must
-        // not do that (same rule as `addGroup`/`renameGroup`).
-        var targets: [(group: Int, host: Int, label: String?)] = []
-        for groupIndex in groups.indices {
-            // Snapped per GROUP: a selection spanning two groups files each
-            // side under its own group's spelling of the heading.
-            let snapped = Self.normalizedHeading(value, existing: sections(in: groups[groupIndex].id))
-            for hostIndex in groups[groupIndex].hosts.indices
-            where ids.contains(groups[groupIndex].hosts[hostIndex].id) {
-                let host = groups[groupIndex].hosts[hostIndex]
-                // The RAW field for the nil case: a stored "   " reads as
-                // `sectionName == nil` already, so comparing the trimmed
-                // value left the whitespace in the file forever.
-                let changes = snapped == nil ? host.section != nil : host.sectionName != snapped
-                if changes { targets.append((groupIndex, hostIndex, snapped)) }
-            }
-        }
-        guard !targets.isEmpty else { return 0 }
-        noteUserMutation()
-        var touched = Set<Int>()
-        for target in targets {
-            groups[target.group].hosts[target.host].section = target.label
-            if target.label != nil { touched.insert(target.group) }
-        }
-        // ONCE per group, AFTER every label is written — not per host.
-        // `displayedSections` is the list plus whatever the hosts now carry,
-        // so one assignment both declares the new label and folds in any
-        // heading that was only implied; doing it inside the loop walked the
-        // whole group per host (2,000 hosts filed in one call measured at 1 s).
-        //
-        // Materialised rather than appended, as `declareSection` and
-        // `renameSection` do it: appending to a list that is still empty while
-        // the group's other headings are only implied put this one at the TOP
-        // — an ordinary drop reordered the sidebar.
-        for group in touched.sorted() {
-            groups[group].sections = groups[group].displayedSections
-        }
-        save()
-        return targets.count
-    }
-
-    /// Renames a section inside one group, in place in the group's list.
-    /// Case-sensitive, like group names.
-    ///
-    /// Returns false when it was REFUSED: an empty new name, a heading that
-    /// is not in that group, or a name that already reads as another heading
-    /// there (merging two headings silently is not what "rename" means — the
-    /// same rule `renameGroup` has). The caller asks `sections(in:)` which of
-    /// those it was. An EMPTY heading renames like any other: it is a row of
-    /// the group's, not a property of its hosts.
-    @discardableResult
-    func renameSection(in groupID: UUID, from old: String, to new: String) -> Bool {
-        // The SAME normaliser the write uses, so what the caller is told and
-        // what lands in the file cannot differ (`normalizedHeading` is also
-        // what the sidebar asks before it rekeys the fold state).
-        let cleaned = ConfigurationHygiene.cleanedName(new)
-        let trimmed = cleaned
-        guard !trimmed.isEmpty, trimmed != old,
-              let groupIndex = groups.firstIndex(where: { $0.id == groupID })
-        else { return false }
-        // On a materialised COPY, for the same two reasons `declareSection`
-        // works that way: a no-op must write nothing, and a group whose
-        // headings are only implied must keep its visible ORDER when one of
-        // them is renamed.
-        var group = groups[groupIndex]
-        group.sections = group.displayedSections
-        // The heading has to BE there — as a declared row or on a host.
-        guard group.sections.contains(where: { $0 == old }) else { return false }
-        // Inner whitespace included: "Floor 2" and "Floor  2" would be two
-        // headings nobody can tell apart in the sidebar. The heading being
-        // RENAMED is not a collision with itself, though — without that
-        // exclusion `floor 2` → `Floor 2` and `Floor  2` → `Floor 2` (tidying
-        // one heading's own spelling) were refused as "already used".
-        guard !group.sections.contains(where: {
-            guard $0 != old else { return false }
-            return $0 == trimmed || Self.sameHeading($0, trimmed)
-        }) else { return false }
-        // `sameHeading`, not `==`: a label written by an older build (or
-        // merged in from another machine) can read the same as the heading
-        // row and be spelled differently, and matching on the exact string
-        // renamed the row while leaving those hosts pointing at nothing.
-        for index in group.hosts.indices where Self.sameHeading(group.hosts[index].sectionName, old) {
-            group.hosts[index].section = trimmed
-        }
-        // In PLACE in the list: a rename is not a reorder, and a heading that
-        // jumped to the bottom of the group because its name changed would be
-        // a worse surprise than the name itself.
-        if let at = group.sections.firstIndex(where: { $0 == old }) {
-            group.sections[at] = trimmed
-        } else {
-            group.declareHeading(trimmed)
-        }
-        noteUserMutation()
-        groups[groupIndex] = group
-        // The OLD name is gone from this copy, so it must not come back from
-        // a disk written before the rename. (The new one is declared in
-        // memory, so `pruneHeadingTombstones` clears any tombstone it had.)
-        if let key = Self.headingTombstone(group: groupID, label: old) {
-            deletedHeadingKeys.insert(key)
-        }
-        save()
-        return true
-    }
-
-    /// Takes a heading away: its hosts stay in the group, loose. Nothing is
-    /// deleted — there is no such thing as deleting a section, only the label
-    /// coming off the hosts that carried it.
-    @discardableResult
-    func removeSection(in groupID: UUID, _ name: String) -> Int {
-        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return 0 }
-        // `sameHeading`, not `==`: the sidebar folds two spellings that read
-        // the same into ONE row, so removing that row has to take every host
-        // under it — matching the exact string left some of them filed under
-        // a heading that is no longer there.
-        let indices = groups[groupIndex].hosts.indices.filter {
-            Self.sameHeading(groups[groupIndex].hosts[$0].sectionName, name)
-                || groups[groupIndex].hosts[$0].sectionName == name
-        }
-        // The heading itself leaves the group's list — an EMPTY heading is a
-        // real row now, so "Remove Section" on one has something to do even
-        // when no host carries the label.
-        let declared = groups[groupIndex].sections.firstIndex {
-            $0 == name || Self.sameHeading($0, name)
-        }
-        guard !indices.isEmpty || declared != nil else { return 0 }
-        noteUserMutation()
-        for index in indices { groups[groupIndex].hosts[index].section = nil }
-        if let declared { groups[groupIndex].sections.remove(at: declared) }
-        // Remembered for the life of the process: "on disk, not in memory" is
-        // what a heading we just removed looks like to the merge.
-        if let key = Self.headingTombstone(group: groupID, label: name) {
-            deletedHeadingKeys.insert(key)
-        }
-        save()
-        return indices.count
-    }
+    // MARK: Group tree (6.0 (12))
 
     /// How many hosts those groups hold, counted over the REAL groups.
     ///
@@ -4266,43 +4378,17 @@ final class HostStore: ObservableObject {
     /// exists for: a sidebar row built during a search carries a FILTERED
     /// copy of its group, and a delete confirmation that counted the row's
     /// own hosts promised "2 hosts go with them" and then deleted 35.
+    /// Every subgroup of those groups counts too: deleting a group deletes
+    /// its subtree, and the confirmation has to say how much goes with it.
     static func hostCount(ofGroupIDs ids: Set<UUID>, in groups: [HostGroup]) -> Int {
-        groups.filter { ids.contains($0.id) }.reduce(0) { $0 + $1.hosts.count }
+        let doomed = Set(ids.flatMap { GroupTree.subtreeIDs(of: $0, in: groups) })
+        return groups.filter { doomed.contains($0.id) }.reduce(0) { $0 + $1.hosts.count }
     }
 
-    /// How many of these hosts are filed under one heading — for the same
-    /// reason: a filtered row knows only the hosts that matched.
-    static func hostCount(inSection label: String, hosts: [Host]) -> Int {
-        // `sameHeading` as well: the row counts what is UNDER it, and the
-        // sidebar puts every label that reads the same under one row.
-        hosts.filter { $0.sectionName == label || sameHeading($0.sectionName, label) }.count
-    }
-
-    /// The heading actually WRITTEN for a label the user typed: hygiene
-    /// (control characters out, 64-character cap), trimmed, then snapped to
-    /// the group's existing spelling. nil when nothing is left.
-    ///
-    /// One function because three callers used to do their own halves of it
-    /// and a fourth (the sidebar's collapse-key rekey, and the "already used"
-    /// message) guessed at the result: a rename to "Floor  2\u{0}" was
-    /// stored as "Floor 2" while the fold state and the alert still talked
-    /// about the raw string.
-    static func normalizedHeading(_ label: String?, existing: [String]) -> String? {
-        guard let label else { return nil }
-        let cleaned = ConfigurationHygiene.cleanedName(label)
-        guard !cleaned.isEmpty else { return nil }
-        return snappedHeading(cleaned, existing: existing)
-    }
-
-    /// The heading to actually write when the user asks for `label` in a
-    /// group that already has one reading the same: "Floor  2" typed into
-    /// New Section… (or an Add Hosts Section cell) becomes the existing
-    /// "Floor 2" rather than a second row nobody can tell from the first.
-    static func snappedHeading(_ label: String?, existing: [String]) -> String? {
-        guard let label else { return nil }
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return existing.first { $0 == trimmed || sameHeading($0, trimmed) } ?? trimmed
+    /// How many SUBGROUPS (at any depth) go with those groups — the other
+    /// half of the delete confirmation.
+    static func subgroupCount(ofGroupIDs ids: Set<UUID>, in groups: [HostGroup]) -> Int {
+        Set(ids.flatMap { GroupTree.subtreeIDs(of: $0, in: groups) }).subtracting(ids).count
     }
 
     /// Two heading names that read the same: case and every run of
@@ -4387,22 +4473,9 @@ final class HostStore: ObservableObject {
     }
 
     /// The store index a drop BETWEEN display rows means, from the row BELOW
-    /// the insertion line.
-    ///
-    /// Pure, and taken from the row below on purpose. The row above was the
-    /// obvious choice and it is wrong as soon as a heading's hosts are not
-    /// contiguous in the array: with `[A(F1), B]` the sidebar shows `B` (loose,
-    /// first) then the `F1` heading with A under it, so the gap below B has a
-    /// HEADING below it, and "just after the row above" would be index 1 —
-    /// where B already sits. The row below the line is the one the user is
-    /// pointing at.
-    ///
-    /// `childFirstHostIDs` is one entry per display child, and **nil for any
-    /// child that is not a loose host**: an empty heading has no host at all,
-    /// and a heading row's first host can sit ANYWHERE in the array now that
-    /// loose hosts come first — reading its id here put a drop below the last
-    /// loose host at that host's index inside the heading, which is usually 0.
-    /// nil means "no host to point at", and that is the end of the group.
+    /// the insertion line. `childFirstHostIDs` is one entry per display
+    /// child, nil for a subgroup row (`SidebarLayout.childFirstHostIDs`): nil
+    /// means "no host to point at", and that is the end of the group's hosts.
     static func dropIndex(in hosts: [Host], childFirstHostIDs ids: [UUID?], childIndex index: Int) -> Int {
         // The end of the group for every case that names no host: past the
         // last child, or a child that is a heading. Under the loose rows IS
@@ -4417,53 +4490,24 @@ final class HostStore: ObservableObject {
         groups.first { $0.id == groupID }?.hosts ?? []
     }
 
-    /// Which groups a multi-host "Move to Group" submenu should offer: every
-    /// group EXCEPT one that already holds all of them. Moving a selection
-    /// into the group it is already in is a no-op the user cannot tell from a
-    /// mistake, and it used to unfile them on the way (see `moveHosts`'
-    /// `keepHeadingWhenStaying`).
-    func moveTargets(forHostIDs ids: Set<UUID>) -> [HostGroup] {
-        groups.filter { group in
-            let here = Set(group.hosts.map(\.id))
-            return !ids.isEmpty && !ids.isSubset(of: here)
+    /// Which groups a "Move to Group" submenu should offer, in tree order
+    /// with each one's depth (the menu indents by it): every group EXCEPT one
+    /// that already holds all of them. Moving a selection into the group it
+    /// is already in is a no-op the user cannot tell from a mistake.
+    func moveTargets(forHostIDs ids: Set<UUID>) -> [(group: HostGroup, depth: Int)] {
+        GroupTree.preorder(groups).filter { entry in
+            !ids.isEmpty && !ids.isSubset(of: Set(entry.group.hosts.map(\.id)))
         }
     }
 
-    /// How many of these hosts would lose a heading by moving into `groupID`:
-    /// the ones that are filed AND are actually changing group. A heading
-    /// belongs to the group it is in, so a host that crosses groups goes
-    /// loose — fine for one host from the menu, worth asking about for a
-    /// dozen, since nothing puts them back.
-    func headingsLost(movingHostIDs ids: Set<UUID>, toGroupID groupID: UUID) -> Int {
-        let staying = Set(groups.first { $0.id == groupID }?.hosts.map(\.id) ?? [])
-        var count = 0
-        for group in groups {
-            for host in group.hosts where ids.contains(host.id) {
-                if host.sectionName != nil, !staying.contains(host.id) { count += 1 }
-            }
-        }
-        return count
-    }
-
-    /// The question asked before a MENU unfiles several hosts at once.
-    ///
-    /// One function because both menu paths ask it. It counts HOSTS — twelve hosts under one
-    /// heading is one heading, so "Remove 1 heading?" was the wrong number,
-    /// and "Remove 12 headings?" was the wrong noun.
-    /// The singular branch is unreachable through the menu — `confirmUnfiling`
-    /// returns true without an alert at one host, because one is a small,
-    /// obvious change the user can put back by hand. It is kept so the
-    /// function is correct on its own terms (and tested), not because a "1"
-    /// ever reaches an alert.
-    static func unfileQuestion(count: Int) -> String {
-        "Unfile \(count) host\(count == 1 ? "" : "s")?"
-    }
-
-    /// How many of these hosts are filed under a heading right now — what
-    /// "No Section" on a selection would clear.
-    func filedCount(ofHostIDs ids: Set<UUID>) -> Int {
-        groups.reduce(0) { total, group in
-            total + group.hosts.filter { ids.contains($0.id) && $0.sectionName != nil }.count
+    /// Where a "Move to ▸" on GROUPS may put them, in tree order with depth:
+    /// every group they fit under (`GroupTree.canMove`) except the one they
+    /// are already all in. The top level is the menu's own first item.
+    func groupMoveTargets(forGroupIDs ids: Set<UUID>) -> [(group: HostGroup, depth: Int)] {
+        let parents = Set(groups.filter { ids.contains($0.id) }.map(\.parentID))
+        return GroupTree.preorder(groups).filter { entry in
+            !(parents.count == 1 && parents.first == entry.group.id)
+                && GroupTree.canMove(ids, under: entry.group.id, in: groups)
         }
     }
 
@@ -4494,24 +4538,30 @@ final class HostStore: ObservableObject {
     /// session-cached password for each OLD identity.
     @discardableResult
     func setCredential(id: UUID?, username: String?, forGroupID groupID: UUID) -> [(old: Host, new: Host)] {
-        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return [] }
+        guard groups.contains(where: { $0.id == groupID }) else { return [] }
         let login = (username ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         // Worked out BEFORE anything is written: `noteUserMutation` re-arms
         // saving over a quarantined file, and a call that changes nothing
-        // must not do that (same rule as `addGroup`/`renameGroup`).
+        // must not do that (same rule as `addGroup`/`renameGroup`). The whole
+        // SUBTREE: the group's subgroups are part of what was right-clicked.
         var changes: [(old: Host, new: Host)] = []
-        for host in groups[groupIndex].hosts where host.kind == .ssh {
-            var updated = host
+        var slots: [(group: Int, index: Int)] = []
+        for slot in subtreeHosts(of: groupID) where slot.host.kind == .ssh {
+            var updated = slot.host
             updated.credentialID = id
             if id != nil, !login.isEmpty { updated.username = login }
-            guard updated != host else { continue }
-            changes.append((old: host, new: updated))
+            guard updated != slot.host else { continue }
+            changes.append((old: slot.host, new: updated))
+            slots.append((slot.group, slot.index))
         }
         guard !changes.isEmpty else { return [] }
         noteUserMutation()
+        var updated = groups
+        for (change, slot) in zip(changes, slots) {
+            updated[slot.group].hosts[slot.index] = change.new
+        }
+        groups = updated
         for change in changes {
-            guard let hostIndex = groups[groupIndex].hosts.firstIndex(where: { $0.id == change.old.id }) else { continue }
-            groups[groupIndex].hosts[hostIndex] = change.new
             // As `updateHost` does: a recent keyed by the old user@host:port
             // follows the change instead of pointing at a login that is no
             // longer configured anywhere.
@@ -4557,7 +4607,7 @@ final class HostStore: ObservableObject {
     /// read better with them and because a one-row move is a case worth
     /// keeping spelled out.
     func moveHost(withID id: UUID, toGroupID groupID: UUID, atIndex index: Int) {
-        moveHosts(withIDs: [id], toGroupID: groupID, atIndex: index, section: nil)
+        moveHosts(withIDs: [id], toGroupID: groupID, atIndex: index)
     }
 
     func moveGroup(withID id: UUID, toIndex index: Int) {
@@ -4579,37 +4629,22 @@ final class HostStore: ObservableObject {
     /// writes over a quarantined file.
     @discardableResult
     func moveHosts(withIDs ids: [UUID], toGroupID groupID: UUID, atIndex index: Int,
-                   section: String? = nil,
-                   keepHeadingWhenStaying: Bool = false) -> Int {
+                   skippingHostsAlreadyThere: Bool = false) -> Int {
         guard let destGroup = groups.firstIndex(where: { $0.id == groupID }) else { return 0 }
         let wanted = Set(ids)
         // The moved hosts keep their ARRAY order — `groups.flatMap(\.hosts)`,
-        // i.e. group order then each group's own order. That is NOT the
-        // sidebar's row order any more: the sidebar puts a group's loose hosts
-        // above its headings (`SidebarLayout.rows`), so a multi-row drag that
-        // spans a heading boundary lands its hosts in array order, not in the
-        // order the rows appeared. Array order is the one that survives the
-        // labels being rewritten by this very call.
-        // The heading travels through the same normaliser as every other
-        // write: dropping hosts on "floor  2" in a group that already has
-        // "Floor 2" files them under the existing one.
-        let sectionValue = Self.normalizedHeading(section, existing: sections(in: groupID))
+        // i.e. list order then each group's own order — which is the order a
+        // multi-row drag that stays inside one group shows them in.
         let alreadyHere = Set(groups[destGroup].hosts.map(\.id))
         var moving = groups.flatMap(\.hosts).filter { wanted.contains($0.id) }
-        // `keepHeadingWhenStaying` is the MENU's rule, not a drop's: "Move to
-        // Group" on a selection that spans groups is about the hosts that
-        // CHANGE group, and it used to unfile the ones already in the
-        // destination as a side effect — no confirmation, no way back. They
-        // are left out of the move entirely, position included: pulling d1 out
-        // and re-appending it after d2 and d3 reordered a group the user never
-        // dragged.
-        if keepHeadingWhenStaying { moving.removeAll { alreadyHere.contains($0.id) } }
+        // The MENU's rule, not a drop's: "Move to Group" on a selection that
+        // spans groups is about the hosts that CHANGE group. The ones already
+        // in the destination are left out entirely, position included:
+        // pulling d1 out and re-appending it after d2 and d3 reordered a group
+        // the user never dragged.
+        if skippingHostsAlreadyThere { moving.removeAll { alreadyHere.contains($0.id) } }
         guard !moving.isEmpty else { return 0 }
         let movingIDs = Set(moving.map(\.id))
-        // The section the drop landed in travels with the move: dropping a
-        // host on a group header takes it OUT of whatever section it was in
-        // (nil), and dropping it on a section heading files it there.
-        for index in moving.indices { moving[index].section = sectionValue }
 
         var updated = groups
         let clamped = max(0, min(index, updated[destGroup].hosts.count))
@@ -4619,17 +4654,6 @@ final class HostStore: ObservableObject {
         }
         let destination = max(0, min(clamped - removedBefore, updated[destGroup].hosts.count))
         updated[destGroup].hosts.insert(contentsOf: moving, at: destination)
-        // The destination group owns the heading the hosts just landed in —
-        // materialised first, for the same reason `setSection` does it: a drop
-        // into "Bravo" must not lift Bravo above Alpha because neither was in
-        // the list yet.
-        // ONE assignment: the hosts already carry the label, so
-        // `displayedSections` is the declared list plus it, in the right
-        // place. (`declareHeading` afterwards would be a second walk for
-        // nothing.)
-        if sectionValue != nil {
-            updated[destGroup].sections = updated[destGroup].displayedSections
-        }
         guard updated != groups else { return 0 }
         noteUserMutation()
         groups = updated
@@ -4637,19 +4661,65 @@ final class HostStore: ObservableObject {
         return moving.count
     }
 
-    /// The multi-selection twin of `moveGroup`: the selected groups move
-    /// together to `index`, keeping their current relative order. Same
-    /// pre-removal index convention, same no-op rule as `moveHosts`.
+    /// The top-level twin of `moveGroups(withIDs:toParent:atIndex:)`, which
+    /// is where the rules are.
     @discardableResult
     func moveGroups(withIDs ids: Set<UUID>, toIndex index: Int) -> Int {
-        let moving = groups.filter { ids.contains($0.id) }
-        guard !moving.isEmpty else { return 0 }
-        let movingIDs = Set(moving.map(\.id))
-        var updated = groups
-        let clamped = max(0, min(index, updated.count))
-        let removedBefore = updated.prefix(clamped).filter { movingIDs.contains($0.id) }.count
-        updated.removeAll { movingIDs.contains($0.id) }
-        updated.insert(contentsOf: moving, at: max(0, min(clamped - removedBefore, updated.count)))
+        moveGroups(withIDs: ids, toParent: nil, atIndex: index)
+    }
+
+    /// The selected groups move together under `parent` (nil = the top
+    /// level), to `index` among its subgroups, keeping their current relative
+    /// order and taking their subtrees with them. `index` is a position among
+    /// those subgroups as they stand right now — what NSOutlineView reports —
+    /// so selected ones above it are subtracted, as in `moveHosts`.
+    ///
+    /// A group whose ancestor is also selected travels with that ancestor and
+    /// is not moved on its own. Refused (0, nothing written) when the move
+    /// would put a group inside itself or past the user's cap
+    /// (`GroupTree.canMove`: `userDepth`, or no deeper for a branch already
+    /// past it), and when
+    /// it changes nothing — a no-op must not re-arm writes over a quarantined
+    /// file. A parent that already has a subgroup of the same name keeps
+    /// both: two rows the user can rename, never a silent merge.
+    @discardableResult
+    func moveGroups(withIDs ids: Set<UUID>, toParent parent: UUID?, atIndex index: Int) -> Int {
+        let selected = ids.filter { id in groups.contains { $0.id == id } }
+        let tops = Set(selected.filter { id in
+            !GroupTree.ancestors(of: id, in: groups).contains { selected.contains($0.id) }
+        })
+        guard !tops.isEmpty, GroupTree.canMove(tops, under: parent, in: groups) else { return 0 }
+        let moving = groups.filter { tops.contains($0.id) }.map { group -> HostGroup in
+            var copy = group
+            copy.parentID = parent
+            return copy
+        }
+        // Siblings as they stand, for the pre-removal index.
+        let siblings = GroupTree.children(of: parent, in: groups)
+        let clamped = max(0, min(index, siblings.count))
+        let removedBefore = siblings.prefix(clamped).filter { tops.contains($0.id) }.count
+        var updated = groups.filter { !tops.contains($0.id) }
+        // The siblings that stay, from the list AS IT STANDS. (Not
+        // `children(of:in: updated)`: a moved group's own subgroups are still
+        // in `updated` with their parent gone, so the top level counted them
+        // as siblings and a top-level reorder of a group with subgroups
+        // landed one slot off — found porting to Windows, 2026-10-28.)
+        let remaining = siblings.filter { !tops.contains($0.id) }
+        let slot = max(0, min(clamped - removedBefore, remaining.count))
+        // Siblings are ordered by list position: in front of the sibling now
+        // at `slot`, or after the last one (or after the parent itself when
+        // there is none — anywhere would do, this keeps the file readable).
+        let insertAt: Int
+        if slot < remaining.count, let at = updated.firstIndex(where: { $0.id == remaining[slot].id }) {
+            insertAt = at
+        } else if let last = remaining.last, let at = updated.firstIndex(where: { $0.id == last.id }) {
+            insertAt = at + 1
+        } else if let parent, let at = updated.firstIndex(where: { $0.id == parent }) {
+            insertAt = at + 1
+        } else {
+            insertAt = updated.count
+        }
+        updated.insert(contentsOf: moving, at: insertAt)
         guard updated != groups else { return 0 }
         noteUserMutation()
         groups = updated
@@ -4661,7 +4731,7 @@ final class HostStore: ObservableObject {
     /// no such name**. That last part makes it wrong for anything driven by
     /// the UI — a group renamed in another window between opening a menu and
     /// choosing from it would fork a second group under the old name — so the
-    /// sidebar uses `moveHosts(withIDs:toGroupID:atIndex:section:)` instead.
+    /// sidebar uses `moveHosts(withIDs:toGroupID:atIndex:)` instead.
     /// What is left here is the test harness, which uses the create-on-demand
     /// to seed groups. Do not call it from app code.
     func move(host: Host, toGroupNamed name: String) {
@@ -4671,19 +4741,11 @@ final class HostStore: ObservableObject {
         }
         if let index = groups.firstIndex(where: { $0.name == name }) {
             groups[index].hosts.append(host)
-            // The group owns its heading list, so a host arriving WITH a label
-            // declares it. (Quick Connect's host carries none by construction;
-            // a future caller's might.)
-            if host.sectionName != nil {
-                groups[index].sections = groups[index].displayedSections
-            }
         } else {
-            // Same rule for a group being created here: the label the host
-            // carries IS the group's first heading, or the next load would
-            // treat it as an undeclared leftover.
-            groups.append(HostGroup(name: name, hosts: [host],
-                                    sections: host.sectionName.map { [$0] } ?? []))
+            groups.append(HostGroup(name: name, hosts: [host]))
         }
+        // A host arriving WITH a label is filed below that group.
+        if host.section != nil { GroupTree.fileLabels(&groups, splitPaths: true, makeUpTo: GroupTree.userDepth) }
         save()
     }
 
@@ -4720,150 +4782,64 @@ struct GroupImportStats {
 /// it can be tested. `SidebarOutline` walks this and builds rows from it; it
 /// decides nothing about order itself.
 ///
-/// **The rule**: loose hosts first, in the group's array order, then the
-/// headings in the group's declared order (`displayedSections`), each with its
-/// own hosts in array order. An empty heading is a row with no hosts.
-///
-/// Loose first, and not "a heading where its first host sits", because the
-/// group now owns the heading ORDER: with the heading rows floating to
-/// wherever their first host happened to be, Move Up / Move Down had nothing
-/// to move and a newly created empty heading had nowhere to appear. Putting
-/// the loose hosts above the headings is the only arrangement where the list
-/// order the user sets is the order they see — and it matches how anyone
-/// writes such a list by hand: the odd ones at the top, then the labelled
-/// blocks.
+/// **The rule** (6.0 (12)): the group's own hosts first, in array order, then
+/// its subgroups in list order (`GroupTree.children`). Hosts first is the
+/// order the old sections had (loose hosts above the headings), so a
+/// migrated group looks the way it did.
 enum SidebarLayout {
     enum Row: Equatable {
         case host(Host)
-        case heading(String, hosts: [Host])
+        case group(HostGroup)
     }
 
-    /// What `HostStore.dropIndex` needs for a drop between a GROUP's children:
-    /// one entry per display row, **nil for anything that is not a loose
-    /// host**. Here rather than in the outline so the drop arithmetic can be
-    /// tested against the real row list.
-    ///
-    /// A heading contributes nil even when it has hosts: loose rows come first
-    /// now, so a heading's first host can sit anywhere in the array, and
-    /// pointing the insertion line at it sent a drop below the last loose row
-    /// to that host's index — usually 0, i.e. the top of the group.
-    static func childFirstHostIDs(for group: HostGroup) -> [UUID?] {
-        rows(for: group).map { row in
-            if case .host(let host) = row { return host.id }
-            return nil
+    static func rows(for group: HostGroup, in groups: [HostGroup]) -> [Row] {
+        rows(for: group, subgroups: GroupTree.children(of: group.id, in: groups))
+    }
+
+    /// The same, with the subgroups already looked up — the sidebar builds
+    /// one parent → children map per rebuild instead of a scan per group.
+    static func rows(for group: HostGroup, subgroups: [HostGroup]) -> [Row] {
+        group.hosts.map(Row.host) + subgroups.map(Row.group)
+    }
+
+    /// parent id → its subgroups in list order, in one pass.
+    static func childMap(_ groups: [HostGroup]) -> [UUID: [HostGroup]] {
+        var out: [UUID: [HostGroup]] = [:]
+        for group in groups {
+            if let parent = group.parentID, parent != group.id { out[parent, default: []].append(group) }
         }
+        return out
     }
 
-    /// The INVERSE of `HostStore.dropIndex` for a GROUP row: which child row
-    /// the insertion line belongs above, for a store index the drop resolved
-    /// to. `validateDrop` needs it to draw the line where the host will
-    /// actually appear.
-    ///
-    /// The two must agree, which is why they live beside each other:
-    /// `dropIndex` reads "the row below the line names the host at that store
-    /// index", so the inverse is "the first row whose host sits at or after
-    /// that index". A row with no host (a heading, empty or not) names none,
-    /// so the answer for anything past the loose rows is the END of the loose
-    /// rows — which is where the headings begin. The old version read a
-    /// heading's FIRST host instead and fell back to "after every child", so
-    /// with loose hosts first the line was drawn under the headings for a drop
-    /// that was going to land above them.
+    /// What `HostStore.dropIndex` needs for a drop between a group's
+    /// children: one entry per display row, nil for a subgroup row. A drop
+    /// below the last host — among the subgroups — is the END of the hosts.
+    static func childFirstHostIDs(for group: HostGroup, in groups: [HostGroup]) -> [UUID?] {
+        group.hosts.map { Optional($0.id) }
+            + Array(repeating: nil, count: GroupTree.children(of: group.id, in: groups).count)
+    }
+
+    /// The INVERSE of `HostStore.dropIndex`: which child row the insertion
+    /// line belongs above for a store index. Hosts are the first rows in
+    /// array order, so it is the index itself, at most the host count.
     static func childRow(forStoreIndex index: Int, in group: HostGroup) -> Int {
-        let ids = childFirstHostIDs(for: group)
-        // Position in the group's array, by id, once.
-        var position: [UUID: Int] = [:]
-        for (at, host) in group.hosts.enumerated() { position[host.id] = at }
-        if let row = ids.firstIndex(where: { id in
-            guard let id, let at = position[id] else { return false }
-            return at >= index
-        }) {
-            return row
-        }
-        return ids.prefix { $0 != nil }.count
+        min(max(0, index), group.hosts.count)
     }
 
-    /// The spelling of the heading ROW a label belongs under — the group's
-    /// displayed spelling when one reads the same, the label itself otherwise.
-    ///
-    /// A row's id is built from its displayed label (`sectionRowID`), but a
-    /// drop ON a host takes that host's own label, which can be spelled
-    /// differently ("floor  2" under the "Floor 2" row). Looking the row up by
-    /// the host's spelling found nothing, and `validateDrop` refused the drop.
-    static func headingRowLabel(for label: String, in group: HostGroup) -> String {
-        guard let key = HostStore.headingKey(label) else { return label }
-        return group.displayedSections.first { HostStore.headingKey($0) == key } ?? label
-    }
-
-    /// What is under the pointer when a HEADING is dragged, in plain terms —
-    /// the view's only job is to translate AppKit's (item, childIndex) into
-    /// one of these, so the rules live here where they can be tested.
-    enum HeadingDropTarget: Equatable {
-        /// Between rows at the group level (item = the group, a child index).
-        case betweenGroupRows(Int)
-        /// ON the group's header row.
-        case onGroupHeader
-        /// ON a loose host (a host with no heading).
-        case onLooseHost
-        /// ON a heading row.
-        case onHeading(String)
-        /// Among a heading's hosts: ON one of them, or the heading row with a
-        /// child index between its hosts.
-        case amongHeadingHosts(String)
-        /// The root gap under the last group.
-        case rootGap
-    }
-
-    /// Where a dragged heading lands: `slot` is its insertion position among
-    /// the destination group's headings (pre-removal, in `displayedSections`
-    /// order — what `HostStore.moveSection` takes), and `lineChildIndex` is
-    /// where the insertion line is drawn, at the group level. Headings follow
-    /// the loose hosts (`rows(for:)`), so the line is always at
-    /// `looseCount + slot`: it can never be drawn among the loose hosts, where
-    /// a heading cannot go.
-    ///
-    /// The rules:
-    /// - between group rows: the headings before that index (a point among the
-    ///   loose rows is slot 0, drawn just after them);
-    /// - ON the group header, or the root gap: the END;
-    /// - ON a loose host: slot 0, the first heading position — not the end,
-    ///   which drew the line at the bottom of the group while the pointer was
-    ///   at the top;
-    /// - ON a heading row: BEFORE it;
-    /// - among a heading's hosts: AFTER it — resolving to "before" drew the
-    ///   line above a heading the user had dragged down onto.
-    static func headingSlot(in group: HostGroup,
-                            target: HeadingDropTarget) -> (slot: Int, lineChildIndex: Int) {
-        let headings = group.displayedSections
-        // The SAME test `rows(for:)` uses to decide a host is loose — one
-        // definition, so the line cannot be drawn among the wrong rows.
-        let looseCount = group.hosts.filter { HostStore.headingKey($0.sectionName) == nil }.count
-        func position(_ label: String) -> Int? {
-            guard let key = HostStore.headingKey(label) else { return nil }
-            return headings.firstIndex { HostStore.headingKey($0) == key }
-        }
-        let slot: Int
-        switch target {
-        case .betweenGroupRows(let index):
-            slot = min(max(0, index - looseCount), headings.count)
-        case .onGroupHeader, .rootGap:
-            slot = headings.count
-        case .onLooseHost:
-            slot = 0
-        case .onHeading(let label):
-            slot = position(label) ?? headings.count
-        case .amongHeadingHosts(let label):
-            slot = position(label).map { $0 + 1 } ?? headings.count
-        }
-        return (slot, looseCount + slot)
+    /// Where a dragged GROUP lands among `parent`'s subgroups for a drop at
+    /// `childIndex` among its display rows: the hosts come first, so a point
+    /// among them is the first subgroup slot. The insertion line is drawn at
+    /// `hostCount + slot` — never among the hosts, where a group cannot go.
+    static func subgroupSlot(childIndex: Int, hostCount: Int, subgroupCount: Int) -> (slot: Int, lineChildIndex: Int) {
+        let slot = min(max(0, childIndex - hostCount), subgroupCount)
+        return (slot, hostCount + slot)
     }
 
     /// Which group a ROOT-level drop line belongs to — the gap between two
     /// groups, above the first, or under the last. The last group ABOVE the
     /// line owns it (`aboveEveryGroup == false`); when the line is above every
     /// group, the FIRST group owns it and the drop goes to its TOP.
-    /// `groupOrdinal` counts groups only. Shared by host and heading drags so
-    /// they agree: a heading dropped above the first group used to land at the
-    /// END of that group while a host dropped in the same gap went to its top.
+    /// `groupOrdinal` counts groups only.
     static func rootGapOwner(rootIsGroup: [Bool], index: Int) -> (groupOrdinal: Int, aboveEveryGroup: Bool)? {
         let groupPositions = rootIsGroup.indices.filter { rootIsGroup[$0] }
         guard !groupPositions.isEmpty else { return nil }
@@ -4872,27 +4848,66 @@ enum SidebarLayout {
         return (0, true)
     }
 
-    static func rows(for group: HostGroup) -> [Row] {
-        // ONE pass over the hosts, bucketed by folded key: filtering the
-        // whole array per heading was 800 × 2,000 comparisons — measured at
-        // ~2 s, paid on every rebuild and every drag-over.
-        var rows: [Row] = []
-        var buckets: [String: [Host]] = [:]
-        for host in group.hosts {
-            guard let key = HostStore.headingKey(host.sectionName) else {
-                rows.append(.host(host))          // loose hosts FIRST, in array order
-                continue
-            }
-            buckets[key, default: []].append(host)
+    /// One row under a top-level header, for the drop rules: a host (in its
+    /// own group), or a subgroup's folder row (under its parent). An OPEN
+    /// folder's rows follow it at the same level, so a header's rows mix
+    /// several groups — these two say whose each row is.
+    enum FlatRow: Equatable {
+        case host(UUID, group: UUID)
+        case folder(UUID, parent: UUID)
+    }
+
+    /// A HOST dropped on the line above row `index` of a header's rows
+    /// (`index == rows.count` = under the last one):
+    /// - above a host → just before it, in that host's group;
+    /// - above a folder → the END of the hosts of the group the folder sits
+    ///   in (a group's hosts come before its folders);
+    /// - under the last row → the end of the header group's own hosts.
+    static func hostLanding(rows: [FlatRow], at index: Int, header: UUID,
+                            groups: [HostGroup]) -> (group: UUID, index: Int) {
+        func hostCount(_ id: UUID) -> Int { groups.first { $0.id == id }?.hosts.count ?? 0 }
+        guard index >= 0, index < rows.count else { return (header, hostCount(header)) }
+        switch rows[index] {
+        case .host(let id, let group):
+            return (group, groups.first { $0.id == group }?.hosts.firstIndex { $0.id == id } ?? hostCount(group))
+        case .folder(_, let parent):
+            return (parent, hostCount(parent))
         }
-        for label in group.displayedSections {
-            // By the label the hosts actually carry: `displayedSections` has
-            // already snapped spellings, and a host whose label only READS the
-            // same still belongs under that row.
-            let key = HostStore.headingKey(label)
-            rows.append(.heading(label, hosts: key.flatMap { buckets[$0] } ?? []))
+    }
+
+    /// A GROUP dropped on the line above row `index`:
+    /// - above a folder → beside it, just before it, in the same parent;
+    /// - above a host → the FIRST subgroup of that host's group (groups
+    ///   come after hosts, so this is the nearest place to the line);
+    /// - under the last row → the last subgroup of the header group.
+    static func groupLanding(rows: [FlatRow], at index: Int, header: UUID,
+                             groups: [HostGroup]) -> (parent: UUID, slot: Int) {
+        guard index >= 0, index < rows.count else {
+            return (header, GroupTree.children(of: header, in: groups).count)
         }
-        return rows
+        switch rows[index] {
+        case .folder(let id, let parent):
+            return (parent, GroupTree.children(of: parent, in: groups).firstIndex { $0.id == id } ?? 0)
+        case .host(_, let group):
+            return (group, 0)
+        }
+    }
+
+    /// The open subgroups after a click on `id`: subgroups start SHUT, and
+    /// each one opens and shuts on its own (the user tried "one open per
+    /// level" and turned it down — open freely). What is open inside a
+    /// subgroup keeps its state while that subgroup is shut.
+    static func toggledOpen(_ id: UUID, in open: Set<UUID>, groups: [HostGroup]) -> Set<UUID> {
+        var out = open
+        if out.remove(id) == nil { out.insert(id) }
+        return out
+    }
+
+    /// A dragged group dropped in a ROOT gap: its slot among the top-level
+    /// groups (the groups above the line).
+    static func rootGroupSlot(rootIsGroup: [Bool], index: Int) -> Int {
+        let stop = min(max(index, 0), rootIsGroup.count)
+        return rootIsGroup.prefix(stop).filter { $0 }.count
     }
 }
 

@@ -30,7 +30,7 @@ struct QuickSearchView: View {
     /// unique match is ever seen.
     private static let maxResults = 8
 
-    /// The address, plus the heading when THAT is what matched: a row that
+    /// The address, plus the subgroup when THAT is what matched: a row that
     /// appears for a word the row does not contain looks like a bug.
     private static func detail(for host: Host, query: String) -> String? {
         let address = host.address.isEmpty ? nil : host.address
@@ -55,7 +55,7 @@ struct QuickSearchView: View {
             for host in hosts {
                 if !needle.isEmpty,
                    !host.name.matchesSearch(needle), !host.address.matchesSearch(needle),
-                   // The sidebar matches a host's heading too; ⌘K answering
+                   // The sidebar matches a host's subgroup too; ⌘K answering
                    // differently to the same word would be the odd one out.
                    !(host.sectionName?.matchesSearch(needle) ?? false) {
                     continue
@@ -73,8 +73,14 @@ struct QuickSearchView: View {
         }
 
         guard !collect(model.store.recents) else { return unique }
+        // A SUBGROUP's hosts carry its name for this search only — the
+        // sidebar matches a host by the subgroup it is in, and the row says
+        // so (`detail`). A label on a host never reaches the store from here:
+        // opening one goes through `noteRecent`, which drops it.
         for group in model.store.groups {
-            if collect(group.hosts) { break }
+            let hosts = group.parentID == nil ? group.hosts
+                : group.hosts.map { host in var copy = host; copy.section = group.name; return copy }
+            if collect(hosts) { break }
         }
         return unique
     }
@@ -200,6 +206,8 @@ struct QuickSearchView: View {
 
     private func connect(_ host: Host) {
         model.showQuickSearch = false
+        var host = host
+        host.section = nil      // the search's own label, see `computeMatches`
         model.open(host: host)
         model.collapseSidebar()
     }

@@ -40,6 +40,8 @@ struct GeneralSettingsView: View {
     private let originalLanguage = AppLanguage.launchLanguage
     @ObservedObject private var model = AppModel.shared
     @AppStorage("showRecents") private var showRecents = true
+    @AppStorage(SidebarLaunch.key) private var sidebarAtLaunch = false
+    @AppStorage(GroupTree.groupColorsKey) private var groupColors = GroupTree.groupColorsDefault
     @AppStorage("recentsShown") private var recentsShown = 5
     @AppStorage(ChromeStyle.storageKey) private var chromeStyle = ChromeStyle.glass
     @AppStorage(SessionTerminalHost.clipboardWriteKey) private var allowClipboardWrite = false
@@ -120,6 +122,8 @@ struct GeneralSettingsView: View {
             }
 
             Section("Sidebar") {
+                Toggle("Show Sidebar at Launch", isOn: $sidebarAtLaunch)
+                Toggle("Group Colors", isOn: $groupColors)
                 Toggle("Show Recent", isOn: $showRecents)
                 Stepper(value: $recentsShown, in: 1...HostStore.maxRecents) {
                     LabeledContent("Recent entries shown") {

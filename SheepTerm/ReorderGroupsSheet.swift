@@ -14,7 +14,9 @@ struct ReorderGroupsSheet: View {
                 .foregroundStyle(.secondary)
 
             List {
-                ForEach(store.groups) { group in
+                // The TOP-LEVEL groups (6.0 (12)): a subgroup is reordered by
+                // dragging it in the sidebar, inside its parent.
+                ForEach(GroupTree.children(of: nil, in: store.groups)) { group in
                     HStack(spacing: 10) {
                         Image(systemName: "line.3.horizontal")
                             .font(.system(size: 11))
@@ -22,19 +24,18 @@ struct ReorderGroupsSheet: View {
                         Text(group.name)
                             .font(.system(size: 13))
                         Spacer()
-                        Text("\(group.hosts.count)")
+                        Text("\(HostStore.hostCount(ofGroupIDs: [group.id], in: store.groups))")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }
                     .padding(.vertical, 3)
                 }
                 .onMove { from, to in
-                    // Direct mutation, like Quick Connect's save-to-group:
-                    // the user's own change is what re-arms saving after a
-                    // corrupt load, and a plain save() is silently dropped.
-                    store.noteExplicitUserMutation()
-                    store.groups.move(fromOffsets: from, toOffset: to)
-                    store.save()
+                    // The store's move, not a raw `groups.move`: the list
+                    // holds subgroups between the rows shown here, and the
+                    // offsets are positions among the top-level groups.
+                    let tops = GroupTree.children(of: nil, in: store.groups)
+                    store.moveGroups(withIDs: Set(from.map { tops[$0].id }), toParent: nil, atIndex: to)
                 }
             }
             .frame(minHeight: 220)

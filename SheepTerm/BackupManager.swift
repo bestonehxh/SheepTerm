@@ -59,13 +59,13 @@ enum BackupManager {
         // "appearanceMode" is gone (4.0 (5): the app is dark only). An old
         // backup that carries it is not an error — the restore only writes
         // keys that are still on this list, so it is simply not applied.
-        "autoReconnect", "chromeStyle", "collapsedGroups", "collapsedHostSections",
+        "autoReconnect", "chromeStyle", "collapsedGroups", "collapsedHostSections", "openSubgroups",
         "highlightDefault", "logSessions", "recentsShown", "showRecents",
         "safePasteDelayMilliseconds", "safePasteEnabled", "confirmDangerousCommands",
         // Settings → Clipboard (OSC 52 write; off unless set). The literal
         // is `SessionTerminalHost.clipboardWriteKey`.
         "allowOSC52ClipboardWrite",
-        "showStatusBar", "sidebarWidth", "statusShowClock", "statusShowHints",
+        "showStatusBar", "sidebarWidth", "sidebarAtLaunch", "sidebarGroupColors", "statusShowClock", "statusShowHints",
         "statusShowIP", "statusShowSession", "statusShowSheep", "statusConnectionStyle", "statusShowFileServer", "statusShowTransfers", "terminalTheme",
         // The terminal's own look and its scrollback depth: restoring onto a
         // fresh Mac without these gives back the hosts but not the terminal

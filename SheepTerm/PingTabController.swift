@@ -43,7 +43,8 @@ final class PingTabController: ObservableObject {
     }
     static let packetCap = 500
 
-    @Published var showLog = true
+    /// The packet log card: off by default, the user's toggle remembered for the next tab (`PingPlan.showsLog`).
+    @Published var showLog: Bool { didSet { if showLog != oldValue { UserDefaults.standard.set(showLog, forKey: Self.showLogKey) } } }
     @Published var selection = Set<Row.ID>()
     @Published private(set) var interval: Double
     /// Bumped on every row status change (the summary and Stop/Resume follow it).
@@ -59,6 +60,7 @@ final class PingTabController: ObservableObject {
     var onOpenSSH: ((String) -> Void)?
 
     private static let intervalKey = "pingInterval"
+    private static let showLogKey = "pingShowLog"
     private var closed = false
     private var clickMonitor: Any?
 
@@ -70,6 +72,7 @@ final class PingTabController: ObservableObject {
 
     init() {
         interval = PingPlan.interval(saved: UserDefaults.standard.double(forKey: Self.intervalKey))
+        showLog = PingPlan.showsLog(saved: UserDefaults.standard.object(forKey: Self.showLogKey) as? Bool)
     }
 
     static func title(count: Int) -> String {

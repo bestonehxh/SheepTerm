@@ -115,6 +115,100 @@ nonisolated enum SyncPolicy {
         guard let a = try? encoder.encode(fromDisk), let b = try? encoder.encode(memory) else { return false }
         return a == b
     }
+
+    // MARK: Mixed builds — nested groups (6.0 (12)) beside a build with sections
+
+    /// A group record written by a build before nested groups (Mac 6.0 (11),
+    /// Windows 0.1 (21)) has NO `parentID` key: "I don't know", not "top
+    /// level". Laid over this copy's hosts.json and re-encoded by the restore
+    /// hygiene on the way to disk, the gap would land as `"parentID": null` —
+    /// a deliberate top level — and the load pass could no longer tell the
+    /// two apart: one rename on the older build flattened the subgroup here.
+    /// So the parents this copy holds (`parents`: group id → parent id, as
+    /// the records spell them) are put into the composed file BEFORE it is
+    /// checked and written. Only a gap is filled, never a value or a null,
+    /// and only with a parent that is in the file (`GroupTree.repair` would
+    /// take any other out again).
+    static func fillKnownParents(composed data: Data, parents: [String: String]) -> Data {
+        guard !parents.isEmpty,
+              var list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return data }
+        let ids = Set(list.compactMap { $0["id"] as? String })
+        var changed = false
+        for index in list.indices where list[index]["parentID"] == nil {
+            guard let id = list[index]["id"] as? String, let parent = parents[id],
+                  parent != id, ids.contains(parent) else { continue }
+            list[index]["parentID"] = parent
+            changed = true
+        }
+        guard changed, let filled = try? SyncRecordCodec.canonical(list) else { return data }
+        return filled
+    }
+
+    /// Whether a record this copy holds says the same as the cloud's copy,
+    /// allowing for the two shapes one group has across builds: a build
+    /// before nested groups always writes `"sections": []` and never
+    /// `parentID`; this build omits an empty list and always writes the
+    /// parent (`null` at the top level). A cloud record WITHOUT the key does
+    /// not know the parent, so the parent this copy holds is not a
+    /// difference either — as long as it is still the parent this copy gave
+    /// the record when it applied that cloud copy (`parentAtApply`: the
+    /// group id, nil = top level). A different parent is a MOVE made here
+    /// since, and a move is a real change: taken for shape, it was never
+    /// uploaded and the next old-build copy flattened it. Anything else that
+    /// differs — a name, the host order, a section list with names in it —
+    /// is a real change too.
+    static func sameRecordAcrossBuilds(local: Data, cloud: Data, parentAtApply: String?) -> Bool {
+        guard local != cloud else { return true }
+        guard var mine = (try? JSONSerialization.jsonObject(with: local)) as? [String: Any],
+              var theirs = (try? JSONSerialization.jsonObject(with: cloud)) as? [String: Any] else { return false }
+        if (mine["sections"] as? [Any])?.isEmpty == true { mine["sections"] = nil }
+        if (theirs["sections"] as? [Any])?.isEmpty == true { theirs["sections"] = nil }
+        if theirs["parentID"] == nil {
+            guard (mine["parentID"] as? String) == parentAtApply else { return false }
+            mine["parentID"] = nil
+        }
+        guard let a = try? SyncRecordCodec.canonical(mine), let b = try? SyncRecordCodec.canonical(theirs) else { return false }
+        return a == b
+    }
+
+    /// The snapshot's records with the CLOUD's bytes in place of this copy's
+    /// for every record that says the same across builds (`lastApplied`: the
+    /// cloud's bytes as `syncApply` last laid them over the file, by id).
+    ///
+    /// The engine uploads a record whose bytes differ from what it last
+    /// synced. A record from an older build is re-encoded into this build's
+    /// shape on the way to disk, so it always differed — and the older build,
+    /// given this shape, re-encodes it back into its own and uploads THAT:
+    /// two builds on one vault traded the same group back and forth on every
+    /// sync, forever (one Drive write per round per machine). Handing the
+    /// engine the cloud's own bytes for a record that only differs in shape
+    /// ends it on this side; a real edit here — a move included: the parent
+    /// is compared with `parentAtApply` (record id → the group id this copy
+    /// gave it when that cloud copy was applied; absent = top level) —
+    /// differs in content and is uploaded as before.
+    static func presentAcrossBuilds(_ records: inout [String: Data], lastApplied: [String: Data],
+                                    parentAtApply: [String: String]) {
+        for (id, cloud) in lastApplied {
+            guard let local = records[id], local != cloud,
+                  sameRecordAcrossBuilds(local: local, cloud: cloud, parentAtApply: parentAtApply[id]) else { continue }
+            records[id] = cloud
+        }
+    }
+
+    /// The parent each group in a hosts.json file has, keyed by RECORD id
+    /// (`group:<id>` → parent group id; a top-level group is absent): what
+    /// `presentAcrossBuilds` compares a later local copy with. Read from the
+    /// file as it is written after an apply, so a parent `fillKnownParents`
+    /// could not keep (not in the file) counts as the top level it became.
+    static func recordParents(inFile data: Data) -> [String: String] {
+        guard let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [:] }
+        var parents: [String: String] = [:]
+        for group in list {
+            guard let id = group["id"] as? String, let parent = group["parentID"] as? String else { continue }
+            parents["\(SyncRecordCodec.hosts.item)\(id)"] = parent
+        }
+        return parents
+    }
 }
 
 /// Sync per RECORD, not per file (5.0 (7)): two Macs that change different
@@ -252,7 +346,7 @@ nonisolated enum SyncRecordCodec {
 /// `HostStore.maxRecents`, the sidebar drag clamp in ContentView, the
 /// `scrollbackLines` clamp in SessionTerminalHost, `pasteDelayChoices`.
 nonisolated enum SettingBounds {
-    static let safePasteDelays = [50, 100, 200, 300, 500, 1000]
+    static let safePasteDelays = SafePastePlan.delayChoices
 
     /// The bounded number for `key`, or nil when the key has no numeric
     /// bound (use the value as it is) — a non-finite number gives nil too,
@@ -264,7 +358,7 @@ nonisolated enum SettingBounds {
         case "sidebarWidth": return min(max(value, 200), 320)
         case "scrollbackLines": return min(max(value.rounded(), 500), 200_000)
         case "safePasteDelayMilliseconds":
-            return Double(safePasteDelays.min { abs(Double($0) - value) < abs(Double($1) - value) } ?? 200)
+            return Double(safePasteDelays.min { abs(Double($0) - value) < abs(Double($1) - value) } ?? SafePastePlan.delayDefault)
         default: return nil
         }
     }

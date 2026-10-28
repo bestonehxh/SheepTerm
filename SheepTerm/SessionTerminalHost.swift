@@ -116,6 +116,15 @@ final class SessionTerminalHost {
     /// read this as one.
     var takeLastSendAccepted: (() -> Bool)?
 
+    /// Whether the session's worker has put every byte it accepted on the
+    /// line (serial / telnet controllers: `!worker.hasUnsentWrites`). Safe
+    /// Paste's line delay starts only then (`PaceSchedule`). nil = always
+    /// drained (SSH, local).
+    var lineDrained: (() -> Bool)?
+    /// The line's speed (serial controller: the open port's baud), for Safe
+    /// Paste's drain cap (`PaceSchedule.drainCap`). nil = unknown (telnet).
+    var lineBaud: (() -> Int?)?
+
     private let scrollerFader = ScrollerFader()
     private let pastePacer = SafePastePacer()
     private var pastePromptPresented = false
@@ -131,9 +140,16 @@ final class SessionTerminalHost {
     private var pastingImmediately = false
     /// Set around `sendCommand`: the text is the app's, not the clipboard's.
     private var sendingCommand = false
+    /// The command's Return (`CommandSendPlan.split`), for a review that
+    /// takes its body over (`CommandSendPlan.reviewed`).
+    private var sendingCommandReturn = false
     /// Set around a `sendCommand(confirmed: true)`: its paste is not asked
     /// about again.
     private var guardConfirmedSend = false
+    /// Set by `shouldPaste` when Safe Paste sent a one-line body's CLEANED
+    /// text itself during a `sendCommand`: that send's acceptance
+    /// (`CommandSendPlan.bodyAccepted`).
+    private var commandCleanedSend: Bool?
 
     /// Send text the app composed (Snippets, Broadcast) the way a paste
     /// reaches the device, minus the planted-clipboard question. Returns
@@ -146,7 +162,8 @@ final class SessionTerminalHost {
     func sendCommand(_ text: String, confirmed: Bool = false) -> Bool {
         // Body pasted, Return as its own CR (`CommandSendPlan`): inside a
         // bracketed paste the CR would not run the command. A veto (Safe
-        // Paste paces the lines itself, each with its own CR) sends no extra.
+        // Paste reviews the body) sends no extra: the review sends the
+        // command's Return, or none, itself (`CommandSendPlan.reviewed`).
         // Nothing overtakes a held Return or an open question, and nothing
         // goes on a line a file transfer owns (review 5.0 (22)).
         guard !inputBlocked else { NSSound.beep(); return false }
@@ -161,14 +178,27 @@ final class SessionTerminalHost {
             return false
         }
         sendingCommand = true
+        sendingCommandReturn = plan.thenReturn
         guardConfirmedSend = confirmed
-        defer { sendingCommand = false; guardConfirmedSend = false }
+        defer { sendingCommand = false; sendingCommandReturn = false; guardConfirmedSend = false }
         guard !plan.body.isEmpty else {
             if plan.thenReturn { terminalView.send(CommandSendPlan.returnKey, keystroke: false) }
             return plan.thenReturn
         }
-        guard terminalView.pasteText(plan.body) else { return false }
-        if plan.thenReturn { terminalView.send(CommandSendPlan.returnKey, keystroke: false) }
+        commandCleanedSend = nil
+        let handedOver = terminalView.pasteText(plan.body)
+        // The worker may still have refused the body (queue full, session
+        // gone): then its Return must not follow, and Broadcast must not
+        // count this tab (`CommandSendPlan.returnFollows`). A body Safe
+        // Paste sent cleaned in the view's place counts by that send.
+        let cleanedSend = commandCleanedSend
+        commandCleanedSend = nil
+        let accepted = CommandSendPlan.bodyAccepted(handedOver: handedOver, cleanedSend: cleanedSend,
+                                                    lastSendAccepted: { takeLastSendAccepted?() ?? true })
+        guard accepted else { return false }
+        if CommandSendPlan.returnFollows(thenReturn: plan.thenReturn, bodyAccepted: accepted) {
+            terminalView.send(CommandSendPlan.returnKey, keystroke: false)
+        }
         return true
     }
 
@@ -190,10 +220,9 @@ final class SessionTerminalHost {
             return terminalView.pasteText(line)
         case .review(let plan):
             guard !pastePromptPresented else { NSSound.beep(); return false }
-            if pastePacer.isActive { cancelSafePaste(reason: .replaced) }
             let dangerous = AppModel.shared.confirmDangerousCommands ? CommandGuard.dangerousLines(plan.lines, vendor: vendor) : []
-            presentSafePasteConfirmation(plan: plan, originalText: plan.lines.joined(separator: "\n"), allowImmediate: false,
-                                         dangerous: dangerous)
+            presentSafePasteConfirmation(CommandSendPlan.reviewed(plan, text: plan.lines.joined(separator: "\n"), thenReturn: nil),
+                                         allowImmediate: false, dangerous: dangerous)
             return false
         case .refused(let error):
             showPasteLimitAlert(error == .tooManyLines ? String(localized: "The block contains more than 10,000 lines.") : String(localized: "The block is larger than 5 MB."))
@@ -224,7 +253,9 @@ final class SessionTerminalHost {
     /// be told from the live one's.
     private var pasteGeneration = 0
     private weak var pastePromptWindow: NSWindow?
-    private static let pasteDelayChoices = [50, 100, 200, 300, 500, 1_000]
+    private static let pasteDelayChoices = SafePastePlan.delayChoices
+    /// The Safe Paste sheet's list (and so its subtitle) width.
+    private static let pasteListWidth: CGFloat = 620
 
     /// The session's name for the Safe Paste sheet (set by `AppModel.attach`):
     /// with split panes the sheet is modal for the window, not the pane.
@@ -520,6 +551,12 @@ final class SessionTerminalHost {
     /// exist in the view). Text a device planted is asked about first — in
     /// every tab kind and whatever Safe Paste is set to.
     func shouldPaste(_ text: String) -> Bool {
+        // Nothing lands between two paced lines (`PacedRunGate`) — in every
+        // tab kind, before any early "paste as before".
+        guard PacedRunGate.verdict(.paste, runActive: pastePacer.isActive) != .refuse else {
+            NSSound.beep()
+            return false
+        }
         // The planted-clipboard question is about the CLIPBOARD: text the
         // app composed itself (a snippet, a broadcast line) never came from
         // it, so it is not asked — Safe Paste below still applies to it.
@@ -550,16 +587,30 @@ final class SessionTerminalHost {
             return false
         }
 
+        // What goes out is the CLEANED text (`PasteHygiene`): escape
+        // sequences, controls and bidi marks out, U+2028/U+2029/NEL as line
+        // breaks — so the review's lines, its count and its red marks are
+        // exactly what is sent (6.0 (12)).
+        let cleanText = PasteHygiene.cleaned(text)
         let plan: SafePastePlan
         do {
-            plan = try SafePastePlan.parse(text)
+            plan = try SafePastePlan.parseClipboard(text)
         } catch SafePastePlan.ParseError.singleLine {
             // One line runs only when it carries its own line break; without
             // one the user's Return is checked like any typed line.
-            let line = text.trimmingCharacters(in: .newlines)
-            guard guardOn, line != text, CommandGuard.isDangerous(line, vendor: vendor) else { return true }
+            let line = cleanText.trimmingCharacters(in: .newlines)
+            guard guardOn, line != cleanText, CommandGuard.isDangerous(line, vendor: vendor) else {
+                // Safe Paste on: one line still goes out clean (an ESC or a
+                // NUL in it would reach the device unseen).
+                guard reviewAll, cleanText != text else { return true }
+                let sent = !cleanText.isEmpty && sendImmediatePaste(cleanText)
+                // The view's copy is vetoed (false) but the cleaned text went
+                // out: a command's Return must still follow it.
+                if sendingCommand { commandCleanedSend = sent }
+                return false
+            }
             askAboutCommand(line) { [weak self] send in
-                if send { self?.sendImmediatePaste(text) }
+                if send { self?.sendImmediatePaste(cleanText) }
             }
             return false
         } catch _ where !reviewAll {
@@ -577,10 +628,10 @@ final class SessionTerminalHost {
 
         let dangerous = guardOn ? CommandGuard.dangerousLines(plan.lines, vendor: vendor) : []
         guard reviewAll || !dangerous.isEmpty else { return true }
-        if pastePacer.isActive {
-            cancelSafePaste(reason: .replaced)
-        }
-        presentSafePasteConfirmation(plan: plan, originalText: text, dangerous: dangerous)
+        // A snippet's body: the review sends its Return, or none (bug: the
+        // last line lost or gained one).
+        let reviewed = CommandSendPlan.reviewed(plan, text: cleanText, thenReturn: sendingCommand ? sendingCommandReturn : nil)
+        presentSafePasteConfirmation(reviewed, dangerous: dangerous)
         return false
     }
 
@@ -612,10 +663,13 @@ final class SessionTerminalHost {
     /// pacer's own lines also go through (hence the flag).
     func prepareForOrdinaryUserInput() {
         keystrokePending = true
-        if !sendingPacedLine, pastePacer.isActive {
+        if PacedRunGate.verdict(sendingPacedLine ? .pacedLine : .keystroke, runActive: pastePacer.isActive) == .stopRun {
             cancelSafePaste(reason: .keyboardInput)
         }
     }
+
+    /// A paced Safe Paste is still sending (Send File via XMODEM waits for it).
+    var isPacingPaste: Bool { pastePacer.isActive }
 
     // MARK: - Command history (5.0 (1))
 
@@ -713,13 +767,18 @@ final class SessionTerminalHost {
     /// A Return is held and nothing may overtake it.
     var isHoldingReturn: Bool { !heldKeys.isEmpty }
 
+    /// A Safe Paste paced run is starting (serial tabs: the wrong-speed
+    /// detector starts over — `ConsoleBaudGuess.Detector.feed`).
+    var onPacedRunStart: (() -> Void)?
     /// The serial controller's "a file transfer owns the line" (XMODEM).
     var lineBusy: (() -> Bool)?
 
     /// Pastes, snippets and the AI's paste are refused: a Return is held, a
-    /// dangerous-command question is open, or a transfer owns the line.
+    /// dangerous-command question is open, a transfer owns the line, or a
+    /// paced Safe Paste is still sending (`PacedRunGate`).
     var inputBlocked: Bool {
         isHoldingReturn || guardCard != nil || guardSheet != nil || (lineBusy?() ?? false)
+            || PacedRunGate.verdict(.paste, runActive: pastePacer.isActive) == .refuse
     }
 
     /// A key the controller refused itself (a transfer owns the line): the
@@ -754,7 +813,7 @@ final class SessionTerminalHost {
             return false
         }
         // ⌃J (LF) runs the line too on IOS, VRP and a shell.
-        guard typed, bytes == [0x0D] || bytes == [0x0D, 0x0A] || bytes == [0x0A], commandGuardActive else { return true }
+        guard typed, HeldKeys.isReturn(bytes), commandGuardActive else { return true }
         let row = cursorLine()
         // A login/password prompt: what was typed is an answer, not a command.
         if let row, CommandHistoryFilter.looksLikeCredentialPrompt(row) { return true }
@@ -809,14 +868,19 @@ final class SessionTerminalHost {
     }
 
     /// Sends the held Return and the keys behind it, in order, as the keys
-    /// they were (history records the line as usual).
+    /// they were (history records the line as usual). Only up to the first
+    /// Return pass unchecked (`HeldKeys.release`): the rest are typed again
+    /// through the gate, so a dangerous line behind it is held in its turn —
+    /// and since held keys never reached `noteOutgoing`, `typedLine` spells
+    /// that line from these sends.
     private func releaseHeld() {
-        let keys = heldKeys
+        let keys = HeldKeys.release(heldKeys)
         heldKeys = []
         guardGeneration &+= 1
         releasingHeld = true
-        for key in keys { terminalView.send(key, keystroke: true) }
+        for key in keys.now { terminalView.send(key, keystroke: true) }
         releasingHeld = false
+        for key in keys.again { terminalView.send(key, keystroke: true) }
     }
 
     /// Drops the held Return and the keys behind it; the command stays
@@ -938,21 +1002,32 @@ final class SessionTerminalHost {
         }
     }
 
-    private func presentSafePasteConfirmation(plan: SafePastePlan, originalText: String, allowImmediate: Bool = true,
+    private func presentSafePasteConfirmation(_ reviewed: CommandSendPlan.Reviewed, allowImmediate: Bool = true,
                                               dangerous: [Int] = []) {
+        let plan = reviewed.plan
         let alert = SheepAlert()
         alert.alertStyle = .informational
         // A working dialog, landscape and one fixed size (the accessory's
-        // 620 × 330), no icon — the user's call, 2026-10-09.
+        // 620 pt list), no icon — the user's call, 2026-10-09.
         alert.showsIcon = false
         alert.messageText = String(localized: "Safe Multi-line Paste")
         let size = Self.byteCountText(plan.sourceByteCount)
-        alert.informativeText = (sessionLabel.map {
-            String(localized: "Review all \(plan.lines.count) lines (\(size)) before sending to \($0).")
-        } ?? String(localized: "Review all \(plan.lines.count) lines (\(size)) before sending."))
-            // `CommandGuard.reviewNote`, in words (that one is shared with
-            // the Windows build and compared by the harness).
-            + (dangerous.isEmpty ? "" : " " + String(localized: "\(dangerous.count) of them can restart or erase the device."))
+        // ONE line, as wide as the list (the user, 6.0 (12)): a long session
+        // name is cut in the middle to fit, the sentence never wraps.
+        let subtitleFont = NSFont.systemFont(ofSize: 12)
+        let sentence: (String?) -> String = { name in
+            name.map { String(localized: "Review all \(plan.lines.count) lines (\(size)) before sending to \($0).") }
+                ?? String(localized: "Review all \(plan.lines.count) lines (\(size)) before sending.")
+        }
+        let fittedName = sessionLabel.map { name in
+            MiddleTruncation.fit(name) { candidate in
+                // 12 pt less than the column: the label's cell pads its text,
+                // and an overflow would let it cut a second time.
+                ceil((sentence(candidate) as NSString).size(withAttributes: [.font: subtitleFont]).width) <= Self.pasteListWidth - 12
+            }
+        }
+        alert.informativeText = sentence(fittedName)
+        alert.informativeSingleLine = true
         alert.addButton(withTitle: String(localized: "Send Line by Line"))
         if allowImmediate { alert.markCaution(alert.addButton(withTitle: String(localized: "Paste Immediately"))) }
         alert.addButton(withTitle: String(localized: "Cancel"))
@@ -970,15 +1045,6 @@ final class SessionTerminalHost {
 
         let previewTextView = NSTextView(frame: .zero)
         previewTextView.string = plan.lines.joined(separator: "\n")
-        if !dangerous.isEmpty, let storage = previewTextView.textStorage {
-            // The lines Confirm Dangerous Commands found, in the card's red.
-            let ranges = CommandGuard.lineRanges(plan.lines)
-            storage.beginEditing()
-            for index in dangerous where ranges.indices.contains(index) {
-                storage.addAttribute(.foregroundColor, value: SheepAlert.destructiveRed, range: ranges[index])
-            }
-            storage.endEditing()
-        }
         previewTextView.isEditable = false
         previewTextView.isSelectable = true
         previewTextView.isRichText = false
@@ -986,6 +1052,17 @@ final class SessionTerminalHost {
         previewTextView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         previewTextView.textColor = .labelColor
         previewTextView.backgroundColor = .textBackgroundColor
+        if !dangerous.isEmpty, let storage = previewTextView.textStorage {
+            // The lines Confirm Dangerous Commands found, in the card's red —
+            // AFTER `textColor`, which recolours the whole text (the red never
+            // showed until 6.0 (12)).
+            let ranges = CommandGuard.lineRanges(plan.lines)
+            storage.beginEditing()
+            for index in dangerous where ranges.indices.contains(index) {
+                storage.addAttribute(.foregroundColor, value: SheepAlert.destructiveRed, range: ranges[index])
+            }
+            storage.endEditing()
+        }
         previewTextView.textContainerInset = NSSize(width: 6, height: 6)
         previewTextView.isVerticallyResizable = true
         previewTextView.isHorizontallyResizable = true
@@ -1008,7 +1085,7 @@ final class SessionTerminalHost {
             popup.lastItem?.representedObject = milliseconds
         }
         let saved = UserDefaults.standard.integer(forKey: Self.pasteDelayKey)
-        let selected = Self.pasteDelayChoices.contains(saved) ? saved : 200
+        let selected = SafePastePlan.delay(saved: saved)
         if let index = Self.pasteDelayChoices.firstIndex(of: selected) {
             popup.selectItem(at: index)
         }
@@ -1019,16 +1096,46 @@ final class SessionTerminalHost {
         delayControls.alignment = .centerY
         delayControls.spacing = 10
 
-        let accessory = NSStackView(views: [reviewLabel, previewScrollView, delayControls])
+        // "Commands to send:" with the dangerous-line note on its right, in
+        // the card's red (it used to make the subtitle wrap). The words are
+        // `CommandGuard.reviewNote`'s (shared with Windows, compared by the
+        // harness).
+        let headerViews: [NSView]
+        if dangerous.isEmpty {
+            headerViews = [reviewLabel]
+        } else {
+            let note = NSTextField(labelWithString: String(localized: "\(dangerous.count) of them can restart or erase the device."))
+            note.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+            note.textColor = SheepAlert.destructiveRed
+            note.alignment = .right
+            note.lineBreakMode = .byTruncatingTail
+            note.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            headerViews = [reviewLabel, NSView(), note]
+        }
+        let header = NSStackView(views: headerViews)
+        header.orientation = .horizontal
+        // .centerY, not .firstBaseline: the spacer NSView has no baseline,
+        // and a baseline row with one asked Auto Layout for constraints it
+        // could not all satisfy (6.0 (12) review).
+        header.alignment = .centerY
+        header.distribution = .fill
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.widthAnchor.constraint(equalToConstant: Self.pasteListWidth).isActive = true
+
+        let accessory = NSStackView(views: [header, previewScrollView, delayControls])
         accessory.orientation = .vertical
         accessory.alignment = .leading
         accessory.spacing = 8
-        accessory.frame = NSRect(x: 0, y: 0, width: 620, height: 330)
         previewScrollView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            previewScrollView.widthAnchor.constraint(equalToConstant: 620),
+            previewScrollView.widthAnchor.constraint(equalToConstant: Self.pasteListWidth),
             previewScrollView.heightAnchor.constraint(equalToConstant: 285),
         ])
+        // The frame SheepAlert pins is the content's OWN height (label + 8 +
+        // the 285 pt list + 8 + the delay row ≈ 340). A fixed 330 was too
+        // short: Auto Layout broke a constraint and the column centred its
+        // rows, leaving empty space above the title (6.0 (12)).
+        accessory.frame = NSRect(x: 0, y: 0, width: Self.pasteListWidth, height: ceil(accessory.fittingSize.height))
         alert.accessoryView = accessory
 
         pastePromptPresented = true
@@ -1044,11 +1151,15 @@ final class SessionTerminalHost {
             self.pastePromptWindow = nil
             switch response {
             case .alertFirstButtonReturn:
-                let delay = popup?.selectedItem?.representedObject as? Int ?? 200
+                let delay = popup?.selectedItem?.representedObject as? Int ?? SafePastePlan.delayDefault
                 UserDefaults.standard.set(delay, forKey: Self.pasteDelayKey)
                 self.startSafePaste(plan: plan, delayMilliseconds: delay)
             case .alertSecondButtonReturn where allowImmediate:
-                self.sendImmediatePaste(originalText)
+                // A command's Return, outside the paste (`sendCommand`).
+                if CommandSendPlan.returnFollows(thenReturn: reviewed.immediateReturn,
+                                                 bodyAccepted: self.sendImmediatePaste(reviewed.immediateText)) {
+                    self.terminalView.send(CommandSendPlan.returnKey, keystroke: false)
+                }
             default:
                 break
             }
@@ -1118,6 +1229,10 @@ final class SessionTerminalHost {
     }
 
     private func startSafePaste(plan: SafePastePlan, delayMilliseconds: Int) {
+        // The paced run's HUD takes the top-right corner the wrong-speed
+        // hint uses (serial tabs): the hint goes, the detector starts over.
+        hideBaudHint()
+        onPacedRunStart?()
         showPasteHUD(sent: 0, total: plan.lines.count, delayMilliseconds: delayMilliseconds)
         pastePacer.start(
             plan: plan,
@@ -1134,6 +1249,8 @@ final class SessionTerminalHost {
                 // so the hand-over stands.
                 return self.takeLastSendAccepted?() ?? true
             },
+            drained: { [weak self] in self?.lineDrained?() ?? true },
+            baud: lineBaud?(),
             progress: { [weak self] sent, total in
                 self?.showPasteHUD(sent: sent, total: total, delayMilliseconds: delayMilliseconds)
             },
@@ -1146,7 +1263,8 @@ final class SessionTerminalHost {
                 // a config with holes in the middle.
                 // The same goes for a session that ended or a tab switched
                 // away mid-paste: the switch is half-configured either way.
-                if reason == .inputDiscarded || (reason == .sessionEnded && sent < plan.lines.count) {
+                if reason == .inputDiscarded || reason == .deviceNotTakingInput
+                    || (reason == .sessionEnded && sent < plan.lines.count) {
                     // Deferred: this completion can run inside SwiftUI's
                     // `dismantleNSView` (tab switch), where a modal must not spin.
                     DispatchQueue.main.async { [weak self] in
@@ -1161,9 +1279,16 @@ final class SessionTerminalHost {
         let alert = SheepAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Paste stopped part-way")
-        let cause = reason == .inputDiscarded
-            ? String(localized: "The session stopped accepting input after \(sent) of \(total) lines, so the rest was not sent.")
-            : String(localized: "The session ended or the tab was switched away after \(sent) of \(total) lines, so the rest was not sent.")
+        let cause = switch reason {
+        case .inputDiscarded:
+            String(localized: "The session stopped accepting input after \(sent) of \(total) lines, so the rest was not sent.")
+        case .deviceNotTakingInput:
+            // The last line is still waiting to leave (flow control held,
+            // or the far end stopped reading) past `PaceSchedule.drainCap`.
+            String(localized: "The device is not taking input (\(sent) of \(total) lines sent), so the rest was not sent.")
+        default:
+            String(localized: "The session ended or the tab was switched away after \(sent) of \(total) lines, so the rest was not sent.")
+        }
         alert.informativeText = cause + " "
             + String(localized: "Check what actually reached the device before pasting the remainder.")
         alert.addButton(withTitle: String(localized: "OK"))
@@ -1176,10 +1301,13 @@ final class SessionTerminalHost {
 
     /// "Paste Immediately": hand the text back to the view, which brackets it
     /// when the program asked for bracketed paste and turns newlines into CR.
-    private func sendImmediatePaste(_ text: String) {
+    @discardableResult
+    private func sendImmediatePaste(_ text: String) -> Bool {
         pastingImmediately = true
-        terminalView.pasteText(text)
-        pastingImmediately = false
+        defer { pastingImmediately = false }
+        // Handed over AND taken by the worker: a snippet's separate Return
+        // after it goes out only then (`CommandSendPlan.returnFollows`).
+        return terminalView.pasteText(text) && (takeLastSendAccepted?() ?? true)
     }
 
     private func showPasteLimitAlert(_ detail: String) {
@@ -1207,6 +1335,7 @@ final class SessionTerminalHost {
     /// and Send File via XMODEM's (5.0 (22)). One at a time: the transfer
     /// refuses input, so a paste cannot run beside it.
     func showStatusHUD(_ text: String, stopHelp: String, onStop: @escaping () -> Void) {
+        hideBaudHint()
         hudStop = onStop
         hudIsPaste = false
         if pasteHUD == nil {
@@ -1251,6 +1380,36 @@ final class SessionTerminalHost {
         pasteStopButton?.toolTip = stopHelp
         pasteHUD?.isHidden = false
     }
+
+    // MARK: - Wrong-speed hint (6.0 (12), serial tabs) — `BaudHintView`
+
+    private var baudHint: BaudHintView?
+
+    /// "Garbled? [Try rate] ×" top right, where the status HUD sits (one or
+    /// the other: the HUD takes the corner). Replaces one already up.
+    func showBaudHint(rate: Int, onTry: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+        hideBaudHint()
+        // The corner is the status HUD's while it is up (`ConsoleBaudGuess.lineBusy`).
+        guard !hasStatusHUD else { return }
+        let hint = BaudHintView(rootView: BaudHintContent(rate: rate, onTry: onTry, onDismiss: onDismiss))
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        terminalView.addSubview(hint)
+        NSLayoutConstraint.activate([
+            // popupChrome's 10 pt shadow room sits inside the view.
+            hint.topAnchor.constraint(equalTo: terminalView.topAnchor, constant: 0),
+            hint.trailingAnchor.constraint(equalTo: terminalView.trailingAnchor, constant: -2),
+        ])
+        baudHint = hint
+    }
+
+    func hideBaudHint() {
+        baudHint?.removeFromSuperview()
+        baudHint = nil
+    }
+
+    var hasBaudHint: Bool { baudHint != nil }
+    /// The status HUD (paste progress / XMODEM) is on screen.
+    var hasStatusHUD: Bool { pasteHUD.map { !$0.isHidden } ?? false }
 
     func hideStatusHUD() {
         hudStop = nil

@@ -43,4 +43,27 @@ final class SidebarKeyBridge {
     /// Return in the field: open the host the arrows selected. False when the
     /// arrows selected nothing (Return then does what it always did).
     var activateSelection: () -> Bool = { false }
+    /// What lights the group level bars — the SwiftUI side reports the
+    /// pointer and the search field's focus, the outline its own focus and
+    /// drags.
+    let barActivity = SidebarBarActivity()
+}
+
+/// Whether the user is working in the sidebar (`GroupTree.barsActive`), fed
+/// by events only — no timer. `onChange` fires once per real change.
+final class SidebarBarActivity {
+    var pointerInside = false { didSet { settle() } }
+    var focusedList = false { didSet { settle() } }
+    var focusedSearch = false { didSet { settle() } }
+    var dragging = false { didSet { settle() } }
+    var onChange: (Bool) -> Void = { _ in }
+    private(set) var active = false
+
+    private func settle() {
+        let now = GroupTree.barsActive(pointerInside: pointerInside, focused: focusedList || focusedSearch,
+                                       dragging: dragging)
+        guard now != active else { return }
+        active = now
+        onChange(now)
+    }
 }

@@ -216,26 +216,17 @@ struct SidebarResizeHandle: View {
 struct DetailPane: View {
     @EnvironmentObject var model: AppModel
 
-    /// A lone terminal's margin: 10 pt each side, Terminal.app's (measured on
-    /// a 2× capture of a Terminal window, 5.0 (54): the user asked for "as far
-    /// from the edge as the Mac's Terminal"), 6 on top; a lone web pane
-    /// fills the area edge to edge (its bar is the top edge). A split: the
-    /// cards meet the window's sides (no dark strip along the edge — the user
-    /// found it odd, 5.0 (54)), 4 pt between panes and under the tab bar;
-    /// each card's own text inset (`paneTextInset`, 10) keeps every pane's
-    /// text where a lone pane's is.
+    /// The tree's padding: none. A lone (or zoomed) terminal's margin — 10 pt
+    /// each side, Terminal.app's (measured on a 2× capture of a Terminal
+    /// window, 5.0 (54)), 6 on top — is the pane tree's own since 6.0 (12)
+    /// (`PaneVeil.margin`): the connection card's veil has to cover it, and
+    /// padding out here left a bright frame round the dimmed terminal. A lone
+    /// web / Files / Ping pane fills the area edge to edge. A split (D3,
+    /// 2026-10-28): the tree keeps its own 5 pt (`PaneTreeView.outerMargin`)
+    /// round the cards on its near-black backdrop; each card's own text inset
+    /// (`paneTextInset`, 10) sits inside.
     static func inset(for workspace: WorkspaceState, model: AppModel) -> (leading: CGFloat, trailing: CGFloat, top: CGFloat) {
-        // A Files tab lays out its own even margins, like a web page.
-        func isWeb(_ id: UUID) -> Bool {
-            switch model.tab(id: id)?.content {
-            case .web?, .files?, .ping?: return true
-            default: return false
-            }
-        }
-        let terminal: (CGFloat, CGFloat, CGFloat) = (10, 10, 6)
-        if let zoomed = workspace.zoomed { return isWeb(zoomed) ? (0, 0, 0) : terminal }
-        if workspace.paneCount == 1 { return workspace.sessions.contains(where: isWeb) ? (0, 0, 0) : terminal }
-        return (0, 0, PaneTreeView.dividerThickness)
+        (0, 0, 0)
     }
 
     var body: some View {

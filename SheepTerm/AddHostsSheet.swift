@@ -133,8 +133,11 @@ struct AddHostsSheet: View {
 
             Form {
                 Picker("Group", selection: $groupChoice) {
-                    ForEach(model.store.groups) { group in
-                        Text(group.name).tag(GroupChoice.existing(group.id))
+                    // Every group as its path, in sidebar order: two subgroups
+                    // may share a name ("Floor 2" in two buildings).
+                    ForEach(GroupTree.preorder(model.store.groups), id: \.group.id) { entry in
+                        Text(GroupTree.shownPath(of: entry.group.id, in: model.store.groups))
+                            .tag(GroupChoice.existing(entry.group.id))
                     }
                     Divider()
                     Text("Create New Group…").tag(GroupChoice.new)
@@ -245,7 +248,7 @@ struct AddHostsSheet: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text(status ?? String(localized: "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import CSV…. A header row must use these names: Name, Host / IP, Credential, Section. A host may be written admin@host:2222."))
+                Text(status ?? String(localized: "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import CSV…. A header row must use these names: Name, Host / IP, Credential, Group. A host may be written admin@host:2222."))
                     .font(.system(size: 10))
                     .foregroundStyle(status == nil ? .secondary : .primary)
                 Spacer()
@@ -351,7 +354,7 @@ struct AddHostsSheet: View {
         } credential: {
             Text("Credential").help(Self.credentialRules)
         } section: {
-            Text("Section").help(Self.sectionRules)
+            Text("Subgroup").help(Self.sectionRules)
         } trailing: {
             // A bare `Color.clear` is flexible in BOTH axes and stretched the
             // header band to fill the grid — it needs a size of its own.
@@ -490,11 +493,11 @@ struct AddHostsSheet: View {
             }
         } section: {
             fixedCell(menu: sectionsInChosenGroup.map { MenuEntry(id: $0, label: $0) },
-                      menuLabel: "Section list",
-                      help: "Pick a section you already have",
+                      menuLabel: "Subgroup list",
+                      help: "Pick a subgroup you already have",
                       pick: { row.sectionText.wrappedValue = $0.label }) {
                 TextField("", text: row.sectionText)
-                    .accessibilityLabel("Section, row \(number)")
+                    .accessibilityLabel("Subgroup, row \(number)")
                     .focused($focus, equals: .section(id))
                     .onSubmit { submit(from: id) }
                     .onChange(of: row.wrappedValue.sectionText) { previous, typed in
@@ -577,7 +580,7 @@ struct AddHostsSheet: View {
     /// it instead of letting Add look like it was ignored.
     private var newGroupNameTaken: Bool {
         !trimmedNewGroupName.isEmpty
-            && model.store.groups.contains { $0.name == trimmedNewGroupName }
+            && model.store.nameTaken(trimmedNewGroupName, under: nil, except: nil)
     }
 
     /// Rows that name a target. A row with a name and no address is someone
@@ -608,7 +611,7 @@ struct AddHostsSheet: View {
         case .name: return String(localized: "Name")
         case .address: return String(localized: "Host / IP")
         case .credential: return String(localized: "Credential")
-        case .section: return String(localized: "Section")
+        case .section: return String(localized: "Subgroup")
         }
     }
 
@@ -833,7 +836,7 @@ struct AddHostsSheet: View {
     /// would be worse; this is the line that stops that being a surprise.
     private func headerHint(_ block: BulkHostParser.Block) -> String {
         guard block.firstRowMayBeHeader else { return "" }
-        return " · " + String(localized: "First row read as data — a header must use Name, Host / IP, Credential, Section.")
+        return " · " + String(localized: "First row read as data — a header must use Name, Host / IP, Credential, Group.")
     }
 
     /// A header this app will not take refuses the whole paste: nothing is
@@ -1057,20 +1060,19 @@ struct AddHostsSheet: View {
     // MARK: Add
 
     static let sectionRules = """
-        The sub-heading this host sits under INSIDE the group — a floor, a \
-        rack, a role. Leave it empty and the host sits loose in the group. A \
-        name you already use files it under that heading; anything else \
-        creates the heading. Per row: two hosts in one paste can go under \
-        two different headings.
+        The subgroup this host goes into, INSIDE the group above — a floor, \
+        a rack, a role. A path goes deeper: Bldg 1/Floor 2. Leave it empty \
+        and the host goes straight into the group. A subgroup you already \
+        have takes it; anything else creates the subgroup. Per row: two \
+        hosts in one paste can go into two different subgroups.
         """
 
-    /// The headings that already exist in the group this batch is going to —
-    /// the chevron offers those, and typing anything else makes a new one.
-    /// `sections(in:)` is `HostGroup.displayedSections`, so an EMPTY heading
-    /// the user made in that group is offered here like any other.
+    /// The subgroups that already exist below the group this batch is going
+    /// to, as paths — the chevron offers those, and typing anything else
+    /// makes a new one. An EMPTY subgroup is offered like any other.
     private var sectionsInChosenGroup: [String] {
         switch groupChoice {
-        case .existing(let id): return model.store.sections(in: id)
+        case .existing(let id): return GroupTree.relativePaths(below: id, in: model.store.groups)
         case .new: return []
         }
     }
@@ -1218,14 +1220,23 @@ struct AddHostsSheet: View {
         // filed nothing, whatever the cells said.
         let existing: [Host]
         switch groupChoice {
-        case .existing(let id): existing = model.store.hosts(inGroup: id)
+        // The whole subtree: the merge pairs against it.
+        case .existing(let id): existing = model.store.subtreeHosts(of: id).map(\.host)
         case .new: existing = []
         }
         // `declared` as well: an EMPTY heading in the target group is a real
         // heading, and a row typed as "floor  2" joins it exactly as it will
-        // when the store writes it.
+        // when the store writes it. The tree-aware variant, because the depth
+        // rule leaves a labeled row loose in a depth-4 group and the status
+        // line must say what really landed.
+        let filedRoot: UUID?
+        switch groupChoice {
+        case .existing(let id): filedRoot = id
+        case .new: filedRoot = nil
+        }
         let filed = BulkHostParser.filedSummary(hosts: hosts, existing: existing,
-                                                declared: sectionsInChosenGroup)
+                                                declared: sectionsInChosenGroup,
+                                                groups: model.store.groups, root: filedRoot)
         // Only the rows that land: a correction to a row whose target was
         // already in the group never reached anything, and saying it did was
         // a report about data that was not written.
@@ -1256,10 +1267,9 @@ struct AddHostsSheet: View {
                 action: .merge,
                 replace: [:]
             )
-            // Each host carries its own heading (`Host.section`), so
+            // Each host carries its own subgroup path (`Host.section`), so
             // `applyImport` files them as it adds them — nothing to apply
-            // afterwards, and a host that was already there keeps the heading
-            // it had.
+            // afterwards, and a host that was already there stays where it is.
         case .new:
             groupName = trimmedNewGroupName
             // A taken name was already refused above, so `uniqueGroupName`
@@ -1305,7 +1315,7 @@ struct AddHostsSheet: View {
             // stays two words so the line stays one line.
             let alone = existed == 0 && repeated == 0 && skipped == 0
             counts.append(alone
-                          ? String(localized: "\(filed.hosts) filed under \(filed.sections) sections")
+                          ? String(localized: "\(filed.hosts) filed in \(filed.sections) subgroups")
                           : String(localized: "\(filed.hosts) filed"))
         }
         if existed > 0 { counts.append(String(localized: "\(existed) existed")) }

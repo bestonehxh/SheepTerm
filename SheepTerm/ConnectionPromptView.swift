@@ -1024,11 +1024,17 @@ final class ConnectionOverlayView: NSView {
     /// A click on the veil, for a card that is not a `ConnectionCardView`
     /// (the dangerous-command question).
     var onVeilClick: (() -> Void)?
+    /// Posted when a veil goes up, comes down or moves to another view: the
+    /// pane tree veils the margin round the terminal to match (`PaneVeil`).
+    static let veilDidChange = Notification.Name("SheepTerm.ConnectionOverlayView.veilDidChange")
+    static let veilColor = NSColor.black.withAlphaComponent(0.45)
+
     var veiled = true {
         didSet {
             guard veiled != oldValue else { return }
-            layer?.backgroundColor = veiled ? NSColor.black.withAlphaComponent(0.45).cgColor : nil
+            layer?.backgroundColor = veiled ? Self.veilColor.cgColor : nil
             window?.invalidateCursorRects(for: self)
+            NotificationCenter.default.post(name: Self.veilDidChange, object: self)
         }
     }
     weak var card: ConnectionCardView?
@@ -1036,8 +1042,13 @@ final class ConnectionOverlayView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        layer?.backgroundColor = Self.veilColor.cgColor
         autoresizingMask = [.width, .height]
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        NotificationCenter.default.post(name: Self.veilDidChange, object: self)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }

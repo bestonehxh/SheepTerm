@@ -13,6 +13,18 @@ public nonisolated struct SafePastePlan: Equatable, Sendable {
     public static let maxBytes = 5 * 1024 * 1024
     public static let maxLines = 10_000
 
+    /// "Delay between lines" (Send Line by Line): the menu's choices and the
+    /// default when nothing valid is saved (`safePasteDelayMilliseconds`).
+    /// 100 ms since 6.0 (12) (was 200); a saved choice still wins.
+    public static let delayChoices = [50, 100, 200, 300, 500, 1_000]
+    public static let delayDefault = 100
+
+    /// The delay the sheet starts on: the saved choice, else the default
+    /// (UserDefaults answers 0 for a key never set).
+    public static func delay(saved: Int) -> Int {
+        delayChoices.contains(saved) ? saved : delayDefault
+    }
+
     public enum ParseError: Error, Equatable, Sendable {
         case singleLine
         case tooManyBytes
@@ -91,6 +103,113 @@ public nonisolated struct SafePastePlan: Equatable, Sendable {
     public func bytes(forLine index: Int) -> [UInt8] {
         if finalLineWithoutReturn, index == lines.count - 1 { return Array(lines[index].utf8) }
         return Array(lines[index].utf8) + [0x0D]
+    }
+}
+
+extension SafePastePlan {
+    /// A CLIPBOARD paste (⌘V and friends) as the review shows and the pacer
+    /// sends it (6.0 (12)): cleaned by `PasteHygiene.cleaned` (so the line
+    /// count, the dangerous-line marks and the bytes are one text), and the
+    /// LAST line's Return only when the text itself ends with a line break —
+    /// `…\nreload` copied without one must not run reload, the same as Paste
+    /// Immediately. Snippets and the AI panel keep their own last-line rule
+    /// (`CommandSendPlan.reviewed`, `AIPasteRoute`).
+    public static func parseClipboard(
+        _ text: String,
+        maxBytes: Int = SafePastePlan.maxBytes,
+        maxLines: Int = SafePastePlan.maxLines
+    ) throws -> SafePastePlan {
+        guard text.utf8.count <= maxBytes else { throw ParseError.tooManyBytes }
+        let cleaned = PasteHygiene.cleaned(text)
+        var plan = try parse(cleaned, maxBytes: maxBytes, maxLines: maxLines)
+        plan.finalLineWithoutReturn = !PasteHygiene.endsWithLineBreak(cleaned)
+        return plan
+    }
+}
+
+/// What a paste may carry to a device (6.0 (12), shared with Windows).
+/// One rule for snippets, the broadcast line and clipboard pastes: escape
+/// sequences, C0/C1 controls (Tab and LF kept, DEL dropped) and bidi /
+/// direction marks out — a line that reads one way in the review must not
+/// send another (U+202E reverses what is shown; ESC or NUL reach the device
+/// unseen).
+public nonisolated enum PasteHygiene {
+    /// Clipboard text: CR LF, CR, U+2028, U+2029 and NEL (U+0085) become LF
+    /// first — the review's text view breaks lines on all of them, so the
+    /// splitter must too — then `commandText`.
+    public static func cleaned(_ text: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        var previousCR = false
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x0A:
+                if !previousCR { scalars.append("\n") }
+                previousCR = false
+            case 0x0D, 0x2028, 0x2029, 0x85:
+                scalars.append("\n")
+                previousCR = scalar.value == 0x0D
+            default:
+                scalars.append(scalar)
+                previousCR = false
+            }
+        }
+        return commandText(String(scalars))
+    }
+
+    /// The text ends with a line break (after `cleaned`, LF is the only one).
+    public static func endsWithLineBreak(_ text: String) -> Bool {
+        guard let last = text.unicodeScalars.last?.value else { return false }
+        return last == 0x0A || last == 0x0D || last == 0x2028 || last == 0x2029 || last == 0x85
+    }
+
+    /// `text` with every escape SEQUENCE and every C0/C1 control and bidi
+    /// override removed, keeping Tab and LF. Whole sequences, not just the
+    /// ESC: dropping the ESC alone would leave `[2J` to be typed as text.
+    /// (Was `SnippetCodec.commandText`, which now forwards here.)
+    public static func commandText(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var i = 0
+        func skipCSI() {           // parameters/intermediates 0x20–0x3F, final 0x40–0x7E
+            while i < scalars.count, scalars[i].value < 0x40 || scalars[i].value > 0x7E { i += 1 }
+            if i < scalars.count { i += 1 }
+        }
+        func skipString() {        // OSC/DCS/APC/PM body until BEL or ST (ESC \ or 0x9C)
+            while i < scalars.count {
+                let v = scalars[i].value
+                if v == 0x07 || v == 0x9C { i += 1; return }
+                if v == 0x1B {
+                    i += 1
+                    if i < scalars.count, scalars[i].value == 0x5C { i += 1 }
+                    return
+                }
+                i += 1
+            }
+        }
+        while i < scalars.count {
+            let v = scalars[i].value
+            switch v {
+            case 0x1B:
+                i += 1
+                guard i < scalars.count else { break }
+                switch scalars[i].value {
+                case 0x5B: i += 1; skipCSI()                              // ESC [
+                case 0x5D, 0x50, 0x5E, 0x5F: i += 1; skipString()          // ESC ] P ^ _
+                default: i += 1                                           // ESC + one byte
+                }
+            case 0x9B: i += 1; skipCSI()                                   // C1 CSI
+            case 0x9D, 0x90, 0x9E, 0x9F: i += 1; skipString()              // C1 OSC DCS APC PM
+            case 0x09, 0x0A:
+                out.append(scalars[i]); i += 1
+            case _ where v < 0x20 || v == 0x7F || (v >= 0x80 && v < 0xA0):
+                i += 1
+            case 0x2028, 0x2029, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069, 0x061C:
+                i += 1
+            default:
+                out.append(scalars[i]); i += 1
+            }
+        }
+        return String(out)
     }
 }
 

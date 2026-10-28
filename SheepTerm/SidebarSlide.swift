@@ -21,3 +21,17 @@ nonisolated enum SidebarCover {
         max(0, (paneLeft - closedLeft).rounded())
     }
 }
+
+/// Settings ▸ Sidebar ▸ Show Sidebar at Launch (6.0 (12)): off = today's
+/// launch (clean, like Terminal.app; ⌘0 opens it). A per-Mac layout choice
+/// like `sidebarWidth`: in a backup, never synced
+/// (`SheepTermSync.localOnlySettings`).
+nonisolated enum SidebarLaunch {
+    static let key = "sidebarAtLaunch"
+
+    /// Whether the window starts with the sidebar open: only a stored true
+    /// (never set, or anything else = off).
+    static func shown(stored: Any?) -> Bool {
+        (stored as? Bool) == true
+    }
+}

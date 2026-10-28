@@ -38,9 +38,11 @@ nonisolated indirect enum PaneNode: Equatable, Sendable {
 }
 
 nonisolated struct PaneLayout: Equatable, Sendable {
-    /// Panes per tab, at most. Each visible pane is a live renderer with
-    /// its own surfaces; six is already more than the eye can follow.
-    static let maxPanes = 6
+    /// Panes per tab, at most: a full 3 × 3 grid (`isGrid`, 6.0 (12)).
+    static let maxPanes = 9
+    /// Children of one split, at most: three columns, three rows, three
+    /// cells in a column or row.
+    static let maxPerSplit = 3
     /// No pane may be dragged narrower than this share of its split.
     static let minFraction: CGFloat = 0.08
 
@@ -48,6 +50,12 @@ nonisolated struct PaneLayout: Equatable, Sendable {
 
     init(_ session: UUID) {
         root = .leaf(session)
+    }
+
+    /// A tree built elsewhere, taken as it is (the harness builds the
+    /// shapes older builds could make; nothing here rebuilds them).
+    init(root: PaneNode) {
+        self.root = root
     }
 
     // MARK: - reading
@@ -220,45 +228,70 @@ nonisolated struct PaneLayout: Equatable, Sendable {
         }
     }
 
+    /// The tidy grid (the owner, 2026-10-28): at most two levels — the root
+    /// split (columns or rows) with ≤ 3 children, each a leaf or a split in
+    /// the OTHER axis holding ≤ 3 leaves. Every edit keeps a tab on it; a tab
+    /// that is off it (built by an older rule) is left as it is and only
+    /// refuses to grow (`insert`) until closes bring it back.
+    var isGrid: Bool {
+        guard case .split(_, let axis, let children, _) = root else { return true }
+        guard children.count <= PaneLayout.maxPerSplit else { return false }
+        return children.allSatisfy { child in
+            guard case .split(_, let inner, let cells, _) = child else { return true }
+            return inner != axis && cells.count <= PaneLayout.maxPerSplit
+                && cells.allSatisfy { if case .leaf = $0 { return true }; return false }
+        }
+    }
+
+    private static func evenShares(_ n: Int) -> [CGFloat] {
+        Array(repeating: 1 / CGFloat(n), count: n)
+    }
+
+    private static func holds(_ node: PaneNode, _ id: UUID) -> Bool {
+        switch node {
+        case .leaf(let leaf): return leaf == id
+        case .split(_, _, let children, _): return children.contains { holds($0, id) }
+        }
+    }
+
     // MARK: - editing
 
-    /// Put `new` beside `target`. Same-axis parent: `new` becomes a sibling
-    /// taking half of the target's share; otherwise the target leaf becomes a
-    /// two-way split. False when the target is unknown, `new` is already
-    /// here, or the tab is full.
+    /// Put `new` beside `target`, on the grid (`isGrid`):
+    /// - one pane → two columns (left/right) or two rows (up/down);
+    /// - along the root's axis → a new column/row beside the TARGET'S
+    ///   column/row (so Split Right on a pane in a column adds a column);
+    /// - across it → the target's column/row splits into cells.
+    /// The split that gains the pane shares its length evenly; the rest keep
+    /// their shares. False — nothing changes — when the target is unknown,
+    /// `new` is already here, the tab is full, that split has three already,
+    /// or the tab is off the grid. `pinned` is unused on the grid (no
+    /// splicing happens); kept for the callers' one signature.
     @discardableResult
     mutating func insert(_ new: UUID, beside target: UUID, _ direction: PaneDirection, keepingWhole pinned: Set<UUID> = []) -> Bool {
-        guard contains(target), !contains(new), count < PaneLayout.maxPanes else { return false }
-        func walk(_ node: PaneNode) -> PaneNode {
-            switch node {
-            case .leaf(let id) where id == target:
-                let pair = direction.insertsBefore ? [PaneNode.leaf(new), .leaf(target)] : [.leaf(target), .leaf(new)]
-                return .split(id: UUID(), axis: direction.axis, children: pair, fractions: [0.5, 0.5])
-            case .leaf:
-                return node
-            case .split(let id, let axis, let children, let fractions):
-                if axis == direction.axis, let index = children.firstIndex(of: .leaf(target)) {
-                    var newChildren = children
-                    var newFractions = fractions
-                    let share = fractions[index] / 2
-                    newFractions[index] = share
-                    let at = direction.insertsBefore ? index : index + 1
-                    newChildren.insert(.leaf(new), at: at)
-                    newFractions.insert(share, at: at)
-                    // ⌘D five times halves the newest pane each time: 1/32 of
-                    // the row, under `minFraction`, after which `setFractions`
-                    // refused every divider of the row (review finding). A
-                    // share that small evens the row out instead.
-                    if share < PaneLayout.minFraction {
-                        newFractions = Array(repeating: 1 / CGFloat(newChildren.count), count: newChildren.count)
-                    }
-                    return .split(id: id, axis: axis, children: newChildren, fractions: newFractions)
+        guard contains(target), !contains(new), count < PaneLayout.maxPanes, isGrid else { return false }
+        let fresh = PaneNode.leaf(new)
+        func pair(_ node: PaneNode) -> [PaneNode] { direction.insertsBefore ? [fresh, node] : [node, fresh] }
+        switch root {
+        case .leaf:
+            root = .split(id: UUID(), axis: direction.axis, children: pair(root), fractions: Self.evenShares(2))
+        case .split(let id, let axis, var children, let fractions):
+            guard let k = children.firstIndex(where: { Self.holds($0, target) }) else { return false }
+            if direction.axis == axis {
+                guard children.count < PaneLayout.maxPerSplit else { return false }
+                children.insert(fresh, at: direction.insertsBefore ? k : k + 1)
+                root = .split(id: id, axis: axis, children: children, fractions: Self.evenShares(children.count))
+            } else {
+                switch children[k] {
+                case .leaf:
+                    children[k] = .split(id: UUID(), axis: direction.axis, children: pair(children[k]), fractions: Self.evenShares(2))
+                case .split(let cellID, let cellAxis, var cells, _):
+                    guard cells.count < PaneLayout.maxPerSplit, let j = cells.firstIndex(of: .leaf(target)) else { return false }
+                    cells.insert(fresh, at: direction.insertsBefore ? j : j + 1)
+                    children[k] = .split(id: cellID, axis: cellAxis, children: cells, fractions: Self.evenShares(cells.count))
                 }
-                return .split(id: id, axis: axis, children: children.map(walk), fractions: fractions)
+                root = .split(id: id, axis: axis, children: children, fractions: fractions)
             }
         }
-        root = walk(root)
-        normalize(pinned: pinned)
         return true
     }
 
@@ -289,8 +322,10 @@ nonisolated struct PaneLayout: Equatable, Sendable {
         root = walk(root)
     }
 
-    /// Take `id` out; its share goes to its siblings, a split left with one
-    /// child collapses into it. False for an unknown id or the last pane.
+    /// Take `id` out; the siblings left in its split share the length evenly
+    /// (the owner, 2026-10-28: every add or close re-evens), a split left
+    /// with one child collapses into it. False for an unknown id or the last
+    /// pane.
     @discardableResult
     mutating func remove(_ id: UUID, keepingWhole pinned: Set<UUID> = []) -> Bool {
         guard contains(id), count > 1 else { return false }
@@ -300,10 +335,9 @@ nonisolated struct PaneLayout: Equatable, Sendable {
                 var newChildren = children
                 var newFractions = fractions
                 newChildren.remove(at: index)
-                let freed = newFractions.remove(at: index)
+                newFractions.remove(at: index)
                 if newChildren.count == 1 { return newChildren[0] }
-                let rest = newFractions.reduce(0, +)
-                newFractions = newFractions.map { rest > 0 ? $0 + freed * ($0 / rest) : 1 / CGFloat(newChildren.count) }
+                newFractions = Self.evenShares(newChildren.count)
                 return .split(id: splitID, axis: axis, children: newChildren, fractions: newFractions)
             }
             return .split(id: splitID, axis: axis, children: children.map(walk), fractions: fractions)

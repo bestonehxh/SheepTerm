@@ -87,7 +87,7 @@ struct TabStripView: View {
                             model.select(workspace: workspace.id)
                             model.collapseSidebar()
                         },
-                        onClose: { model.close(workspace: workspace.id) },
+                        onClose: { model.requestClose(workspace: workspace.id) },
                         onReconnect: { model.reconnect(tab: tab) },
                         onDuplicate: { model.duplicate(tab: tab) },
                         onCopyAllOutput: { model.copyAllOutput(tab: tab) }

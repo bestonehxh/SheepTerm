@@ -12,6 +12,9 @@ struct SidebarView: View {
     /// ↑/↓/Return in the search field -> the outline's selection (the caret
     /// stays in the field).
     @State private var keyBridge = SidebarKeyBridge()
+    /// The search field's focus lights the group level bars (`GroupTree.barsActive`).
+    @FocusState private var searchFocused: Bool
+    @AppStorage(GroupTree.groupColorsKey) private var groupColors = GroupTree.groupColorsDefault
     @State private var showNewGroup = false
     @State private var renameTarget: HostGroup?
     @State private var editTarget: Host?
@@ -19,35 +22,28 @@ struct SidebarView: View {
     /// pattern, so the gap changes DURING the system transition.
     @State private var isFullScreen = false
     @State private var collapsedGroups: Set<UUID> = Self.loadCollapsedGroups()
-    @State private var collapsedHostSections: Set<String> = Self.loadCollapsedSections()
-    @State private var renameSectionTarget: SectionPrompt?
-    @State private var newSectionTarget: SectionPrompt?
+    /// Subgroups that are OPEN (they start shut, each opens on its own).
+    @State private var openSubgroups: Set<UUID> = Self.loadOpenSubgroups()
+    /// The group a "New Group…" from a group's menu makes a subgroup in.
+    @State private var newSubgroupParent: HostGroup?
     @AppStorage("showRecents") private var showRecents = true
     @AppStorage("recentsShown") private var recentsShown = 5
 
     private static let collapsedKey = "collapsedGroups"
-    /// Keys are "<groupID>/<label>" — a label alone means nothing now that a
-    /// section lives inside a group and two groups may both have a "Floor 2".
-    private static let collapsedSectionsKey = "collapsedHostSections"
+    private static let openSubgroupsKey = "openSubgroups"
+    /// Before 6.0 (12) a SECTION's fold lived here as "<groupID>/<label>".
+    /// Subgroups now start shut, so there is nothing to carry over: the key
+    /// is dropped on the next write.
+    private static let legacySectionsKey = "collapsedHostSections"
 
     private static func loadCollapsedGroups() -> Set<UUID> {
         let strings = UserDefaults.standard.stringArray(forKey: collapsedKey) ?? []
         return Set(strings.compactMap(UUID.init(uuidString:)))
     }
 
-    private static func loadCollapsedSections() -> Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: collapsedSectionsKey) ?? [])
-    }
-
-    /// A section prompt needs an identity for `.sheet(item:)` — plus the
-    /// group it is inside (for a rename) or the hosts it is about (for a new
-    /// heading out of a host's menu).
-    /// Either "rename this heading in this group" or "make a heading in this
-    /// group". A section is the GROUP's, so both carry a group and no hosts.
-    struct SectionPrompt: Identifiable {
-        let id = UUID()
-        var name: String = ""
-        var group: HostGroup?
+    private static func loadOpenSubgroups() -> Set<UUID> {
+        let strings = UserDefaults.standard.stringArray(forKey: openSubgroupsKey) ?? []
+        return Set(strings.compactMap(UUID.init(uuidString:)))
     }
 
     /// Shared confirmation for the sidebar's destructive actions. Defaults to
@@ -66,7 +62,7 @@ struct SidebarView: View {
     /// `reportNameTaken`, and for the same reason: the prompt sheet is still
     /// on screen when its commit closure runs.
     private func reportRenameProblem(_ detail: String,
-                                     title: String = String(localized: "The section was not renamed.")) {
+                                     title: String = String(localized: "The group was not renamed.")) {
         DispatchQueue.main.async {
             let alert = SheepAlert()
             alert.alertStyle = .warning
@@ -77,76 +73,54 @@ struct SidebarView: View {
         }
     }
 
-    /// HostStore refuses a duplicate group name and says nothing, so creating
-    /// or renaming onto a name that is taken looked like the sheet had simply
-    /// been ignored. Deferred a turn: the prompt sheet is still on screen when
-    /// its commit closure runs, and an alert stacked on a sheet is a mess.
-    /// Renames a heading inside its group, and says WHY when the store
-    /// refuses. Split out of the sheet's closure: inline, the whole thing was
-    /// one expression the type checker gave up on (measured).
-    private func renameSection(_ prompt: SectionPrompt, to rawName: String) {
-        guard let group = prompt.group else { return }
-        // The store trims before it compares, so this has to as well: renaming
-        // "Floor 2" to "Floor 2 " was reported as a name that is already used.
-        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The name the STORE will write, not the raw string: hygiene and the
-        // snap happen in there, and the fold state and the "already used"
-        // message have to talk about the same spelling the file gets.
-        let others = store.sections(in: group.id).filter { $0 != prompt.name }
-        guard let written = HostStore.normalizedHeading(name, existing: others) else {
-            reportRenameProblem(String(localized: "The name has no usable characters."))
+    /// Makes a group — at the top level, or a subgroup of `parent` — and
+    /// says WHY when the store refuses. HostStore refuses a duplicate name
+    /// and says nothing, so creating onto a name that is taken looked like
+    /// the sheet had simply been ignored.
+    private func createGroup(named rawName: String, in parent: HostGroup?) {
+        // The CLEANED name, because that is what `addGroup` compares and
+        // stores: a 90-character name whose first 64 characters are already a
+        // group's, or "Lab\u{0}", was refused in there and the sheet simply
+        // closed with nothing created.
+        let name = HostStore.cleanGroupName(rawName)
+        let failed = String(localized: "The group was not created.")
+        guard !name.isEmpty else {
+            reportRenameProblem(String(localized: "The name has no usable characters."), title: failed)
             return
         }
-        guard store.renameSection(in: group.id, from: prompt.name, to: name) else {
-            // Says WHY it was refused. Inner whitespace too: "Floor 2" and
-            // "Floor  2" are two rows the eye cannot tell apart.
-            if others.contains(where: { $0 == written || HostStore.sameHeading($0, written) }) {
-                reportNameTaken(written, noun: "section")
-            } else if !store.sections(in: group.id).contains(prompt.name) {
-                // It was removed or renamed in the meantime.
-                reportRenameProblem(String(localized: "That heading is no longer in “\(group.name)”."))
+        guard !store.nameTaken(name, under: parent?.id, except: nil) else {
+            reportNameTaken(name)
+            return
+        }
+        guard store.addGroup(named: name, parent: parent?.id) != nil else {
+            reportRenameProblem(parent.map { String(localized: "“\($0.name)” is no longer there, or is already \(GroupTree.userDepth) levels deep.") }
+                                    ?? String(localized: "The name has no usable characters."),
+                                title: failed)
+            return
+        }
+        // A new subgroup is put where it can be seen.
+        if let parent {
+            collapsedGroups.remove(parent.id)
+            if parent.parentID != nil, !openSubgroups.contains(parent.id) {
+                openSubgroups = SidebarLayout.toggledOpen(parent.id, in: openSubgroups, groups: store.groups)
             }
-            return
-        }
-        // A folded heading stays folded under its new name — the key carries
-        // the label, so it is rekeyed rather than dropped.
-        let oldKey = "\(group.id.uuidString)/\(prompt.name)"
-        if collapsedHostSections.contains(oldKey) {
-            collapsedHostSections.remove(oldKey)
-            collapsedHostSections.insert("\(group.id.uuidString)/\(written)")
         }
     }
 
-    /// Creates an EMPTY heading in a group — the group owns its sections, so
-    /// nothing is filed here; the user drops hosts in or picks it from a
-    /// host's Section ▸.
-    private func createSection(in group: HostGroup?, named name: String) {
-        guard let group else { return }
-        let existing = store.sections(in: group.id)
-        guard let written = HostStore.normalizedHeading(name, existing: existing) else {
-            reportRenameProblem(String(localized: "The name has no usable characters."),
-                                title: String(localized: "The section was not created."))
-            return
-        }
-        // A name that READS like a heading already there is a refusal, exactly
-        // as it is for a rename: two rows nobody can tell apart is the outcome
-        // worth preventing.
-        if existing.contains(where: { $0 == written || HostStore.sameHeading($0, written) }) {
-            // Create wording, not the rename's: "The name is already used"
-            // over a New Section sheet left it unclear whether anything was
-            // created at all.
-            reportNameTaken(written, noun: "section", title: String(localized: "The section was not created."))
-            return
-        }
-        guard store.declareSection(name, inGroup: group.id) != nil else {
-            reportRenameProblem(String(localized: "That group is no longer there."),
-                                title: String(localized: "The section was not created."))
-            return
+    /// "N hosts and M subgroups go with it." — the subtree a delete takes.
+    static func deleteDetail(hosts: Int, subgroups: Int) -> String {
+        switch (hosts, subgroups) {
+        case (0, 0): return String(localized: "The group is empty.")
+        case (_, 0): return String(localized: "\(hosts) hosts go with it. This cannot be undone.")
+        default: return String(localized: "\(hosts) hosts and \(subgroups) subgroups go with it. This cannot be undone.")
         }
     }
 
-    private func reportNameTaken(_ name: String, noun: String = "group",
-                                 title: String? = nil) {
+    /// HostStore refuses a duplicate group name and says nothing, so renaming
+    /// onto a name that is taken looked like the sheet had simply been
+    /// ignored. Deferred a turn: the prompt sheet is still on screen when its
+    /// commit closure runs, and an alert stacked on a sheet is a mess.
+    private func reportNameTaken(_ name: String, title: String? = nil) {
         DispatchQueue.main.async {
             let alert = SheepAlert()
             alert.alertStyle = .warning
@@ -154,9 +128,7 @@ struct SidebarView: View {
             // knows what failed can say that instead and put the name in the
             // line below, which is how every other refusal here reads.
             alert.messageText = title ?? String(localized: "The name “\(name)” is already used.")
-            let clash = noun == "section"
-                ? String(localized: "Two headings here cannot share a name.")
-                : String(localized: "Two groups cannot share a name.")
+            let clash = String(localized: "Two groups in one place cannot share a name.")
             alert.informativeText = title == nil ? clash : String(localized: "“\(name)” is already used here.")
             alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
@@ -173,17 +145,9 @@ struct SidebarView: View {
         // the plist churned on every write for no change anyone made.
         UserDefaults.standard.set(collapsedGroups.map(\.uuidString).sorted(),
                                   forKey: Self.collapsedKey)
-    }
-
-    /// The same ONE-writer rule as `persistCollapsed`, for the section
-    /// headings: every change to `collapsedHostSections` — a heading row
-    /// toggled in the outline, a rename rekeying it, the prune below — goes
-    /// through that one @State, so the `.onChange` on the outline sees all of
-    /// them and nobody else writes this key.
-    private func persistCollapsedSections() {
-        // Sorted: a Set's order is not stable, so the plist churned on every
-        // write and every backup diff looked like a change nobody made.
-        UserDefaults.standard.set(collapsedHostSections.sorted(), forKey: Self.collapsedSectionsKey)
+        // Its sections are subgroups now, and their folds are in the line above.
+        UserDefaults.standard.removeObject(forKey: Self.legacySectionsKey)
+        UserDefaults.standard.set(openSubgroups.map(\.uuidString).sorted(), forKey: Self.openSubgroupsKey)
     }
 
     /// Drops ids of groups that no longer exist so the collapsed set
@@ -195,17 +159,8 @@ struct SidebarView: View {
         if pruned != collapsedGroups {
             collapsedGroups = pruned
         }
-        // Same for section headings: one exists as long as its GROUP declares
-        // it (emptying it leaves the row), so a renamed or REMOVED one must
-        // not sit in UserDefaults forever keeping a row folded that
-        // nobody can see any more.
-        let liveSections = Set(store.groups.flatMap { group in
-            store.sections(in: group.id).map { "\(group.id.uuidString)/\($0)" }
-        })
-        let prunedSections = collapsedHostSections.intersection(liveSections)
-        if prunedSections != collapsedHostSections {
-            collapsedHostSections = prunedSections
-        }
+        let openPruned = openSubgroups.intersection(valid)
+        if openPruned != openSubgroups { openSubgroups = openPruned }
     }
 
     /// Space above the search field. The sidebar owns the titlebar row, so
@@ -213,22 +168,13 @@ struct SidebarView: View {
     /// fullscreen, where the field sits flush to the top instead.
     private var topGap: CGFloat { isFullScreen ? 8 : 36 }
 
-    /// True only when there is nothing left to fold — every group AND every
-    /// section. The button reads "Expand all" exactly then; anything still
-    /// open (a section with its groups folded, say) means there is more to
-    /// collapse, so the first press finishes the job rather than undoing it.
+    /// True only when there is nothing left to fold — every top-level group
+    /// folded and no subgroup open. The button reads "Expand all" exactly
+    /// then; anything still open means there is more to collapse, so the
+    /// first press finishes the job rather than undoing it.
     private var everythingCollapsed: Bool {
-        let groupIDs = Set(store.groups.map(\.id))
-        let sections = allSectionKeys
-        guard !groupIDs.isEmpty || !sections.isEmpty else { return false }
-        return groupIDs.isSubset(of: collapsedGroups) && sections.isSubset(of: collapsedHostSections)
-    }
-
-    /// Every heading in every group, as its collapse key.
-    private var allSectionKeys: Set<String> {
-        Set(store.groups.flatMap { group in
-            store.sections(in: group.id).map { "\(group.id.uuidString)/\($0)" }
-        })
+        let tops = Set(GroupTree.children(of: nil, in: store.groups).map(\.id))
+        return !tops.isEmpty && tops.isSubset(of: collapsedGroups) && openSubgroups.isEmpty
     }
 
     private var searchConnectTarget: Host? {
@@ -244,7 +190,7 @@ struct SidebarView: View {
             showRecents: showRecents,
             recentsShown: recentsShown,
             collapsedGroups: $collapsedGroups,
-            collapsedHostSections: $collapsedHostSections,
+            openSubgroups: $openSubgroups,
             onEditHost: { host in
                 // A kind this build does not know is kept, never rewritten.
                 if host.kind == .unsupported { model.refuseUnsupported(host) } else { editTarget = host }
@@ -256,15 +202,16 @@ struct SidebarView: View {
                     // Deleting a group takes every host in it. That is the
                     // largest single loss the sidebar can cause and it had no
                     // confirmation at all, while deleting one credential did.
+                    // Its subgroups go with it, so the count is the subtree's.
+                    let hosts = HostStore.hostCount(ofGroupIDs: [original.id], in: store.groups)
+                    let subgroups = HostStore.subgroupCount(ofGroupIDs: [original.id], in: store.groups)
                     guard confirmDelete(
                         message: String(localized: "Delete “\(original.name)”?"),
-                        detail: original.hosts.isEmpty
-                            ? String(localized: "The group is empty.")
-                            : String(localized: "\(original.hosts.count) hosts go with it. This cannot be undone.")
+                        detail: Self.deleteDetail(hosts: hosts, subgroups: subgroups)
                     ) else { return }
                     // Forget its collapsed state too — a stale id would
                     // linger in UserDefaults forever.
-                    collapsedGroups.remove(original.id)
+                    collapsedGroups.subtract(GroupTree.subtreeIDs(of: original.id, in: store.groups))
                     store.deleteGroup(original)
                 }
             },
@@ -279,13 +226,11 @@ struct SidebarView: View {
             onSetGroupCredential: { model.showGroupCredential(groupID: $0.id) },
             onDeleteGroups: { ids in
                 // The multi-group menu asked once, for all of them.
-                collapsedGroups.subtract(ids)
+                collapsedGroups.subtract(ids.flatMap { GroupTree.subtreeIDs(of: $0, in: store.groups) })
                 store.deleteGroups(withIDs: ids)
             },
-            onRenameHostSection: { group, label in
-                renameSectionTarget = SectionPrompt(name: label, group: group)
-            },
-            onNewGroupSection: { newSectionTarget = SectionPrompt(group: $0) },
+            onNewSubgroup: { newSubgroupParent = firstGroup(withID: $0.id) },
+            groupColors: groupColors,
             keyBridge: keyBridge
         )
         // Not only on appear: a Remove Section (or a rename) leaves its key
@@ -301,16 +246,22 @@ struct SidebarView: View {
         // stores reload, so this runs first.
         .onReceive(NotificationCenter.default.publisher(for: .sheepTermConfigurationRestored)) { _ in
             collapsedGroups = Self.loadCollapsedGroups()
-            collapsedHostSections = Self.loadCollapsedSections()
+            openSubgroups = Self.loadOpenSubgroups()
         }
         .onChange(of: collapsedGroups) { _, _ in persistCollapsed() }
-        .onChange(of: collapsedHostSections) { _, _ in persistCollapsedSections() }
+        .onChange(of: openSubgroups) { _, _ in persistCollapsed() }
         .onAppear {
 #if DEBUG
             // SHEEPTERM_DEBUG_SHEET=edithost:<uuid> (scratch runs): Edit Host on that saved host.
             if let sheet = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SHEET"], sheet.hasPrefix("edithost:"),
                let id = UUID(uuidString: String(sheet.dropFirst("edithost:".count))) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { editTarget = model.savedHost(id: id) }
+            }
+            // SHEEPTERM_DEBUG_BARS_ACTIVE=n (scratch shots): the level bars lit n s in, as
+            // with the pointer over the sidebar, without moving the real pointer; -n = the
+            // pointer reported OUT n s in (a dim shot while the real pointer rests on the window).
+            if let after = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_BARS_ACTIVE"].flatMap(Double.init) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + abs(after)) { keyBridge.barActivity.pointerInside = after >= 0 }
             }
 #endif
             pruneCollapsedGroups()
@@ -339,23 +290,18 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomBar
         }
+        // The pointer anywhere over the sidebar — list, search field, bottom
+        // bar — lights the level bars; leaving dims them again.
+        .onHover { inside in keyBridge.barActivity.pointerInside = inside }
+        .onChange(of: searchFocused) { _, focused in keyBridge.barActivity.focusedSearch = focused }
         .sheet(isPresented: $showNewGroup) {
             NamePromptSheet(title: "New Group", confirmLabel: "Create") { rawName in
-                // The CLEANED name, because that is what `addGroup` compares
-                // and stores: a 90-character name whose first 64 characters
-                // are already a group's, or "Lab\u{0}", was refused in there
-                // and the sheet simply closed with nothing created.
-                let name = HostStore.cleanGroupName(rawName)
-                guard !name.isEmpty else {
-                    reportRenameProblem(String(localized: "The name has no usable characters."),
-                                        title: String(localized: "The group was not created."))
-                    return
-                }
-                guard !store.groups.contains(where: { $0.name == name }) else {
-                    reportNameTaken(name)
-                    return
-                }
-                store.addGroup(named: name)
+                createGroup(named: rawName, in: nil)
+            }
+        }
+        .sheet(item: $newSubgroupParent) { parent in
+            NamePromptSheet(title: "New Group", confirmLabel: "Create") { rawName in
+                createGroup(named: rawName, in: parent)
             }
         }
         .sheet(item: $renameTarget) { group in
@@ -368,19 +314,9 @@ struct SidebarView: View {
                 if name.isEmpty {
                     reportRenameProblem(String(localized: "The name has no usable characters."),
                                         title: String(localized: "The group was not renamed."))
-                } else if store.groups.contains(where: { $0.id != group.id && $0.name == name }) {
+                } else if store.nameTaken(name, under: group.parentID, except: group.id) {
                     reportNameTaken(name)
                 }
-            }
-        }
-        .sheet(item: $renameSectionTarget) { prompt in
-            NamePromptSheet(title: "Rename Section", initialName: prompt.name) { name in
-                renameSection(prompt, to: name)
-            }
-        }
-        .sheet(item: $newSectionTarget) { prompt in
-            NamePromptSheet(title: "New Section", confirmLabel: "Create") { name in
-                createSection(in: prompt.group, named: name)
             }
         }
         .sheet(item: $editTarget) { host in
@@ -423,15 +359,14 @@ struct SidebarView: View {
                     Label("Reorder Groups…", systemImage: "arrow.up.arrow.down")
                 }
                 Button {
-                    // One click, the whole tree: sections AND groups. Both sets
-                    // still go through their own @State (the one writer that
-                    // persists each), so nothing else has to know about this.
+                    // Expand = every group open at every depth; Collapse =
+                    // every top-level group folded and every subgroup shut.
                     if everythingCollapsed {
                         collapsedGroups = []
-                        collapsedHostSections = []
+                        openSubgroups = Set(store.groups.filter { $0.parentID != nil }.map(\.id))
                     } else {
-                        collapsedGroups = Set(store.groups.map(\.id))
-                        collapsedHostSections = allSectionKeys
+                        collapsedGroups = Set(GroupTree.children(of: nil, in: store.groups).map(\.id))
+                        openSubgroups = []
                     }
                 } label: {
                     // The glyph and the words flip with the state.
@@ -487,6 +422,7 @@ struct SidebarView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             TextField("Search or user@host", text: $searchText)
+                .focused($searchFocused)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .noAutoFill()

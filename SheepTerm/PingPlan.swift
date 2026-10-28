@@ -365,4 +365,8 @@ nonisolated enum PingPlan {
     static func interval(saved: Double) -> Double {
         intervals.contains(saved) ? saved : defaultInterval
     }
+
+    /// Whether a new tab shows the packet log: off until the user turns it on (field use, 6.0 (12) — the log card took the room
+    /// the hosts need); the user's last choice after that.
+    static func showsLog(saved: Bool?) -> Bool { saved ?? false }
 }

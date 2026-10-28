@@ -29,7 +29,11 @@ final class SheepTermSync: SyncDataSource {
     let engine: SyncEngine
     /// Settings that describe this Mac's window, not the user's preferences.
     static let localOnlySettings: Set<String> = [
-        "collapsedGroups", "collapsedHostSections", "sidebarWidth", "TSMLanguageIndicatorEnabled",
+        "collapsedGroups", "collapsedHostSections", "openSubgroups", "sidebarWidth", "TSMLanguageIndicatorEnabled",
+        // Show Sidebar at Launch: this Mac's window, like sidebarWidth.
+        "sidebarAtLaunch",
+        // The sidebar's level bars: this Mac's look, like its width.
+        "sidebarGroupColors",
         // A RAM trade for THIS machine (CLAUDE.md), not a preference.
         "scrollbackLines",
         // A security opt-in: turning it on for one Mac must not turn it on
@@ -45,6 +49,19 @@ final class SheepTermSync: SyncDataSource {
     /// The synced settings as last seen, so a defaults change that is NOT
     /// one of them (a window frame, the sidebar width) schedules nothing.
     private var lastSettings: [String: Data] = [:]
+    /// hosts.json records as the CLOUD last gave them (`syncApply`), by id.
+    /// `syncSnapshot` hands the engine these bytes for a record that only
+    /// differs from this copy's in the shape an older build writes
+    /// (`SyncPolicy.presentAcrossBuilds`) — otherwise two builds on one
+    /// vault re-upload the same group to each other forever. In memory only:
+    /// after a relaunch the first round uploads this shape once more and the
+    /// next one settles.
+    private var cloudHostRecords: [String: Data] = [:]
+    /// For each record in `cloudHostRecords`: the parent this copy gave the
+    /// group when that cloud copy was applied (record id → group id; absent =
+    /// top level). A local parent that differs is a move made here since —
+    /// uploaded, never swapped for the parent-less cloud bytes.
+    private var hostRecordParentAtApply: [String: String] = [:]
 
     private init() {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -141,6 +158,9 @@ final class SheepTermSync: SyncDataSource {
             case .records: records.merge(split ?? [:]) { a, _ in a }
             }
         }
+        // A group record an older build wrote keeps ITS bytes while this copy
+        // only differs in shape — see `cloudHostRecords`.
+        SyncPolicy.presentAcrossBuilds(&records, lastApplied: cloudHostRecords, parentAtApply: hostRecordParentAtApply)
         let credentials = AppModel.shared.credentialStore
         let passwords = SyncPolicy.passwordRecords(
             listTrusted: credentials.isTrusted, listFileReadable: records[SyncRecordCodec.credentials.order] != nil,
@@ -276,12 +296,30 @@ final class SheepTermSync: SyncDataSource {
                 for id in ids {
                     if let value = changes[id] ?? nil { merged[id] = value } else { merged[id] = nil }
                 }
-                let composed = try SyncRecordCodec.compose(merged, as: family)
+                var composed = try SyncRecordCodec.compose(merged, as: family)
+                if family.file == "hosts.json" {
+                    // A group record from a build before nested groups has no
+                    // `parentID`; `sanitize` below would write the gap as
+                    // `null` (a deliberate top level) and flatten the subgroup
+                    // here. The parent this copy knows goes in first.
+                    var parents: [String: String] = [:]
+                    for group in AppModel.shared.store.groups {
+                        if let parent = group.parentID { parents[group.id.uuidString] = parent.uuidString }
+                    }
+                    composed = SyncPolicy.fillKnownParents(composed: composed, parents: parents)
+                }
                 var payload = BackupManager.Payload(format: BackupManager.currentFormat, app: "sync", created: Date(),
                                                     device: "", files: [family.file: composed], settings: [:])
                 try BackupManager.validate(payload)
                 _ = try BackupManager.sanitize(&payload)
                 guard let clean = payload.files[family.file] else { throw CocoaError(.fileReadCorruptFile) }
+                if family.file == "hosts.json" {
+                    let applied = SyncPolicy.recordParents(inFile: clean)
+                    for id in ids {
+                        if let value = changes[id] ?? nil { cloudHostRecords[id] = value } else { cloudHostRecords[id] = nil }
+                        hostRecordParentAtApply[id] = cloudHostRecords[id] == nil ? nil : applied[id]
+                    }
+                }
                 if clean == current { continue }
                 try Self.backUpBeforeOverwrite(url)
                 try clean.write(to: url, options: .atomic)

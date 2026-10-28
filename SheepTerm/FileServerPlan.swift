@@ -191,6 +191,46 @@ nonisolated enum FileServerPlan {
         return !name.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F || (0x80...0x9F).contains($0.value) }
     }
 
+    // MARK: TFTP port
+
+    /// How long a TFTP start waits for port 69 (a restart's old listener
+    /// still closing) before it gives up. There is no fallback port: most
+    /// devices' copy commands cannot carry one.
+    static let tftpBindWindow: TimeInterval = 2
+
+    /// The start error when the port stays taken; `owner` = the holding
+    /// process's name when it can be seen. (Port as text: an Int would be
+    /// grouped by the locale, "45,123".)
+    static func portBusyMessage(port: UInt16, owner: String?) -> String {
+        let number = String(port)
+        if let owner, !owner.isEmpty { return String(localized: "Port \(number) is in use by \(owner)") }
+        return String(localized: "Port \(number) is in use")
+    }
+
+    // MARK: Which address the popover shows
+
+    /// One interface that is up with an IPv4 (`NetworkInfo.ipv4Interfaces`).
+    struct Interface: Equatable, Sendable {
+        let bsdName: String
+        let displayName: String
+        let ip: String
+        /// The menu line: "Wi-Fi  192.168.1.20".
+        var menuTitle: String { "\(displayName)  \(ip)" }
+    }
+
+    /// The user default holding the chosen interface's BSD name (absent =
+    /// Automatic). Per Mac: not backed up, not synced.
+    static let interfaceKey = "fileServerInterface"
+
+    /// The address the commands use: the chosen interface's IPv4 while it is
+    /// up with one; otherwise (Automatic, or the choice is gone — the choice
+    /// stays saved so it comes back with the interface) the route toward the
+    /// device, else this Mac's primary IPv4.
+    static func address(chosen: String?, interfaces: [Interface], routed: String?, primary: String?) -> String? {
+        if let chosen, !chosen.isEmpty, let match = interfaces.first(where: { $0.bsdName == chosen }) { return match.ip }
+        return routed ?? primary
+    }
+
     // MARK: This Mac's address, as the device sees it
 
     /// The local IPv4 the kernel would use to reach `host` (an IPv4 literal

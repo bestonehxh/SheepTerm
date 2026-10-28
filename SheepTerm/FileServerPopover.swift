@@ -86,6 +86,8 @@ struct FileServerPopover: View {
     @State private var passwordDraft = ""
     @State private var loginProblem: String?
     @State private var loginHover = false
+    /// The interface picked in the address menu (BSD name; "" = Automatic).
+    @AppStorage(FileServerPlan.interfaceKey) private var chosenInterface = ""
 
     private var tab: SessionTab? { model.selectedTab }
 
@@ -102,14 +104,8 @@ struct FileServerPopover: View {
             HStack(spacing: 6) {
                 ForEach(FileServerPlan.Proto.allCases) { ServerChip(proto: $0) }
                 Spacer(minLength: 8)
-                Text(macIP ?? "—")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Theme.dimText)
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.head)
+                AddressButton(ip: macIP, chosen: $chosenInterface)
                     .layoutPriority(-1)
-                    .help("This Mac's address toward the device")
                 Button {
                     server.popoverShown = false
                     model.showTransferLog = true
@@ -136,14 +132,15 @@ struct FileServerPopover: View {
         .padding(14)
         .frame(width: 360)
         .onAppear { server.revalidateServedFile() }
-        .task(id: tab.flatMap { model.deviceAddress(of: $0) } ?? "") {
+        .task(id: "\(tab.flatMap { model.deviceAddress(of: $0) } ?? "")|\(chosenInterface)") {
             #if DEBUG
             // Screenshots (What's New art): a sample address, not this Mac's.
             if let ip = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_MAC_IP"] { macIP = ip; return }
             #endif
             let address = tab.flatMap { model.deviceAddress(of: $0) }
             let routed = await Task.detached { address.flatMap { FileServerPlan.ipv4(toReach: $0) } }.value
-            macIP = routed ?? NetworkInfo.primaryIPv4()?.ip
+            macIP = FileServerPlan.address(chosen: chosenInterface, interfaces: NetworkInfo.ipv4Interfaces(),
+                                           routed: routed, primary: NetworkInfo.primaryIPv4()?.ip)
         }
     }
 
@@ -320,8 +317,8 @@ private struct ServerChip: View {
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(on ? Theme.ok : Theme.dimText)
-            // One line always: a fallback port (":6969") used to wrap the
-            // chip into two rows (6.0 (1)); the address beside it gives way.
+            // One line always (FTP's ":2121" / SSH's ":2222"); the address
+            // beside it gives way.
             .lineLimit(1)
             .padding(.horizontal, 9)
             .padding(.vertical, 3)
@@ -337,6 +334,53 @@ private struct ServerChip: View {
         .opacity(server.starting.contains(kind) ? 0.5 : 1)
         .help(!on ? "Start \(proto.label) — turns itself off after 10 minutes without a transfer"
               : shown ? "Stop \(kind.label)" : "Show the \(proto.label) command")
+    }
+}
+
+/// This Mac's address in the top row; a click pops the interfaces:
+/// Automatic (the route toward the device) + each interface up with an
+/// IPv4. The choice is remembered (`FileServerPlan.interfaceKey`).
+private struct AddressButton: View {
+    let ip: String?
+    @Binding var chosen: String
+    @State private var hover = false
+    @State private var anchor = MenuAnchorBox()
+
+    var body: some View {
+        Button(action: pop) {
+            Text(ip ?? "—")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(hover ? Theme.tabText : Theme.dimText)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(MenuAnchorView(box: anchor))
+        .onHover { hover = $0 }
+        .help("This Mac's address toward the device")
+    }
+
+    private func pop() {
+        guard let view = anchor.view else { return }
+        let menu = Self.menu(chosen: chosen) { chosen = $0 }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+    }
+
+    /// Automatic + every interface up with an IPv4; `onPick("")` = Automatic.
+    static func menu(chosen: String, onPick: @escaping (String) -> Void) -> NSMenu {
+        let menu = NSMenu()
+        let interfaces = NetworkInfo.ipv4Interfaces()
+        let present = interfaces.contains { $0.bsdName == chosen }
+        let automatic = MenuAction(title: String(localized: "Automatic")) { onPick("") }
+        automatic.state = chosen.isEmpty || !present ? .on : .off
+        menu.addItem(automatic)
+        for interface in interfaces {
+            let item = MenuAction(title: interface.menuTitle) { onPick(interface.bsdName) }
+            item.state = interface.bsdName == chosen ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
     }
 }
 

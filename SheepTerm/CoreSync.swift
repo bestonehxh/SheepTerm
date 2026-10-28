@@ -70,4 +70,17 @@ public nonisolated enum CoreSync {
         SyncPolicy.mayApplyWithoutFile(quarantined: quarantined, fileExists: fileExists, storeEmpty: storeEmpty)
     }
     public static func usableClientID(id: String, secret: String) -> String { SyncPolicy.usableClientID(id: id, secret: secret) }
+
+    // Mixed builds (nested groups beside a build with sections) — SyncPolicy.swift explains each.
+    public static func fillKnownParents(composed data: Data, parents: [String: String]) -> Data {
+        SyncPolicy.fillKnownParents(composed: data, parents: parents)
+    }
+    public static func sameRecordAcrossBuilds(local: Data, cloud: Data, parentAtApply: String?) -> Bool {
+        SyncPolicy.sameRecordAcrossBuilds(local: local, cloud: cloud, parentAtApply: parentAtApply)
+    }
+    public static func presentAcrossBuilds(_ records: inout [String: Data], lastApplied: [String: Data],
+                                           parentAtApply: [String: String]) {
+        SyncPolicy.presentAcrossBuilds(&records, lastApplied: lastApplied, parentAtApply: parentAtApply)
+    }
+    public static func recordParents(inFile data: Data) -> [String: String] { SyncPolicy.recordParents(inFile: data) }
 }

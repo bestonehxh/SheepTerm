@@ -16,6 +16,13 @@ nonisolated protocol ConsoleWorker: AnyObject, Sendable {
     @discardableResult func sendBreak() -> Bool
     func stop()
     var isTransferring: Bool { get }
+    /// Bytes accepted by `write` and not yet on the line: a transfer is
+    /// refused until they are (it would drop them).
+    var hasQueuedWrites: Bool { get }
+    /// `hasQueuedWrites`, or bytes the loop took that are not out yet (the
+    /// serial line's own buffer and the tty's output queue; telnet's socket
+    /// outbox). Safe Paste waits for false before it counts a line's delay.
+    var hasUnsentWrites: Bool { get }
     /// Send File via XMODEM (the device must already be waiting for it).
     @discardableResult func startTransfer(_ transfer: SerialWorker.Transfer) -> Bool
     func cancelTransfer()
@@ -36,6 +43,8 @@ nonisolated final class TelnetWorker: ConsoleWorker {
     private let queue = DispatchQueue(label: "sheepterm.telnet.session")
     private struct State: Sendable {
         var pendingWrites: [UInt8] = []
+        /// The loop's socket outbox, as of its last pass (`hasUnsentWrites`).
+        var unsentOutbox = 0
         var writeOverflowNotified = false
         /// True from start() until run() has completed all of its defers.
         var runActive = false
@@ -111,14 +120,18 @@ nonisolated final class TelnetWorker: ConsoleWorker {
     /// asked for both ways first; typing and Break are refused meanwhile.
     var isTransferring: Bool { state.withLock { $0.transferActive } }
 
+    var hasQueuedWrites: Bool { state.withLock { !$0.pendingWrites.isEmpty } }
+    var hasUnsentWrites: Bool { state.withLock { !$0.pendingWrites.isEmpty || $0.unsentOutbox > 0 } }
+
+    /// Refused while written bytes still wait for the socket, like
+    /// `SerialWorker.startTransfer`.
     @discardableResult
     func startTransfer(_ transfer: SerialWorker.Transfer) -> Bool {
         state.withLock { state in
-            guard state.running, !state.transferActive else { return false }
+            guard state.running, !state.transferActive, state.pendingWrites.isEmpty else { return false }
             state.transferActive = true
             state.cancelTransfer = false
             state.pendingTransfer = transfer
-            state.pendingWrites.removeAll(keepingCapacity: true)
             state.pendingBreak = false
             Self.poke(state.wakeFD)
             return true
@@ -143,6 +156,7 @@ nonisolated final class TelnetWorker: ConsoleWorker {
             state.runActive = true
             state.running = true
             state.pendingWrites.removeAll(keepingCapacity: true)
+            state.unsentOutbox = 0
             state.pendingBreak = false
             state.writeOverflowNotified = false
             state.size = (cols, rows)
@@ -235,6 +249,7 @@ nonisolated final class TelnetWorker: ConsoleWorker {
             let unclaimed = state.withLock { state -> SerialWorker.Transfer? in
                 state.running = false
                 state.pendingWrites.removeAll(keepingCapacity: true)
+                state.unsentOutbox = 0
                 state.pendingBreak = false
                 state.runActive = false
                 state.transferActive = false
@@ -341,7 +356,11 @@ nonisolated final class TelnetWorker: ConsoleWorker {
                 else if case .failed(let why) = sender.phase { transfer = nil; transferJob = nil; state.withLock { $0.transferActive = false }; job.onFinish(.failed(why)) }
             }
             if outbox.count < Self.socketHighWater {
+                let waiting = outbox.count
                 let typed = state.withLock { state -> [UInt8] in
+                    // Moved to the outbox under the same lock: no moment where
+                    // the bytes are in neither count (`hasUnsentWrites`).
+                    state.unsentOutbox = waiting + state.pendingWrites.count
                     defer { state.pendingWrites.removeAll(keepingCapacity: true) }
                     return state.pendingWrites
                 }
@@ -367,6 +386,8 @@ nonisolated final class TelnetWorker: ConsoleWorker {
                 lastProgress = Self.clock()
             }
 
+            let unsent = outbox.count
+            state.withLock { $0.unsentOutbox = unsent }
             var events = Int16(POLLIN)
             if !outbox.isEmpty { events |= Int16(POLLOUT) }
             var pfds = [

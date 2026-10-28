@@ -109,7 +109,8 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         precondition(workspace(containing: session) == nil, "session attached twice")
         switch placement {
         case .split(let beside, let direction):
-            // A split that would squeeze a Ping pane: a tab of its own instead.
+            // A split off the grid (`PaneLayout.isGrid`) or one that would
+            // squeeze a Ping pane: a tab of its own instead.
             if let i = index(ofWorkspaceContaining: beside) {
                 var layout = workspaces[i].layout
                 if layout.insert(session, beside: beside, direction, keepingWhole: compactSessions), layout.keepsWhole(compactSessions) {
@@ -212,7 +213,8 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
     /// `target | s1 | s2` for right/down, `s1 | s2 | target` for left/up —
     /// sharing that row evenly. The source tab goes; its focused pane keeps
     /// the focus. False (nothing changes) for the target's own tab or when
-    /// the result would exceed `PaneLayout.maxPanes`.
+    /// the result would exceed `PaneLayout.maxPanes` or leave the grid
+    /// (`PaneLayout.isGrid`: a 4th column/row/cell, a third level).
     @discardableResult
     mutating func merge(workspace source: UUID, beside target: UUID, _ direction: PaneDirection) -> Bool {
         if mergeAsRow(workspace: source, beside: target, direction) { return true }
@@ -236,7 +238,10 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         let placeholder = UUID()
         guard book.workspaces[t].layout.insert(placeholder, beside: target, direction, keepingWhole: book.compactSessions),
               book.workspaces[t].layout.graft(tree, at: placeholder),
+              book.workspaces[t].layout.isGrid,
               book.workspaces[t].layout.keepsWhole(compactSessions) else { return false }
+        // Arrived by a drag = equal shares, like a split (the owner, 2026-10-28).
+        if let first = tree.leaves.first { book.workspaces[t].layout.equalizeSplit(containing: first) }
         book.workspaces[t].focused = focus
         book.workspaces[t].zoomed = nil
         self = book
@@ -297,6 +302,14 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
     mutating func move(session: UUID, toWorkspace id: UUID) -> Bool {
         guard let ws = workspace(id: id), !ws.layout.contains(session) else { return false }
         return move(session: session, beside: ws.focused, .right)
+    }
+
+    /// Closing a whole tab of several panes asks first (the owner, 2026-10-28):
+    /// the number of panes it would close, nil = close without asking (one
+    /// pane, or a tab that is not here). Closing ONE pane never asks.
+    func panesToConfirm(closingWorkspace id: UUID) -> Int? {
+        guard let ws = workspace(id: id), ws.paneCount >= 2 else { return nil }
+        return ws.paneCount
     }
 
     /// Every session of a workspace, in the order they should be closed.

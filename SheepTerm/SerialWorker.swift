@@ -25,6 +25,10 @@ nonisolated final class SerialWorker: Sendable {
         var onBaudChanged: (@Sendable (Int) -> Void)?
         /// Write end of the self-pipe; -1 when the loop isn't up.
         var wakeFD: Int32 = -1
+        /// Bytes `takeWrites` handed the loop that are not written yet, and
+        /// the open line (for its tty output queue) — `hasUnsentWrites`.
+        var inFlight = 0
+        var lineFD: Int32 = -1
         var onData: (@Sendable ([UInt8]) -> Void)?
         var onNotice: (@Sendable (String) -> Void)?
         /// Fired when a write was refused. A paced paste has to stop: the
@@ -251,17 +255,17 @@ nonisolated final class SerialWorker: Sendable {
 
     /// Starts sending a file over the line (the device must already be
     /// waiting: ROMMON `xmodem -c …`, a BootROM's "download via XMODEM").
-    /// false = no live session, or a transfer is already running.
+    /// false = no live session, a transfer is already running, or bytes the
+    /// session took are still queued for the line (`hasQueuedWrites`): the
+    /// transfer would have thrown them away unreported — a paste cut short.
     @discardableResult
     func startTransfer(_ transfer: Transfer) -> Bool {
         state.withLock { state in
-            guard state.running, !state.transferActive else { return false }
+            guard state.running, !state.transferActive, state.pendingWrites.isEmpty else { return false }
             state.transferActive = true
             state.cancelTransfer = false
             state.pendingTransfer = transfer
-            // What was typed before it is the device's no more — and a
-            // Break asked for a moment earlier must not land mid-handshake.
-            state.pendingWrites.removeAll(keepingCapacity: true)
+            // A Break asked for a moment earlier must not land mid-handshake.
             state.pendingBreak = false
             if state.wakeFD >= 0 {
                 var byte: UInt8 = 0
@@ -288,6 +292,24 @@ nonisolated final class SerialWorker: Sendable {
         state.withLock { $0.transferActive }
     }
 
+    /// Bytes the session accepted that the loop has not taken yet.
+    var hasQueuedWrites: Bool {
+        state.withLock { !$0.pendingWrites.isEmpty }
+    }
+
+    /// Bytes accepted and not yet on the wire: queued, being written, or
+    /// still in the tty's output queue (TIOCOUTQ). Safe Paste counts a line's
+    /// delay only once this is false — at 9600 baud a line takes ~50 ms to
+    /// leave. (A USB adapter's own buffer is beyond what the Mac can see.)
+    var hasUnsentWrites: Bool {
+        state.withLock { state in
+            if !state.pendingWrites.isEmpty || state.inFlight > 0 { return true }
+            guard state.lineFD >= 0 else { return false }
+            var queued: Int32 = 0
+            return ioctl(state.lineFD, TIOCOUTQ, &queued) == 0 && queued > 0
+        }
+    }
+
     /// Clears and returns the pending break flag.
     private func takeBreak() -> Bool {
         state.withLock { state in
@@ -301,6 +323,7 @@ nonisolated final class SerialWorker: Sendable {
         state.withLock { state in
             let writes = state.pendingWrites
             state.pendingWrites.removeAll()
+            state.inFlight = writes.count
             return writes
         }
     }
@@ -384,6 +407,10 @@ nonisolated final class SerialWorker: Sendable {
             close(pipeRead)
             close(pipeWrite)
         }
+        // Registered after `close(fd)`'s defer, so it runs first: the fd is
+        // never asked about (TIOCOUTQ) once closed.
+        state.withLock { $0.lineFD = fd }
+        defer { state.withLock { $0.lineFD = -1; $0.inFlight = 0 } }
 
         // Exclusive access so two apps don't fight over the console cable.
         // Not fatal — some drivers reject it — so warn and carry on.
@@ -589,6 +616,8 @@ nonisolated final class SerialWorker: Sendable {
                     if written > 0 {
                         offset += written
                         lastProgress = Date()
+                        let left = writes.count - offset
+                        state.withLock { $0.inFlight = left }
                     } else if written < 0, errno == EINTR {
                         continue
                     } else if written < 0, errno != EAGAIN {

@@ -278,7 +278,11 @@ final class FileServerModel: ObservableObject {
             } catch {
                 guard engines[server] === engine else { return }
                 engines[server] = nil
-                startError = String(localized: "Could not start \(server.label): \(String(describing: error))")
+                if let busy = error as? TFTPServer.PortInUse {
+                    startError = busy.description
+                } else {
+                    startError = String(localized: "Could not start \(server.label): \(String(describing: error))")
+                }
             }
             starting.remove(server)
         }

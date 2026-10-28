@@ -67,7 +67,9 @@ struct ShareLinkSheet: View {
     @State private var task: Task<Void, Never>?
     private let engine = SheepTermSync.shared.engine
 
-    private var group: HostGroup? { model.store.groups.first { $0.id == request.groupID } }
+    /// The group WITH its subgroups, flattened the way an export is
+    /// (`GroupTree.exportable`): a share carries the whole subtree.
+    private var group: HostGroup? { GroupTree.exportable(request.groupID, in: model.store.groups) }
     private var logins: Int { group.map { links.loginCount(in: $0) } ?? 0 }
 
     private var recipientsValid: Bool { (try? ShareRecipients.parse([recipients], excluding: engine.account)) != nil }

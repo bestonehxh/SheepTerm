@@ -34,6 +34,49 @@ nonisolated enum CommandSendPlan {
 
     /// The bytes of the separate Return.
     static let returnKey: [UInt8] = [0x0D]
+
+    /// What Safe Paste's review sends for text it took over. `thenReturn` is
+    /// the split's answer when the text is a command's body (`sendCommand`),
+    /// nil for an ordinary paste. The body has lost its trailing LF, so the
+    /// review must put the command's Return back itself — and must not add
+    /// one the snippet did not ask for: "Send Line by Line" sends the last
+    /// line bare unless Return was asked for, "Paste Immediately" pastes the
+    /// body then sends the CR on its own, exactly like an unreviewed send.
+    struct Reviewed: Equatable {
+        /// "Send Line by Line".
+        var plan: SafePastePlan
+        /// "Paste Immediately": pasted as is…
+        var immediateText: String
+        /// …then `returnKey` outside the paste.
+        var immediateReturn: Bool
+    }
+
+    /// A snippet's / broadcast line's own Return goes out only after its
+    /// body was ACCEPTED by the session's worker — a refused body followed
+    /// by a lone CR would run whatever was already on the device's line.
+    static func returnFollows(thenReturn: Bool, bodyAccepted: Bool) -> Bool {
+        thenReturn && bodyAccepted
+    }
+
+    /// Whether a command's body reached the worker. `cleanedSend`: Safe
+    /// Paste took a one-line body over and sent its CLEANED text at once
+    /// (`shouldPaste` → `sendImmediatePaste`) — that send's own acceptance
+    /// (nil = it did not). The view then reports "not pasted" (the host
+    /// vetoed its copy), which used to drop the command's Return and keep
+    /// the tab out of Broadcast's count although the body went out
+    /// (6.0 (12) review). Otherwise: handed to the view AND taken by the
+    /// worker.
+    static func bodyAccepted(handedOver: Bool, cleanedSend: Bool?, lastSendAccepted: () -> Bool) -> Bool {
+        if let cleanedSend { return cleanedSend }
+        return handedOver && lastSendAccepted()
+    }
+
+    static func reviewed(_ plan: SafePastePlan, text: String, thenReturn: Bool?) -> Reviewed {
+        guard let thenReturn else { return Reviewed(plan: plan, immediateText: text, immediateReturn: false) }
+        var plan = plan
+        plan.finalLineWithoutReturn = !thenReturn
+        return Reviewed(plan: plan, immediateText: text, immediateReturn: thenReturn)
+    }
 }
 
 // MainActor (not `nonisolated`): `ConfigurationHygiene.cleanedName` is main-actor bound.
@@ -62,53 +105,11 @@ enum SnippetCodec {
     }
 
     /// `text` with every escape SEQUENCE and every C0/C1 control and bidi
-    /// override removed, keeping Tab and LF. Whole sequences, not just the
-    /// ESC: dropping the ESC alone would leave `[2J` to be typed as text.
-    /// Shared by snippets and the broadcast line.
+    /// override removed, keeping Tab and LF (`PasteHygiene.commandText`,
+    /// shared with clipboard pastes and the Windows build). Shared by
+    /// snippets and the broadcast line.
     nonisolated static func commandText(_ text: String) -> String {
-        let scalars = Array(text.unicodeScalars)
-        var out = String.UnicodeScalarView()
-        var i = 0
-        func skipCSI() {           // parameters/intermediates 0x20–0x3F, final 0x40–0x7E
-            while i < scalars.count, scalars[i].value < 0x40 || scalars[i].value > 0x7E { i += 1 }
-            if i < scalars.count { i += 1 }
-        }
-        func skipString() {        // OSC/DCS/APC/PM body until BEL or ST (ESC \ or 0x9C)
-            while i < scalars.count {
-                let v = scalars[i].value
-                if v == 0x07 || v == 0x9C { i += 1; return }
-                if v == 0x1B {
-                    i += 1
-                    if i < scalars.count, scalars[i].value == 0x5C { i += 1 }
-                    return
-                }
-                i += 1
-            }
-        }
-        while i < scalars.count {
-            let v = scalars[i].value
-            switch v {
-            case 0x1B:
-                i += 1
-                guard i < scalars.count else { break }
-                switch scalars[i].value {
-                case 0x5B: i += 1; skipCSI()                              // ESC [
-                case 0x5D, 0x50, 0x5E, 0x5F: i += 1; skipString()          // ESC ] P ^ _
-                default: i += 1                                           // ESC + one byte
-                }
-            case 0x9B: i += 1; skipCSI()                                   // C1 CSI
-            case 0x9D, 0x90, 0x9E, 0x9F: i += 1; skipString()              // C1 OSC DCS APC PM
-            case 0x09, 0x0A:
-                out.append(scalars[i]); i += 1
-            case _ where v < 0x20 || v == 0x7F || (v >= 0x80 && v < 0xA0):
-                i += 1
-            case 0x2028, 0x2029, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069:
-                i += 1
-            default:
-                out.append(scalars[i]); i += 1
-            }
-        }
-        return String(out)
+        PasteHygiene.commandText(text)
     }
 
     static func encode(_ snippets: [Snippet]) throws -> Data {

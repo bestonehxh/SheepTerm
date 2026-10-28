@@ -894,6 +894,9 @@ extension SSHTerminalController: TerminalViewDelegate {
     }
 
     func send(_ view: TerminalView, bytes: [UInt8]) {
+        // Every early return below = not taken; a stale true from an earlier
+        // keystroke must not answer `takeLastSendAccepted` for these bytes.
+        lastWriteAccepted = false
         // A typed Return on a dangerous command is held for the user's
         // answer (Confirm Dangerous Commands) — and the keys behind it.
         guard terminalHost.admitOutgoing(bytes) else { return }

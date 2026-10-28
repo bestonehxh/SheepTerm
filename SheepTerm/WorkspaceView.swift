@@ -66,6 +66,15 @@ protocol PaneContent: AnyObject {
     func refreshFocusAppearance()
 }
 
+extension PaneContent {
+    /// A card's veil is over this pane's view right now (connection card,
+    /// dangerous-command card, certificate card): the tree veils the strips
+    /// round it too (`PaneVeil`).
+    var veilsPane: Bool {
+        paneView.subviews.contains { ($0 as? ConnectionOverlayView)?.veiled == true }
+    }
+}
+
 extension SessionTerminalHost: PaneContent {
     var paneView: NSView { terminalView }
     var keyView: NSView { terminalView }
@@ -78,11 +87,27 @@ extension SessionTerminalHost: PaneContent {
 /// strips between siblings. Flipped, so the model's top-left geometry maps
 /// straight onto view coordinates.
 final class PaneTreeView: NSView {
-    /// The gap between panes (variant C): it IS the divider — nothing is
-    /// drawn in it, the chrome background shows through. 3 pt (was 4 since
-    /// 4.2 (7); the user asked for 3, 5.0 (56)); the grab area stays wider.
-    static let dividerThickness: CGFloat = 3
+    /// The split look "D3" (the user chose it from mockups, 2026-10-28; it
+    /// replaced variant C) — its numbers live in `PaneVeil.D3` (shared with
+    /// the veil's strips and the harness), ≥ 2 panes only:
+    /// The gap between cards: it IS the divider — nothing is drawn in it, the
+    /// backdrop shows through. 5 pt (variant C: 3); the grab area is wider.
+    static let dividerThickness: CGFloat = PaneVeil.D3.gap
     static let dividerGrabWidth: CGFloat = 9
+    /// The same 5 pt between the cards and the tree's edges (variant C's
+    /// cards met the window sides).
+    static let outerMargin: CGFloat = PaneVeil.D3.margin
+    /// Behind the cards: near-black #060708, darker than any terminal theme.
+    static let backdrop = NSColor(srgbRed: 6 / 255, green: 7 / 255, blue: 8 / 255, alpha: 1)
+
+    /// Where the panes go inside a tree of `size`: the tree minus its margin
+    /// (`PaneVeil.margin` — Terminal.app's round a lone / zoomed terminal,
+    /// none round a lone web pane, D3's 5 pt round split cards).
+    static func cardArea(_ size: CGSize, margin: PaneVeil.Margin) -> CGRect {
+        PaneVeil.inset(CGRect(origin: .zero, size: size), by: margin)
+    }
+
+    private var cardArea: CGRect { Self.cardArea(bounds.size, margin: margin) }
 
     var onDividerMoved: ((UUID, Int, CGFloat) -> Void)?
     var onEqualize: (() -> Void)?
@@ -91,6 +116,11 @@ final class PaneTreeView: NSView {
     private var selected: UUID?
     private var leaves: [UUID: PaneLeafView] = [:]
     private var dividers: [PaneDividerView] = []
+    /// The connection card's veil over the strips round a connecting pane's
+    /// terminal (`PaneVeil`). Above the leaves, below the dividers.
+    private let veilView = PaneVeilView()
+    /// The margin round the one visible pane (a lone / zoomed terminal).
+    private var margin = PaneVeil.Margin.zero
     /// The drop zone being shown, if any (a drag over us, or a chip drag).
     private let zoneView = DropZoneView()
     /// The zone on screen belongs to a tab-chip drag (cleared when it ends).
@@ -110,9 +140,14 @@ final class PaneTreeView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        addSubview(veilView)
         // Pane headers write `pane:<uuid>`, sidebar rows `host:<uuid>`.
         registerForDraggedTypes([.string])
+        NotificationCenter.default.addObserver(self, selector: #selector(veilChanged),
+                                               name: ConnectionOverlayView.veilDidChange, object: nil)
     }
+
+    @objc private func veilChanged() { layoutVeil() }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
@@ -190,9 +225,10 @@ final class PaneTreeView: NSView {
             guard let content = AppModel.shared.paneContent(ofSession: id) else { continue }
             let leaf = PaneLeafView(content: content, session: id)
             leaves[id] = leaf
-            // Below the dividers, so their 9 pt grab stays theirs; a leaf
-            // added on top of them had left about 4 pt (review finding).
-            if let first = dividers.first { addSubview(leaf, positioned: .below, relativeTo: first) } else { addSubview(leaf) }
+            // Below the veil, and so below the dividers (always added above
+            // it), so their 9 pt grab stays theirs; a leaf added on top of
+            // them had left about 4 pt (review finding).
+            addSubview(leaf, positioned: .below, relativeTo: veilView)
         }
         needsLayout = true
         layoutPanes()
@@ -222,8 +258,8 @@ final class PaneTreeView: NSView {
         guard let state, window != nil else { return nil }
         let left = convert(CGPoint.zero, to: nil).x
         let grow = max(0, left - leadingInset)
-        if state.zoomed != nil { return leadingInset }
-        let rects = state.layout.rects(in: CGRect(x: 0, y: 0, width: bounds.width + grow, height: bounds.height),
+        if state.zoomed != nil { return leadingInset + margin.left }
+        let rects = state.layout.rects(in: Self.cardArea(CGSize(width: bounds.width + grow, height: bounds.height), margin: margin),
                                        divider: Self.dividerThickness)
         guard let rect = rects[session] else { return nil }
         return leadingInset + rect.minX.rounded()
@@ -234,14 +270,36 @@ final class PaneTreeView: NSView {
     /// a lone pane's is, and where Terminal.app's is (measured).
     static let paneTextInset: CGFloat = 10
 
+    /// The veil over every connecting pane's strips (`PaneVeil`): the
+    /// margin round a lone / zoomed terminal, and a split card below its
+    /// header row (its 1 px border and text inset, clipped to the card's D3
+    /// corners); the card's own veil covers the terminal itself. The 5 pt
+    /// backdrop between and round split cards is no pane's and stays as is.
+    private func layoutVeil() {
+        veilView.frame = bounds
+        var areas: [(area: CGRect, strips: [CGRect], corner: CGFloat)] = []
+        for leaf in leaves.values where !leaf.isHidden && leaf.superview === self && leaf.content.veilsPane {
+            let zoomedOrLone = state?.zoomed == leaf.session || (state?.paneCount ?? 0) == 1
+            let area = zoomedOrLone ? PaneVeil.outset(leaf.frame, by: margin) : leaf.frame
+            let terminal = leaf.terminalFrame.offsetBy(dx: leaf.frame.minX, dy: leaf.frame.minY)
+            let header = leaf.headerFrame.map { $0.offsetBy(dx: leaf.frame.minX, dy: leaf.frame.minY) }
+            let strips = PaneVeil.strips(area: area, terminal: terminal, header: header)
+            // A split card is rounded; the margin round a zoomed card is not.
+            areas.append((area, strips, leaf.showsHeader && !zoomedOrLone ? PaneLeafView.cornerRadius : 0))
+        }
+        veilView.show(areas)
+    }
+
     private func layoutPanes() {
         guard let state, bounds.width > 1, bounds.height > 1 else { return }
         let several = state.paneCount > 1
-        // Several panes: the gaps between the cards are the terminal's own
-        // background (the user, 5.0 (57): a darker tray strip looked foreign)
-        // — one surface; each pane's header row is what tells them apart.
-        // One pane: no background of our own, exactly as before.
-        layer?.backgroundColor = several ? Theme.termBackgroundNS.cgColor : nil
+        // Several panes (D3, 2026-10-28): the cards sit on a near-black
+        // backdrop, 5 pt apart and 5 pt in from the edges. Zoomed: the one card
+        // sits in a lone terminal's margin (`PaneVeil.margin`, inside the tree
+        // since 6.0 (12)), which keeps the terminal's colour as it did when it
+        // was DetailPane's padding. One pane: no background of our own.
+        layer?.backgroundColor = !several ? nil
+            : state.zoomed != nil ? Theme.termBackgroundNS.cgColor : Self.backdrop.cgColor
         for (id, leaf) in leaves {
             leaf.showsHeader = several
             // With several panes the pointer only reaches a pane's device once
@@ -251,16 +309,20 @@ final class PaneTreeView: NSView {
             leaf.setFocused(id == selected)
             leaf.updateCard()
         }
+        let visible = state.zoomed.flatMap { leaves[$0] } ?? (several ? nil : leaves.values.first)
+        margin = PaneVeil.margin(paneCount: state.paneCount, zoomed: state.zoomed != nil,
+                                 visibleIsTerminal: visible?.content is SessionTerminalHost)
         if let zoomed = state.zoomed, let leaf = leaves[zoomed] {
             for (id, other) in leaves where id != zoomed { other.hide() }
             leaf.show()
-            leaf.frame = bounds
+            leaf.frame = cardArea
             leaf.insets = NSEdgeInsets()
             for divider in dividers { divider.removeFromSuperview() }
             dividers.removeAll()
+            layoutVeil()
             return
         }
-        let rects = state.layout.rects(in: bounds, divider: Self.dividerThickness)
+        let rects = state.layout.rects(in: cardArea, divider: Self.dividerThickness)
         for (id, leaf) in leaves {
             guard let rect = rects[id] else { leaf.hide(); continue }
             leaf.show()
@@ -277,7 +339,7 @@ final class PaneTreeView: NSView {
                 ? NSEdgeInsets(top: 0, left: Self.paneTextInset, bottom: 0, right: Self.paneTextInset)
                 : NSEdgeInsets()
         }
-        let strips = state.layout.dividerRects(in: bounds, divider: Self.dividerThickness)
+        let strips = state.layout.dividerRects(in: cardArea, divider: Self.dividerThickness)
         while dividers.count > strips.count { dividers.removeLast().removeFromSuperview() }
         while dividers.count < strips.count {
             let divider = PaneDividerView()
@@ -301,6 +363,7 @@ final class PaneTreeView: NSView {
                 ? CGRect(x: strip.rect.minX - (grab - strip.rect.width) / 2, y: strip.rect.minY, width: grab, height: strip.rect.height)
                 : CGRect(x: strip.rect.minX, y: strip.rect.minY - (grab - strip.rect.height) / 2, width: strip.rect.width, height: grab)
         }
+        layoutVeil()
     }
 
     // MARK: - drop zones
@@ -308,8 +371,8 @@ final class PaneTreeView: NSView {
     /// The panes as they are on screen: the zoomed one alone, else the layout.
     private func paneFrames() -> [UUID: CGRect] {
         guard let state else { return [:] }
-        if let zoomed = state.zoomed, leaves[zoomed] != nil { return [zoomed: bounds] }
-        return state.layout.rects(in: bounds, divider: Self.dividerThickness)
+        if let zoomed = state.zoomed, leaves[zoomed] != nil { return [zoomed: cardArea] }
+        return state.layout.rects(in: cardArea, divider: Self.dividerThickness)
     }
 
     /// Where a drop of `payload` at `point` (our coordinates) would go; nil
@@ -324,7 +387,8 @@ final class PaneTreeView: NSView {
             // Over itself = nowhere; from another tab only while there is room.
             guard session != target.pane,
                   state.layout.contains(session) || state.paneCount < PaneLayout.maxPanes else { return nil }
-            // Never one that would squeeze a Ping pane (PaneLayout.keepsWhole).
+            // Never one off the grid (PaneLayout.isGrid) or one that would
+            // squeeze a Ping pane (PaneLayout.keepsWhole): the trial move says.
             var trial = AppModel.shared.book
             guard trial.move(session: session, beside: target.pane, target.direction) else { return nil }
         case .host(let id):
@@ -343,7 +407,12 @@ final class PaneTreeView: NSView {
               state.layout.contains(session), state.paneCount > 1 else { return paneFrames() }
         var without = state.layout
         without.remove(session, keepingWhole: AppModel.shared.book.compactSessions)
-        return without.rects(in: bounds, divider: Self.dividerThickness)
+        // Measured in the margin the tree would have without it (a lone
+        // terminal left behind gets Terminal.app's, not D3's 5 pt).
+        let rest = without.count == 1 ? without.leaves.first.flatMap { leaves[$0] } : nil
+        let restMargin = PaneVeil.margin(paneCount: without.count, zoomed: false,
+                                         visibleIsTerminal: rest?.content is SessionTerminalHost)
+        return without.rects(in: Self.cardArea(bounds.size, margin: restMargin), divider: Self.dividerThickness)
     }
 
     /// What `showZone` draws against (set by `zone`).
@@ -463,7 +532,7 @@ final class PaneTreeView: NSView {
         guard var state, let split = divider.split,
               let count = state.layout.splits.first(where: { $0.id == split })?.fractions.count else { return }
         // The split's own rect = the union of its children's rects.
-        let rects = state.layout.rects(in: bounds, divider: Self.dividerThickness)
+        let rects = state.layout.rects(in: cardArea, divider: Self.dividerThickness)
         let members = state.layout.leaves(ofSplit: split)
         let union = members.compactMap { rects[$0] }.reduce(CGRect.null) { $0.union($1) }
         guard !union.isNull, union.width > 0, union.height > 0 else { return }
@@ -482,6 +551,44 @@ final class PaneTreeView: NSView {
         guard let drag = dividerDragPosition else { return }
         dividerDragPosition = nil
         onDividerMoved?(drag.split, drag.index, drag.position)
+    }
+}
+
+/// The card veil on the strips round a connecting pane's terminal: one
+/// clipping layer per pane (rounded like a split card), a 45 % black strip
+/// per side — the colour of `ConnectionOverlayView`'s own veil, so the pane
+/// reads as one dimmed surface. Never takes the mouse.
+final class PaneVeilView: NSView {
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func show(_ areas: [(area: CGRect, strips: [CGRect], corner: CGFloat)]) {
+        guard let layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        for item in areas where !item.strips.isEmpty {
+            let clip = CALayer()
+            clip.frame = item.area
+            clip.cornerRadius = item.corner
+            clip.masksToBounds = item.corner > 0
+            for rect in item.strips {
+                let strip = CALayer()
+                strip.frame = rect
+                strip.backgroundColor = ConnectionOverlayView.veilColor.cgColor
+                clip.addSublayer(strip)
+            }
+            layer.addSublayer(clip)
+        }
+        CATransaction.commit()
     }
 }
 
@@ -543,31 +650,57 @@ final class PaneLeafView: NSView {
 
     override func layout() {
         super.layout()
-        let top = insets.top + (showsHeader ? PaneHeaderView.height : 0)
-        header.frame = CGRect(x: 0, y: 0, width: bounds.width, height: PaneHeaderView.height)
-        terminalView.frame = CGRect(x: insets.left, y: top,
-                                    width: max(0, bounds.width - insets.left - insets.right),
-                                    height: max(0, bounds.height - top - insets.bottom))
+        // A card's 1 px border runs round its edge; the pane's view stays
+        // inside it, so the border is never drawn over the terminal picture.
+        let edge = showsHeader ? Self.borderWidth : 0
+        header.frame = CGRect(x: edge, y: edge, width: max(0, bounds.width - 2 * edge), height: PaneHeaderView.height - edge)
+        terminalView.frame = terminalFrame
     }
 
+    /// Where the terminal goes in this pane (own coordinates, y down) — the
+    /// same D3 geometry the veil's strips are cut from (`PaneVeil.cardLayout`).
+    var terminalFrame: CGRect {
+        PaneVeil.cardLayout(size: bounds.size, headed: showsHeader, left: insets.left, right: insets.right).content
+    }
+
+    /// The header row, when shown (own coordinates): the full-width 24 pt band
+    /// at the card's top, border included — it stays bright under a veil.
+    var headerFrame: CGRect? {
+        PaneVeil.cardLayout(size: bounds.size, headed: showsHeader).header
+    }
+
+    private var isFocused = false
+
     func setFocused(_ focused: Bool) {
+        isFocused = focused
         header.isFocused = focused
     }
 
-    /// Variant C with a header: a rounded card in the terminal's own colour
-    /// (the theme can change, so this is re-read on every layout). Without
-    /// one: no card, the pane is the bare terminal as before.
+    /// D3 (2026-10-28): rounded 8, filled with the terminal's own colour (the
+    /// theme can change, so this is re-read on every layout), a 1 px inner
+    /// border — white 9 %, accent 60 % on the focused pane — so the edge
+    /// shows even on an almost-black theme. Without a header: no card, the
+    /// pane is the bare terminal as before.
+    static let cornerRadius: CGFloat = PaneVeil.D3.cornerRadius
+    static let borderWidth: CGFloat = PaneVeil.D3.border
+    static let borderColor = NSColor.white.withAlphaComponent(0.09)
+    static var focusedBorderColor: NSColor { NSColor(Theme.accent).withAlphaComponent(0.6) }
+
     func updateCard() {
         wantsLayer = true
         guard let layer else { return }
         if showsHeader {
-            layer.cornerRadius = 6
+            layer.cornerRadius = Self.cornerRadius
             layer.masksToBounds = true
             layer.backgroundColor = Theme.termBackgroundNS.cgColor
+            layer.borderWidth = Self.borderWidth
+            layer.borderColor = (isFocused ? Self.focusedBorderColor : Self.borderColor).cgColor
         } else {
             layer.cornerRadius = 0
             layer.masksToBounds = false
             layer.backgroundColor = nil
+            layer.borderWidth = 0
+            layer.borderColor = nil
         }
     }
 
@@ -617,8 +750,17 @@ final class PaneLeafView: NSView {
 /// pane's edge, a tab chip, or the empty tab strip. The drag carries
 /// `pane:<uuid>` and never leaves the app.
 final class PaneHeaderView: NSView, NSDraggingSource {
-    static let height: CGFloat = 20
+    /// D3 (2026-10-28): a 24 pt transparent row (variant C: 20, chrome band)
+    /// holding a capsule chip — dot, title, dim detail — like the tab strip's.
+    static let height: CGFloat = PaneVeil.D3.headerHeight
     static let dotSize: CGFloat = 7
+    static let chipHeight: CGFloat = 18
+    /// Header padding left of the chip; the chip's own padding; dot → text.
+    static let chipLeading: CGFloat = 6
+    static let chipPadding: CGFloat = 9
+    static let dotGap: CGFloat = 6
+    static let chipFill = NSColor.white.withAlphaComponent(0.06)
+    static var focusedChipFill: NSColor { NSColor(Theme.accent).withAlphaComponent(0.2) }
     /// The session whose header is being dragged right now (the tab strip
     /// uses it to leave the pane's own chip unhighlighted).
     private(set) static var draggingSession: UUID?
@@ -727,7 +869,19 @@ final class PaneHeaderView: NSView, NSDraggingSource {
                                            attributes: [.font: font, .foregroundColor: color.withAlphaComponent(0.6)]))
         }
         titleField.attributedStringValue = text
+        needsLayout = true      // the chip is as wide as the text
         needsDisplay = true
+    }
+
+    /// The dot's left edge (the chip's padding in from its left).
+    private var markX: CGFloat { Self.chipLeading + Self.chipPadding }
+
+    /// The capsule round dot + title + detail, as wide as they need and no
+    /// wider than the room left of the ×.
+    private var chipRect: CGRect {
+        let textX = markX + Self.dotSize + Self.dotGap
+        let width = textX + titleField.frame.width + Self.chipPadding - Self.chipLeading
+        return CGRect(x: Self.chipLeading, y: (bounds.height - Self.chipHeight) / 2, width: max(0, width), height: Self.chipHeight)
     }
 
     override func layout() {
@@ -735,17 +889,24 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         let button: CGFloat = 20
         closeButton.frame = CGRect(x: bounds.width - button - 2, y: (bounds.height - 18) / 2, width: button, height: 18)
         let textHeight = titleField.intrinsicContentSize.height
-        let textX = 8 + Self.dotSize + 6
+        let textX = markX + Self.dotSize + Self.dotGap
+        let room = max(0, closeButton.frame.minX - 4 - Self.chipPadding - textX)
         titleField.frame = CGRect(x: textX, y: (bounds.height - textHeight) / 2,
-                                  width: max(0, closeButton.frame.minX - textX - 4), height: textHeight)
+                                  // Measured from the string: the field's own intrinsic width
+                                  // follows its current (narrow) frame and kept the chip short.
+                                  width: min(ceil(titleField.attributedStringValue.size().width) + 4, room), height: textHeight)
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(Theme.chrome).withAlphaComponent(0.95).setFill()
-        bounds.fill()
+        // Transparent row: only the chip is filled (the card shows round it).
+        let chip = chipRect
+        (isFocused ? Self.focusedChipFill : Self.chipFill).setFill()
+        NSBezierPath(roundedRect: chip, xRadius: chip.height / 2, yRadius: chip.height / 2).fill()
+        let markX = self.markX
         if isWeb, let favicon {
             let side: CGFloat = 12
-            favicon.draw(in: CGRect(x: 8 + (Self.dotSize - side) / 2, y: (bounds.height - side) / 2, width: side, height: side),
+            favicon.draw(in: CGRect(x: markX + (Self.dotSize - side) / 2, y: (bounds.height - side) / 2, width: side, height: side),
                          from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
                          hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)])
             return
@@ -759,13 +920,13 @@ final class PaneHeaderView: NSView, NSDraggingSource {
                 return true
             }
             let size = globe.size
-            tinted.draw(in: CGRect(x: 8 + (Self.dotSize - size.width) / 2, y: (bounds.height - size.height) / 2,
+            tinted.draw(in: CGRect(x: markX + (Self.dotSize - size.width) / 2, y: (bounds.height - size.height) / 2,
                                    width: size.width, height: size.height),
                         from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             return
         }
         dot.setFill()
-        NSBezierPath(ovalIn: CGRect(x: 8, y: (bounds.height - Self.dotSize) / 2,
+        NSBezierPath(ovalIn: CGRect(x: markX, y: (bounds.height - Self.dotSize) / 2,
                                     width: Self.dotSize, height: Self.dotSize)).fill()
     }
 

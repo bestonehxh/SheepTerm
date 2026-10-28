@@ -184,6 +184,17 @@ final class SerialTerminalController: NSObject {
         terminalView.delegate = self
         terminalHost.guardVendor = { [weak self] in self?.host.highlightVendor ?? .auto }
         terminalHost.lineBusy = { [weak self] in self?.worker.isTransferring ?? false }
+        // A Safe Paste paced run takes the top-right corner: the wrong-speed
+        // hint goes and the stream is judged afresh after the run.
+        terminalHost.onPacedRunStart = { [weak self] in self?.baudGuess.reset() }
+        // Safe Paste times its line delay from here: bytes still in the
+        // worker (or the tty's output queue / telnet's socket outbox) = not yet.
+        terminalHost.lineDrained = { [weak self] in !(self?.worker.hasUnsentWrites ?? false) }
+        // ...and caps that wait by the line's speed (telnet: unknown, flat cap).
+        terminalHost.lineBaud = { [weak self] in
+            guard let self, !self.isTelnet else { return nil }
+            return self.host.port
+        }
         // Safe Paste asks after every paced line whether the worker took it.
         terminalHost.takeLastSendAccepted = { [weak self] in
             guard let self else { return false }
@@ -258,6 +269,7 @@ final class SerialTerminalController: NSObject {
         serialWorker?.onBaudChanged = { [weak self] baud in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.baudGuessRestart(leaving: self.host.port)
                 // Reconnect (manual or automatic) opens `host`: it keeps the
                 // speed that worked. The saved host is not touched.
                 self.host.port = baud
@@ -273,6 +285,7 @@ final class SerialTerminalController: NSObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.terminalHost.cancelSafePaste(reason: .sessionEnded)
+                self.terminalHost.hideBaudHint()
                 self.printNotice(message, error: true)
                 // A prompt the user dismissed is a decision, not a drop. Plain
                 // "disconnected" is what auto-reconnect keys on, and it would
@@ -372,9 +385,56 @@ final class SerialTerminalController: NSObject {
         if worker.isTransferring {
             printNotice("a file transfer is running — speed not changed", error: true)
         } else {
+            baudGuessRestart(leaving: host.port)
             host.port = baud
             printNotice("the next connection opens at \(baud) baud")
         }
+    }
+
+    // MARK: - Wrong-speed hint (6.0 (12)) — ConsoleBaudGuess
+
+    /// AppModel's `setBaud(_:for:)` — the status bar menu's own path, so the
+    /// hint's Try changes the speed exactly as the menu does (port changed in
+    /// place, recent moved, the saved host untouched).
+    var onTryBaud: ((Int) -> Void)?
+    /// Passive: reads what the port RECEIVES; never sends a byte.
+    private var baudGuess = ConsoleBaudGuess.Detector()
+    /// Speeds this tab session has left (by the hint or the menu): not
+    /// offered again.
+    private var triedBauds: Set<Int> = []
+    /// × on the hint: no more hints in this tab session.
+    private var baudHintDismissed = false
+
+    /// A cable only (never telnet), and never once dismissed. Never while
+    /// the line is busy — XMODEM (the device's ACK/NAK are not text) or a
+    /// Safe Paste paced run: both put their progress in the top-right corner
+    /// the hint uses, so a hint already up goes away and the stream is judged
+    /// afresh once the run is over (`Detector.feed`). A saved host's speed is
+    /// offered a change too: a saved speed can be wrong, and Try leaves the
+    /// saved host as it is, like the menu.
+    private func considerBaudGuess(_ bytes: [UInt8]) {
+        let lineBusy = ConsoleBaudGuess.lineBusy(transferring: worker.isTransferring, pacingPaste: terminalHost.isPacingPaste,
+                                                 statusHUDShown: terminalHost.hasStatusHUD)
+        if lineBusy { terminalHost.hideBaudHint() }
+        guard serialWorker != nil, !baudHintDismissed,
+              !terminalHost.hasBaudHint, baudGuess.feed(bytes, lineBusy: lineBusy),
+              let rate = ConsoleBaudGuess.suggestion(current: host.port, tried: triedBauds) else { return }
+        terminalHost.showBaudHint(rate: rate, onTry: { [weak self] in
+            guard let self else { return }
+            self.terminalHost.hideBaudHint()
+            self.onTryBaud?(rate)
+        }, onDismiss: { [weak self] in
+            self?.baudHintDismissed = true
+            self?.terminalHost.hideBaudHint()
+        })
+    }
+
+    /// The speed moved off `old` (the hint's Try or the menu): `old` is
+    /// tried, and the stream is judged afresh at the new one.
+    private func baudGuessRestart(leaving old: Int) {
+        triedBauds.insert(old)
+        baudGuess.reset()
+        terminalHost.hideBaudHint()
     }
 
     // MARK: - Send File via XMODEM (5.0 (22))
@@ -415,19 +475,26 @@ final class SerialTerminalController: NSObject {
                     self?.transferEnded(phase, label: label, name: name, total: data.count, started: started)
                 }
             })
-        // A paced Safe Paste still running would lose the lines the worker
-        // took but has not written (the transfer clears them) — stop it, so
-        // its "stopped part-way" report says what really happened.
-        if !worker.isTransferring {
-            terminalHost.cancelSafePaste(reason: .stopped)
-            // …and a dangerous-command question still up: its Send could
-            // only be refused once the line is the file's.
-            terminalHost.cancelCommandGuard()
-        }
-        guard worker.startTransfer(job) else {
-            printNotice(worker.isTransferring ? "a transfer is already running" : "no serial session — nothing sent", error: true)
+        // A paste still on its way — paced lines to come, or bytes the
+        // worker took and has not written — is never cut off by the file:
+        // refused, nothing lost (it used to be stopped and its queued bytes
+        // dropped without a word). The worker checks the queue again itself.
+        let pasteNotice = "the paste is still being sent — wait for it, then send the file"
+        guard !worker.isTransferring, !terminalHost.isPacingPaste, !worker.hasQueuedWrites else {
+            printNotice(worker.isTransferring ? "a transfer is already running" : pasteNotice, error: true)
             return
         }
+        // A dangerous-command question still up: its Send could only be
+        // refused once the line is the file's.
+        terminalHost.cancelCommandGuard()
+        guard worker.startTransfer(job) else {
+            printNotice(worker.isTransferring ? "a transfer is already running"
+                        : worker.hasQueuedWrites ? pasteNotice : "no serial session — nothing sent", error: true)
+            return
+        }
+        // The corner is the transfer's; the stream is judged afresh after it.
+        terminalHost.hideBaudHint()
+        baudGuess.reset()
         printNotice("\(label): \(name) (\(Self.sizeText(data.count))) — waiting for the device to ask for it…")
         if isTelnet {
             printNotice("over telnet: binary mode was asked for — a console server that refuses it will corrupt the file")
@@ -452,6 +519,8 @@ final class SerialTerminalController: NSObject {
 
     private func transferEnded(_ phase: XModemSender.Phase, label: String, name: String, total: Int, started: Date) {
         terminalHost.hideStatusHUD()
+        // The protocol's bytes are behind it: judge the text afresh.
+        baudGuess.reset()
         let seconds = Int(Date().timeIntervalSince(started).rounded())
         let elapsed = seconds >= 60 ? "\(seconds / 60) min \(seconds % 60) s" : "\(seconds) s"
         switch phase {
@@ -576,6 +645,7 @@ final class SerialTerminalController: NSObject {
         terminalView.feed(pending)
         answerPagerIfNeeded(pending)
         considerPromptName(pending)
+        considerBaudGuess(pending)
         // Passive family detection, after the terminal has the bytes.
         // Bounded — see VendorFingerprint. Detection deliberately CONTINUES
         // after an automatic lock (`autoDetected` keeps
@@ -617,6 +687,9 @@ extension SerialTerminalController: TerminalViewDelegate {
     }
 
     func send(_ view: TerminalView, bytes: [UInt8]) {
+        // Every early return below = not taken; a stale true from an earlier
+        // keystroke must not answer `takeLastSendAccepted` for these bytes.
+        lastWriteAccepted = false
         // The line is the file's while a transfer runs.
         if worker.isTransferring {
             terminalHost.discardPendingKeystroke()

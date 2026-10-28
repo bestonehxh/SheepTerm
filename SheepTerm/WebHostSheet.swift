@@ -55,7 +55,7 @@ struct WebHostSheet: View {
     }
 
     private var groupNames: [String] {
-        var names = model.store.groups.map(\.name)
+        var names = model.store.groupChoiceLabels
         if !names.contains(Self.defaultGroup) { names.insert(Self.defaultGroup, at: 0) }
         return names
     }

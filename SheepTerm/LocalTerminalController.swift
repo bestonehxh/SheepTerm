@@ -120,6 +120,12 @@ extension LocalTerminalController: TerminalViewDelegate {
         process.send(bytes)
     }
 
+    /// A key stops a running Safe Paste here too: the AI panel's review
+    /// paces its lines into a local shell (`PacedRunGate`).
+    func userTyped(_ view: TerminalView) {
+        terminalHost.prepareForOrdinaryUserInput()
+    }
+
     func sizeChanged(_ view: TerminalView, cols: Int, rows: Int) {
         resizes.changed(cols: cols, rows: rows)
     }

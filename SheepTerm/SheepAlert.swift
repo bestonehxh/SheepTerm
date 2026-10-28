@@ -36,6 +36,9 @@ final class SheepAlert: NSObject {
     /// The 64 pt icon row; off for a wide working dialog like Safe Paste
     /// (the user, 2026-10-09: "ไม่ต้องใส่ icon").
     var showsIcon = true
+    /// The informative text on ONE line, as wide as the dialog's column
+    /// (Safe Paste's subtitle); cut in the middle if it still overflows.
+    var informativeSingleLine = false
     private(set) var buttons: [NSButton] = []
 
     private var panel: Panel?
@@ -274,7 +277,18 @@ final class SheepAlert: NSObject {
                                                font: .systemFont(ofSize: 14, weight: .semibold),
                                                color: .labelColor))
         }
-        if !informativeText.isEmpty {
+        if !informativeText.isEmpty, informativeSingleLine {
+            let line = NSTextField(labelWithString: informativeText)
+            line.font = .systemFont(ofSize: 12)
+            line.textColor = .secondaryLabelColor
+            line.alignment = .center
+            line.lineBreakMode = .byTruncatingMiddle
+            line.maximumNumberOfLines = 1
+            line.translatesAutoresizingMaskIntoConstraints = false
+            line.widthAnchor.constraint(lessThanOrEqualToConstant: width).isActive = true
+            line.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            text.addArrangedSubview(line)
+        } else if !informativeText.isEmpty {
             text.addArrangedSubview(Self.label(informativeText,
                                                font: .systemFont(ofSize: 12),
                                                color: .secondaryLabelColor))
@@ -401,7 +415,9 @@ final class SheepAlert: NSObject {
         column.alignment = .centerX
         column.spacing = 16
         if showsIcon { column.setCustomSpacing(14, after: iconView) }
-        column.edgeInsets = NSEdgeInsets(top: 28, left: 28, bottom: 24, right: 28)
+        // No icon: the title is the first row, 16 pt from the top (28 left an
+        // empty band above an icon-less sheet's title, 6.0 (12)).
+        column.edgeInsets = NSEdgeInsets(top: showsIcon ? 28 : 16, left: 28, bottom: 24, right: 28)
         column.translatesAutoresizingMaskIntoConstraints = false
 
         // The glass chrome, drawn by the same SwiftUI shape the password

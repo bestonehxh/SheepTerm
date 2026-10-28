@@ -232,8 +232,8 @@ final class AppModel: ObservableObject {
         return terminalHost(of: tab)
     }
     // Launch clean like Terminal.app — the sidebar opens with ⌘0 or the
-    // toolbar button when needed.
-    @Published var sidebarShown = false
+    // toolbar button when needed — unless Settings ▸ Show Sidebar at Launch.
+    @Published var sidebarShown = SidebarLaunch.shown(stored: UserDefaults.standard.object(forKey: SidebarLaunch.key))
     // Persisted by the resize handle's drag .onEnded — writing UserDefaults
     // in a didSet here would hit disk on every drag frame.
     @Published var sidebarWidth: CGFloat = {
@@ -613,7 +613,14 @@ final class AppModel: ObservableObject {
         panel.nameFieldStringValue = "\(name).sheepterm"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let data = try ShareCodec.encode(groups, sender: ShareCodec.deviceName)
+            // Each group with its SUBTREE, flattened into one group whose
+            // hosts carry their path below it (`GroupTree.exportable`) — a
+            // group whose ancestor is exported too travels inside that one.
+            let picked = Set(groups.map(\.id))
+            let flattened = groups.filter { group in
+                !GroupTree.ancestors(of: group.id, in: store.groups).contains { picked.contains($0.id) }
+            }.compactMap { GroupTree.exportable($0.id, in: store.groups) }
+            let data = try ShareCodec.encode(flattened, sender: ShareCodec.deviceName)
             try data.write(to: url, options: .atomic)
         } catch {
             // `try?` here meant a full disk or a read-only folder produced no
@@ -824,9 +831,9 @@ final class AppModel: ObservableObject {
     /// double-click): nothing is imported without an explicit accept, and
     /// duplicates are resolved by the user — never silently (spec 0.4).
     /// A file normally holds ONE group — nothing in this app writes a
-    /// multi-group file any more (a group carries its own heading list and its
-    /// hosts' pointers into it, so exporting a group brings its sections with
-    /// it). One that arrives from elsewhere is still read: each
+    /// multi-group file any more (a group's subtree travels inside it as
+    /// paths, `GroupTree.exportable`, so exporting a group brings its
+    /// subgroups with it). One that arrives from elsewhere is still read: each
     /// group gets its own dialog, in file order, and Cancel on one skips THAT
     /// group only rather than throwing away the rest.
     ///
@@ -882,12 +889,12 @@ final class AppModel: ObservableObject {
             // Counts on the message line, detail short. `corrections` is the
             // exception — it names changes made to the user's own data and is
             // allowed to run long (SheepAlert stays centred either way).
-            // A group can be all headings and no hosts (someone exported a
+            // A group can be all subgroups and no hosts (someone exported a
             // group they had only set up): "0 hosts" alone reads like an empty
-            // file, so the sections are named instead of left unsaid.
-            let sections = group.displayedSections.count
-            alert.messageText = group.hosts.isEmpty && sections > 0
-                ? String(localized: "Import “\(group.name)” (\(sections) sections)?")
+            // file, so the subgroups are named instead of left unsaid.
+            let subgroups = group.displayedSections.count
+            alert.messageText = group.hosts.isEmpty && subgroups > 0
+                ? String(localized: "Import “\(group.name)” (\(subgroups) subgroups)?")
                 : String(localized: "Import “\(group.name)” (\(group.hosts.count) hosts)?")
             alert.informativeText = String(localized: "From \(sender). Passwords are not included.") + corrections
             alert.addButton(withTitle: String(localized: "Import"))
@@ -905,14 +912,16 @@ final class AppModel: ObservableObject {
         alert.messageText = String(localized: "“\(Self.sanitizedForDialog(existing.name))” already exists")
         // The three buttons say what the choices do; this line only has to
         // say what is on each side of it.
-        // Same shape as the new-group dialog above: a headings-only file said
+        // Same shape as the new-group dialog above: a subgroups-only file said
         // "The file from Mac: 0.", which reads as an empty file rather than as
-        // the sections it is bringing.
-        let incomingSections = group.displayedSections.count
-        let theirs = group.hosts.isEmpty && incomingSections > 0
-            ? String(localized: "\(incomingSections) sections")
+        // the subgroups it is bringing. Ours counts the whole subtree — what
+        // the merge pairs against.
+        let incomingSubgroups = group.displayedSections.count
+        let theirs = group.hosts.isEmpty && incomingSubgroups > 0
+            ? String(localized: "\(incomingSubgroups) subgroups")
             : "\(group.hosts.count)"
-        alert.informativeText = String(localized: "Yours: \(existing.hosts.count) hosts. The file from \(sender): \(theirs).")
+        let ours = HostStore.hostCount(ofGroupIDs: [existing.id], in: store.groups)
+        alert.informativeText = String(localized: "Yours: \(ours) hosts. The file from \(sender): \(theirs).")
             + corrections
         alert.addButton(withTitle: String(localized: "Merge into Existing"))
         alert.addButton(withTitle: String(localized: "Create New Group"))
@@ -1732,6 +1741,11 @@ final class AppModel: ObservableObject {
                 guard let tab, !tab.vendorManuallyChosen else { return }
                 tab.highlightVendor = detected
             }
+            // The wrong-speed hint's Try: the status bar menu's path.
+            controller.onTryBaud = { [weak self, weak tab] baud in
+                guard let self, let tab else { return }
+                self.setBaud(baud, for: tab)
+            }
             tab.highlightEnabled = UserDefaults.standard.object(forKey: "highlightDefault") as? Bool ?? true
             controller.onStatus = { [weak tab, weak self, weak controller] status in
                 guard let tab else { return }
@@ -1803,7 +1817,8 @@ final class AppModel: ObservableObject {
 
     /// ≡ → Add Host…: one SSH host into a group, no session.
     func openAddHost(inGroup group: HostGroup? = nil) {
-        quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true, groupName: group?.name)
+        quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true,
+                                           groupName: group.map { GroupTree.shownPath(of: $0.id, in: store.groups) })
     }
 
     /// Saves without connecting (Add Host…). Same door as Quick Connect's
@@ -1868,13 +1883,8 @@ final class AppModel: ObservableObject {
         // reaches into `groups` directly and used to skip that, which
         // under post-corrupt suppression meant the new group appeared in
         // the sidebar and was never written to disk.
-        // The host appended below carries NO section by construction — Quick
-        // Connect builds it from an address and a credential, and there is
-        // nowhere in that sheet to put a heading. If a future caller ever
-        // hands this path a labelled host, the label has to be DECLARED in the
-        // group it lands in (`group.sections = group.displayedSections`, the
-        // way `HostStore.move(host:toGroupNamed:)` does it) or the next load
-        // will treat it as an undeclared leftover.
+        // The host appended below carries NO label by construction — Quick
+        // Connect builds it from an address and a credential.
         // Found, and named, through ONE decision (`HostStore
         // .quickConnectGroupName` / `quickConnectGroupIndex`): a raw lookup and
         // a raw append made a "Branch⟨U+2028⟩BKK" group that the next launch
@@ -1882,9 +1892,7 @@ final class AppModel: ObservableObject {
         guard let index = store.quickConnectGroupIndex(for: groupName) else {
             if let makeCredential { host.credentialID = makeCredential() }
             store.noteExplicitUserMutation()
-            store.groups.append(HostGroup(name: HostStore.quickConnectGroupName(groupName),
-                                          hosts: [host],
-                                          sections: host.sectionName.map { [$0] } ?? []))
+            store.groups.append(HostGroup(name: HostStore.quickConnectGroupName(groupName), hosts: [host]))
             store.save()
             return
         }
@@ -1892,9 +1900,6 @@ final class AppModel: ObservableObject {
             if let makeCredential { host.credentialID = makeCredential() }
             store.noteExplicitUserMutation()
             store.groups[index].hosts.append(host)
-            if host.sectionName != nil {
-                store.groups[index].sections = store.groups[index].displayedSections
-            }
             store.save()
             return
         }
@@ -2052,6 +2057,34 @@ final class AppModel: ObservableObject {
 
     func closeCurrentWorkspace() {
         if let ws = selectedWorkspace { close(workspace: ws.id) }
+    }
+
+    /// The user closing a whole tab (its ×, its context menu, File → Close
+    /// Tab ⇧⌘W): a tab of several panes asks first, since every pane goes
+    /// (`WorkspaceBook.panesToConfirm`); a lone pane closes as before.
+    func requestClose(workspace id: UUID) {
+        if let count = book.panesToConfirm(closingWorkspace: id), !confirmClosingPanes(count) { return }
+        close(workspace: id)
+    }
+
+    func requestCloseCurrentWorkspace() {
+        if let ws = selectedWorkspace { requestClose(workspace: ws.id) }
+    }
+
+    /// "Close N panes?" — Close Tab (red) / Cancel, Cancel the default for
+    /// Return and Escape, as Quit with live sessions does. No caption. The
+    /// button says "Close Tab", not "Close": SheepAlert reads a bare "Close"
+    /// as the dismiss button (Escape would press it).
+    private func confirmClosingPanes(_ count: Int) -> Bool {
+        let alert = SheepAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "Close \(count) panes?")
+        let close = alert.addButton(withTitle: String(localized: "Close Tab"))
+        let cancel = alert.addButton(withTitle: String(localized: "Cancel"))
+        close.keyEquivalent = ""
+        cancel.keyEquivalent = "\r"
+        close.hasDestructiveAction = true
+        return alert.sheepStyled().runModal() == .alertFirstButtonReturn
     }
 
     func select(workspace id: UUID) {
@@ -2293,8 +2326,9 @@ final class AppModel: ObservableObject {
     #endif
 
     /// Split Right / Down are greyed when the split would be refused (a
-    /// full tab, or a Ping pane that would lose its half) — the menu said
-    /// yes and then beeped (review 6.0 (2)).
+    /// full tab, off the 3 × 3 grid — `PaneLayout.isGrid`, 6.0 (12) — or a
+    /// Ping pane that would lose its half) — the menu said yes and then
+    /// beeped (review 6.0 (2)).
     func canSplitFocusedPane(_ direction: PaneDirection) -> Bool {
         guard let tab = selectedTab, let ws = selectedWorkspace, ws.paneCount < PaneLayout.maxPanes else { return false }
         var isPing = false

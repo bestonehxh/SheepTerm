@@ -138,6 +138,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // SHEEPTERM_DEBUG_VIEW_MENU=<seconds>: the View menu pops up over the
+        // window for 6 s, then its Sidebar ▸ submenu for 6 s (window captures
+        // of the regrouped menu; NSLog marks each so a script can time them).
+        if let after = env["SHEEPTERM_DEBUG_VIEW_MENU"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                guard let view = NSApp.mainMenu?.items.compactMap(\.submenu).first(where: { menu in
+                          menu.items.contains { $0.keyEquivalent == "0" && $0.keyEquivalentModifierMask == .command } }),
+                      let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 500 }),
+                      let content = window.contentView else { NSLog("debug view menu: not found"); return }
+                @MainActor func show(_ menu: NSMenu, _ name: String, at point: NSPoint) {
+                    let timer = Timer(timeInterval: 6, target: menu, selector: #selector(NSMenu.cancelTracking), userInfo: nil, repeats: false)
+                    RunLoop.main.add(timer, forMode: .common)
+                    NSLog("debug view menu: %@ up", name)
+                    menu.popUp(positioning: nil, at: point, in: content)
+                    NSLog("debug view menu: %@ down", name)
+                }
+                let top = NSPoint(x: 260, y: content.isFlipped ? 60 : content.bounds.height - 60)
+                show(view, "View", at: top)
+                if let sidebar = view.items.first(where: { $0.submenu?.items.contains { $0.keyEquivalent == "" && $0.title.contains("Group") } == true })?.submenu {
+                    show(sidebar, "Sidebar", at: top)
+                }
+                // The menu as AppKit holds it, shortcuts included (the submenus' own key equivalents).
+                @MainActor func dump(_ menu: NSMenu, _ depth: Int) {
+                    menu.update()
+                    for item in menu.items where !item.isSeparatorItem {
+                        let mods = item.keyEquivalentModifierMask
+                        let key = item.keyEquivalent.isEmpty ? "" : (mods.contains(.control) ? "⌃" : "") + (mods.contains(.option) ? "⌥" : "")
+                            + (mods.contains(.shift) ? "⇧" : "") + (mods.contains(.command) ? "⌘" : "") + item.keyEquivalent
+                        NSLog("debug view menu: %@%@ %@%@", String(repeating: "  ", count: depth), item.title, key, item.isEnabled ? "" : " (off)")
+                        if let sub = item.submenu, depth < 2 { dump(sub, depth + 1) }
+                    }
+                }
+                dump(view, 0)
+            }
+        }
         if env["SHEEPTERM_DEBUG_NETWORK_INFO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 AppModel.shared.closeCurrentWorkspace()
@@ -164,10 +199,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // SHEEPTERM_DEBUG_SPLIT=right|down (or several, "right down right"): split the
         // focused pane 3 s in, then once a second (pane margin shots, nested splits).
+        // focus-left / focus-up / focus-right / focus-down move the keyboard first
+        // (grid shots: a 3 × 3 needs every column split).
         if let split = env["SHEEPTERM_DEBUG_SPLIT"] {
             for (i, word) in split.split(separator: " ").enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(i)) {
-                    AppModel.shared.splitFocusedPane(word == "down" ? .down : .right)
+                    let focusMoves: [Substring: PaneDirection] = ["focus-left": .left, "focus-up": .up, "focus-right": .right, "focus-down": .down]
+                    if let move = focusMoves[word] { AppModel.shared.focusPane(move) }
+                    else { AppModel.shared.splitFocusedPane(word == "down" ? .down : .right) }
                     let m = AppModel.shared
                     NSLog("debug split %@ → panes %d, tabs %d, focused %@", String(word), m.selectedWorkspace?.paneCount ?? -1,
                           m.tabs.count, m.selectedTab?.title ?? "nil")
@@ -211,6 +250,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 window.orderFront(nil)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_SAFE_PASTE_PNG=<path>: the Safe Multi-line Paste sheet for
+        // a sample clipboard (a hidden line break, an escape, a reload without a
+        // final newline) on an offscreen terminal, rendered to a file.
+        if let path = env["SHEEPTERM_DEBUG_SAFE_PASTE_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let host = SessionTerminalHost(safePaste: true)
+                host.sessionLabel = env["SHEEPTERM_DEBUG_SAFE_PASTE_SESSION"]
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 900, height: 640),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host.terminalView
+                window.orderFront(nil)
+                let sample = "conf t\ninterface 1/1/1\u{2028}description uplink\u{1B}[31m\nexit\nwrite memory\nreload"
+                _ = host.shouldPaste(sample)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    guard let sheet = window.attachedSheet, let content = sheet.contentView else {
+                        NSLog("debug safe paste: no sheet"); return
+                    }
+                    NSLog("debug safe paste: sheet %@", NSStringFromRect(sheet.frame))
+                    if let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                        content.cacheDisplay(in: content.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    host.cancelSafePaste(reason: .stopped)
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_SETTINGS_PNG=<path>: Settings ▸ General rendered to a
+        // file (screenshots). Scratch runs only.
+        if let path = env["SHEEPTERM_DEBUG_SETTINGS_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let host = NSHostingView(rootView: GeneralSettingsView().frame(width: 560, height: 900)
+                    .environment(\.colorScheme, .dark))
+                host.appearance = NSAppearance(named: .darkAqua)
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 560, height: 900),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                         host.cacheDisplay(in: host.bounds, to: rep)
                         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
@@ -825,6 +913,8 @@ struct SheepTermCommands: Commands {
     @ObservedObject private var model = AppModel.shared
     @ObservedObject private var mainWindowKey = MainWindowKeyMonitor.shared
     @ObservedObject private var aiPanel = AIPanelChrome.shared
+    @AppStorage(GroupTree.groupColorsKey) private var groupColors = GroupTree.groupColorsDefault
+    @AppStorage(SidebarLaunch.key) private var sidebarAtLaunch = false
 
     /// Highlighting only means something for a remote session. On a local
     /// shell the Device Family menu still opened and still moved its
@@ -883,7 +973,7 @@ struct SheepTermCommands: Commands {
             Button("New Ping Tab") { model.openPing(inNewTab: true) }
             // Main window only — while Settings is key, ⌘⇧W must not close
             // a terminal tab in the background.
-            Button("Close Tab") { model.closeCurrentWorkspace() }
+            Button("Close Tab") { model.requestCloseCurrentWorkspace() }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(!mainWindowKey.isKey)
             Divider()
@@ -945,113 +1035,177 @@ struct SheepTermCommands: Commands {
                 .disabled(model.selectedTab == nil)
         }
 
+        // View (6.0 (12)): grouped into submenus — the order and every
+        // shortcut come from `ViewMenuLayout` (harness: ViewMenuTests).
+        // Shortcuts inside a submenu still fire: AppKit walks submenus for
+        // key equivalents.
         CommandGroup(after: .sidebar) {
             Button {
                 model.toggleSidebar()
             } label: {
                 Label("Toggle Sidebar", systemImage: "sidebar.leading")
             }
-            .keyboardShortcut("0", modifiers: .command)
-            // AI Assistant off: no panel item and no ⌥⌘A at all.
-            if aiPanel.enabled {
-                Toggle(isOn: Binding(get: { aiPanel.shown }, set: { _ in aiPanel.toggle() })) {
-                    Label("Show AI Panel", systemImage: "sidebar.trailing")
+            .viewShortcut(.toggleSidebar, webSelected: isWebSelected)
+
+            Menu("Sidebar", systemImage: "sidebar.left") {
+                Toggle("Show Sidebar at Launch", isOn: $sidebarAtLaunch)
+                // The sidebar's level bars (design G), on unless set.
+                Toggle("Group Colors", isOn: $groupColors)
+                Divider()
+                Button {
+                    model.showReorderGroups = true
+                } label: {
+                    Label("Reorder Groups…", systemImage: "arrow.up.arrow.down")
                 }
-                .keyboardShortcut("a", modifiers: [.command, .option])
-            }
-            Toggle(isOn: $aiPanel.enabled) {
-                Label("AI Assistant", systemImage: "sparkles")
-            }
-            Button {
-                model.showReorderGroups = true
-            } label: {
-                Label("Reorder Groups…", systemImage: "arrow.up.arrow.down")
-            }
-            Button {
-                model.showAddHosts()
-            } label: {
-                Label("Add Hosts…", systemImage: "tablecells")
-            }
-            Button {
-                model.toggleHighlightCurrent()
-            } label: {
-                Label("Toggle Highlighting", systemImage: "highlighter")
-            }
-            .keyboardShortcut("h", modifiers: [.command, .shift])
-            .disabled(!isRemoteSessionSelected)
-            // Answers `--More--` with a space on every SSH/serial tab. Global:
-            // it does what the user would do next, so there is nothing to
-            // decide per host.
-            Toggle(isOn: $model.autoPage) {
-                Label("Auto-page (--More--)", systemImage: "arrow.down.to.line")
-            }
-            Menu {
-                ForEach(Vendor.allCases) { family in
-                    Toggle(family.localizedLabel, isOn: Binding(
-                        get: { model.selectedTab?.highlightVendor == family },
-                        set: { _ in model.setHighlightVendorCurrent(family) }
-                    ))
+                Button {
+                    model.showAddHosts()
+                } label: {
+                    Label("Add Hosts…", systemImage: "tablecells")
                 }
-            } label: {
-                Label("Device Family", systemImage: "cpu")
             }
-            .disabled(!isRemoteSessionSelected)
-            // ⌘K already belongs to Quick Connect here, so this takes ⌘L.
-            // Only the history above the screen goes — the visible screen and
-            // the remote session are untouched. On a web tab the same key is
-            // the browser's: the URL field (one item, so one owner of ⌘L).
-            Button {
-                model.commandL()
-            } label: {
-                if isWebSelected {
-                    Label("Open Location", systemImage: "link")
-                } else {
+
+            Menu("Terminal", systemImage: "terminal") {
+                Button {
+                    model.toggleHighlightCurrent()
+                } label: {
+                    Label("Toggle Highlighting", systemImage: "highlighter")
+                }
+                .viewShortcut(.toggleHighlighting, webSelected: isWebSelected)
+                .disabled(!isRemoteSessionSelected)
+                // Answers `--More--` with a space on every SSH/serial tab.
+                // Global: it does what the user would do next, so there is
+                // nothing to decide per host.
+                Toggle(isOn: $model.autoPage) {
+                    Label("Auto-page (--More--)", systemImage: "arrow.down.to.line")
+                }
+                Menu("Device Family", systemImage: "cpu") {
+                    ForEach(Vendor.allCases) { family in
+                        Toggle(family.localizedLabel, isOn: Binding(
+                            get: { model.selectedTab?.highlightVendor == family },
+                            set: { _ in model.setHighlightVendorCurrent(family) }
+                        ))
+                    }
+                }
+                .disabled(!isRemoteSessionSelected)
+                // ⌘K already belongs to Quick Connect, so this takes ⌘L. Only
+                // the history above the screen goes — the visible screen and
+                // the remote session are untouched. ⌘L has one owner at a
+                // time: this item, or Web ▸ Open Location on a web tab
+                // (`ViewMenuLayout.shortcut`); both go through `commandL`,
+                // which does the right one for the tab in front.
+                Button {
+                    model.commandL()
+                } label: {
                     Label("Clear Scrollback", systemImage: "eraser")
                 }
+                .viewShortcut(.clearScrollback, webSelected: isWebSelected)
+                .disabled(model.selectedTab == nil || isWebSelected)
+                Divider()
+                Menu("Theme", systemImage: "paintpalette") {
+                    ForEach(Theme.terminalThemes) { theme in
+                        Toggle(theme.name, isOn: Binding(
+                            get: { model.terminalTheme == theme.id },
+                            set: { _ in model.terminalTheme = theme.id }
+                        ))
+                    }
+                }
+                Menu("Font", systemImage: "textformat.size") {
+                    Button("Bigger") { model.stepSize(1) }
+                        .viewShortcut(.fontBigger, webSelected: isWebSelected)
+                    Button("Smaller") { model.stepSize(-1) }
+                        .viewShortcut(.fontSmaller, webSelected: isWebSelected)
+                    // On a web tab these three zoom the page (Safari's), so the last one says so.
+                    Button(model.selectedWebController != nil ? String(localized: "Actual Size") : String(localized: "Default Size (\(Int(Theme.defaultFontSize)) pt)")) {
+                        model.stepSize(0)
+                    }
+                    Divider()
+                    Toggle(Theme.fontFamilyLabel(Theme.systemFontFamily), isOn: Binding(
+                        get: { model.terminalFontFamily == Theme.systemFontFamily },
+                        set: { _ in model.terminalFontFamily = Theme.systemFontFamily }
+                    ))
+                    // Same grouping as the Settings picker: system | platform | bundled | other.
+                    Divider()
+                    fontToggles(Theme.terminalFontSections.platform)
+                    if !Theme.terminalFontSections.bundled.isEmpty {
+                        Divider()
+                        fontToggles(Theme.terminalFontSections.bundled)
+                    }
+                    if !Theme.terminalFontSections.other.isEmpty {
+                        Divider()
+                        Menu("Other Installed") { fontToggles(Theme.terminalFontSections.other) }
+                    }
+                    Divider()
+                    ForEach(Theme.TerminalFontWeight.allCases) { weight in
+                        Toggle(weight.label, isOn: Binding(
+                            get: { model.terminalFontWeight == weight },
+                            set: { _ in model.terminalFontWeight = weight }
+                        ))
+                    }
+                    Divider()
+                    Toggle("Font Smoothing", isOn: Binding(
+                        get: { model.terminalFontSmoothing },
+                        set: { model.terminalFontSmoothing = $0 }
+                    ))
+                }
             }
-            .keyboardShortcut("l", modifiers: .command)
-            .disabled(model.selectedTab == nil)
+
             // Web tabs only (greyed elsewhere): ⌘R / ⌘[ / ⌘] are free in a
             // terminal app and mean the browser's thing here.
-            Button {
-                model.reloadWebPage()
-            } label: {
-                Label("Reload Page", systemImage: "arrow.clockwise")
+            Menu("Web", systemImage: "globe") {
+                Button {
+                    model.commandL()
+                } label: {
+                    Label("Open Location", systemImage: "link")
+                }
+                .viewShortcut(.openLocation, webSelected: isWebSelected)
+                .disabled(!isWebSelected)
+                Button {
+                    model.reloadWebPage()
+                } label: {
+                    Label("Reload Page", systemImage: "arrow.clockwise")
+                }
+                .viewShortcut(.reloadPage, webSelected: isWebSelected)
+                .disabled(!isWebSelected)
+                Button {
+                    model.webGoBack()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .viewShortcut(.back, webSelected: isWebSelected)
+                .disabled(!isWebSelected)
+                Button {
+                    model.webGoForward()
+                } label: {
+                    Label("Forward", systemImage: "chevron.right")
+                }
+                .viewShortcut(.forward, webSelected: isWebSelected)
+                .disabled(!isWebSelected)
+                Divider()
+                Button {
+                    model.clearWebsiteData()
+                } label: {
+                    Label("Clear Website Data…", systemImage: "trash")
+                }
             }
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(!isWebSelected)
-            Button {
-                model.webGoBack()
-            } label: {
-                Label("Back", systemImage: "chevron.left")
+
+            Menu("AI", systemImage: "sparkles") {
+                // AI Assistant off: no panel item and no ⌥⌘A at all.
+                if aiPanel.enabled {
+                    Toggle(isOn: Binding(get: { aiPanel.shown }, set: { _ in aiPanel.toggle() })) {
+                        Label("Show AI Panel", systemImage: "sidebar.trailing")
+                    }
+                    .viewShortcut(.showAIPanel, webSelected: isWebSelected)
+                }
+                Toggle(isOn: $aiPanel.enabled) {
+                    Label("AI Assistant", systemImage: "sparkles")
+                }
             }
-            .keyboardShortcut("[", modifiers: .command)
-            .disabled(!isWebSelected)
-            Button {
-                model.webGoForward()
-            } label: {
-                Label("Forward", systemImage: "chevron.right")
-            }
-            .keyboardShortcut("]", modifiers: .command)
-            .disabled(!isWebSelected)
-            Button {
-                model.clearWebsiteData()
-            } label: {
-                Label("Clear Website Data…", systemImage: "trash")
-            }
-            // macOS 27 hides link addresses and the ARP table from a local
-            // tab's commands; the app reads them itself (NetworkTables).
-            Button {
-                model.showNetworkInfo = true
-            } label: {
-                Label("Network Info…", systemImage: "network")
-            }
-            .keyboardShortcut("i", modifiers: [.command, .option])
-            Divider()
-            Toggle(isOn: $model.showStatusBar) {
-                Label("Show Bottom Bar", systemImage: "rectangle.bottomthird.inset.filled")
-            }
-            Menu {
+
+            Menu("Bottom Bar", systemImage: "rectangle.bottomthird.inset.filled") {
+                Toggle(isOn: $model.showStatusBar) {
+                    Label("Show Bottom Bar", systemImage: "rectangle.bottomthird.inset.filled")
+                }
+                Divider()
                 Picker("Connection Status", selection: $model.statusConnectionStyle) {
                     Text("Wool").tag(ConnectionIndicator.wool)
                     Text("Packet").tag(ConnectionIndicator.packet)
@@ -1065,60 +1219,17 @@ struct SheepTermCommands: Commands {
                 Toggle("Clock", isOn: $model.statusShowClock)
                 Toggle("File Server", isOn: $model.statusShowFileServer)
                 Toggle("Transfer Progress", isOn: $model.statusShowTransfers)
-            } label: {
-                Label("Bottom Bar Items", systemImage: "checklist")
             }
+
             Divider()
-            Menu {
-                ForEach(Theme.terminalThemes) { theme in
-                    Toggle(theme.name, isOn: Binding(
-                        get: { model.terminalTheme == theme.id },
-                        set: { _ in model.terminalTheme = theme.id }
-                    ))
-                }
+            // macOS 27 hides link addresses and the ARP table from a local
+            // tab's commands; the app reads them itself (NetworkTables).
+            Button {
+                model.showNetworkInfo = true
             } label: {
-                Label("Terminal Theme", systemImage: "paintpalette")
+                Label("Network Info…", systemImage: "network")
             }
-            Menu {
-                Button("Bigger") { model.stepSize(1) }
-                    .keyboardShortcut("=", modifiers: .command)
-                Button("Smaller") { model.stepSize(-1) }
-                    .keyboardShortcut("-", modifiers: .command)
-                // On a web tab these three zoom the page (Safari's), so the last one says so.
-                Button(model.selectedWebController != nil ? String(localized: "Actual Size") : String(localized: "Default Size (\(Int(Theme.defaultFontSize)) pt)")) {
-                    model.stepSize(0)
-                }
-                Divider()
-                Toggle(Theme.fontFamilyLabel(Theme.systemFontFamily), isOn: Binding(
-                    get: { model.terminalFontFamily == Theme.systemFontFamily },
-                    set: { _ in model.terminalFontFamily = Theme.systemFontFamily }
-                ))
-                // Same grouping as the Settings picker: system | platform | bundled | other.
-                Divider()
-                fontToggles(Theme.terminalFontSections.platform)
-                if !Theme.terminalFontSections.bundled.isEmpty {
-                    Divider()
-                    fontToggles(Theme.terminalFontSections.bundled)
-                }
-                if !Theme.terminalFontSections.other.isEmpty {
-                    Divider()
-                    Menu("Other Installed") { fontToggles(Theme.terminalFontSections.other) }
-                }
-                Divider()
-                ForEach(Theme.TerminalFontWeight.allCases) { weight in
-                    Toggle(weight.label, isOn: Binding(
-                        get: { model.terminalFontWeight == weight },
-                        set: { _ in model.terminalFontWeight = weight }
-                    ))
-                }
-                Divider()
-                Toggle("Font Smoothing", isOn: Binding(
-                    get: { model.terminalFontSmoothing },
-                    set: { model.terminalFontSmoothing = $0 }
-                ))
-            } label: {
-                Label("Terminal Font", systemImage: "textformat.size")
-            }
+            .viewShortcut(.networkInfo, webSelected: isWebSelected)
         }
 
         // Saved commands (4.2 (4)). The list is the store's, in its order;
@@ -1224,5 +1335,24 @@ extension Vendor {
         case .gaia: return String(localized: "Check Point Gaia")
         case .linux: return String(localized: "Linux / server")
         }
+    }
+}
+
+/// A View menu item's shortcut from `ViewMenuLayout` (nil = none).
+private extension View {
+    func viewShortcut(_ item: ViewMenuLayout.Item, webSelected: Bool) -> some View {
+        keyboardShortcut(ViewMenuLayout.shortcut(item, webSelected: webSelected).map(\.swiftUI))
+    }
+}
+
+private extension ViewMenuLayout.Shortcut {
+    var swiftUI: KeyboardShortcut {
+        let named: [String: KeyEquivalent] = ["return": .return, "left": .leftArrow, "right": .rightArrow, "up": .upArrow, "down": .downArrow]
+        var mods: EventModifiers = []
+        if modifiers.contains(.command) { mods.insert(.command) }
+        if modifiers.contains(.shift) { mods.insert(.shift) }
+        if modifiers.contains(.option) { mods.insert(.option) }
+        if modifiers.contains(.control) { mods.insert(.control) }
+        return KeyboardShortcut(named[key] ?? KeyEquivalent(Character(key)), modifiers: mods)
     }
 }
