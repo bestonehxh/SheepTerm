@@ -35,3 +35,19 @@ nonisolated enum SidebarLaunch {
         (stored as? Bool) == true
     }
 }
+
+/// View ▸ Sidebar / Settings ▸ Sidebar ▸ Keep Sidebar Open (6.0 (13)): off
+/// (the default) = today's behaviour — opening a session from the sidebar,
+/// ＋, Quick Connect, Quick Search, a USB console's shadow tab… closes the
+/// sidebar (`AppModel.collapseSidebar`, the ONE path every one of them takes);
+/// on = it stays open. ⌘0 / Toggle Sidebar still closes it by hand. Per-Mac
+/// like `sidebarAtLaunch`: in a backup, never synced.
+nonisolated enum SidebarKeepOpen {
+    static let key = "sidebarStaysOpen"
+
+    /// Whether opening a session closes the sidebar: yes unless a stored
+    /// true says keep it (never set, or anything else = today's auto-close).
+    static func closesOnOpen(stored: Any?) -> Bool {
+        (stored as? Bool) != true
+    }
+}

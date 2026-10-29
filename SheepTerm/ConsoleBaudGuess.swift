@@ -39,6 +39,74 @@ public nonisolated enum ConsoleBaudGuess {
         order.first { $0 != current && !tried.contains($0) }
     }
 
+    /// Whether a serial tab still watches for "No response?" at all: a cable
+    /// session whose hint was never dismissed (× = no more hints this tab
+    /// session — so no timer per typed Return either).
+    public static func watchesSilence(cableSession: Bool, hintDismissed: Bool) -> Bool {
+        cableSession && !hintDismissed
+    }
+
+    /// Why the hint is up: what came back is junk ("Garbled?"), or nothing
+    /// came back at all ("No response?", `SilenceWatch`).
+    public enum HintReason: Sendable, Equatable {
+        case garbled, noResponse
+    }
+
+    /// "No response?" (6.0 (13)): a 115200 console reading our 9600 Return
+    /// may not answer at all — a blank screen, nothing for `Detector` to
+    /// judge. Counts Returns the USER typed (keyboard only — never a paste,
+    /// a snippet or a paced run) while not one byte has come back since the
+    /// first of them; once the `returns`-th has gone out and `wait` seconds
+    /// pass with still nothing, `tick` answers true, once. Any received byte
+    /// starts the count over (and re-arms it); a busy line (`lineBusy`)
+    /// starts it over too; `reset()` = a new speed. A telnet session (not a
+    /// cable, `cable: false`) never fires. Passive: it only watches.
+    /// Times are any monotonic seconds (the Mac passes systemUptime).
+    /// The Return key's bytes: CR, or CR LF in newline mode (LNM).
+    public static func isReturnKey(_ bytes: [UInt8]) -> Bool {
+        bytes == [0x0D] || bytes == [0x0D, 0x0A]
+    }
+
+    public struct SilenceWatch: Sendable {
+        public static let returns = 3
+        public static let wait: Double = 1.0
+
+        public let cable: Bool
+        public private(set) var count = 0
+        /// When `tick` should look: the `returns`-th Return's time + `wait`.
+        public private(set) var deadline: Double?
+        public private(set) var fired = false
+
+        public init(cable: Bool) { self.cable = cable }
+
+        public mutating func reset() {
+            self = SilenceWatch(cable: cable)
+        }
+
+        /// A Return the user typed has gone out at `time`. Later Returns
+        /// past the `returns`-th do not move the deadline.
+        public mutating func userReturn(at time: Double, busy: Bool) {
+            guard cable, !busy else { return reset() }
+            guard !fired else { return }
+            count += 1
+            if count == SilenceWatch.returns { deadline = time + SilenceWatch.wait }
+        }
+
+        /// Bytes the port received: any one means the device answers.
+        public mutating func received(_ bytes: [UInt8]) {
+            guard !bytes.isEmpty else { return }
+            reset()
+        }
+
+        /// True once, when the deadline has passed with nothing received.
+        public mutating func tick(now: Double, busy: Bool) -> Bool {
+            guard cable, !busy else { reset(); return false }
+            guard !fired, let deadline, now >= deadline else { return false }
+            fired = true
+            return true
+        }
+    }
+
     /// The decision: at least `minJunk` junk bytes among the last `window`
     /// classified. Not a share of junk: a table of spaces re-read at the
     /// wrong speed comes out mostly as printable punctuation ('!', '#', '1'),

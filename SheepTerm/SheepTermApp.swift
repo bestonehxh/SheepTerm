@@ -58,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scripted = debugEnv.keys.contains { $0.hasPrefix("SHEEPTERM_DEBUG_") } && debugEnv["SHEEPTERM_DEBUG_SHEET"] != "whatsnew"
         #endif
         let marketing = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-        if !scripted, WhatsNewPlan.shouldShow(seen: UserDefaults.standard.string(forKey: WhatsNewPlan.seenKey), running: marketing) {
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        if !scripted, WhatsNewPlan.shouldShow(seen: UserDefaults.standard.string(forKey: WhatsNewPlan.seenKey),
+                                              running: WhatsNewPlan.running(marketing: marketing, build: build)) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.showWhatsNew = true }
         }
 #if DEBUG
@@ -468,7 +470,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // SHEEPTERM_DEBUG_WHATSNEW_ART=<dir>: the What's New pictures, drawn
         // by the real views with sample data (start with SHEEPTERM_DEBUG_FILESERVER
         // + _SERVE_FILE + _MAC_IP + _VENDOR so the popover has a server, a
-        // file and a command). Writes open-file.png and serve-file.png.
+        // file and a command). Writes open-file.png and serve-file.png, and
+        // (6.0 (13)) baud.png, panes.png, groups.png, file-server.png.
         if let dir = env["SHEEPTERM_DEBUG_WHATSNEW_ART"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
                 if let tab = AppModel.shared.selectedTab, let vendor = env["SHEEPTERM_DEBUG_VENDOR"].flatMap(Vendor.init(rawValue:)) {
@@ -616,6 +619,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 write(serveFile, "serve-file.png")
                 write(transfers, "transfers.png")
                 write(TransferLogView(), "log.png")
+
+                // 6.0 (13) pages: sample names and a neutral `switch#` prompt only.
+                @MainActor func term(_ lines: [String], width: CGFloat, height: CGFloat) -> some View {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(lines.indices, id: \.self) { Text(lines[$0]) }
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(Color(white: 0.86))
+                    .padding(12).frame(width: width, height: height, alignment: .topLeading)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.termBackground))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.white.opacity(0.09)))
+                }
+                let baud = HStack(alignment: .top, spacing: 22) {
+                    term(["", "", "", "Ã¿þ~x Û±¬ Ê%§ ¤æ", "ð÷ Ó«² ¶ýÌ ^ ¥Â ®", "ÿ¸ Ñ¼ ~Ã þ"], width: 330, height: 170)
+                        .overlay(alignment: .topTrailing) {
+                            BaudHintContent(reason: .garbled, rate: 115_200, onTry: {}, onDismiss: {}).fixedSize()
+                        }
+                    term(["", "", "", "▌"], width: 330, height: 170)
+                        .overlay(alignment: .topTrailing) {
+                            BaudHintContent(reason: .noResponse, rate: 115_200, onTry: {}, onDismiss: {}).fixedSize()
+                        }
+                }
+                .padding(28)
+                // The D3 split look, 3 × 3, a drop zone lit on one pane's right half.
+                let names = ["core-1", "core-2", "edge-1", "access-1", "access-2", "access-3", "lab-1", "lab-2", "console"]
+                @MainActor func card(_ i: Int, zone: Bool) -> some View {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 5) {
+                            Circle().fill(i == 8 ? Theme.warn : Theme.accent).frame(width: 7, height: 7)
+                            Text(names[i]).font(.system(size: 11)).foregroundStyle(i == 4 ? Theme.tabText : Theme.dimText)
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(i == 4 ? Theme.accent.opacity(0.2) : Color.white.opacity(0.06)))
+                        Text("\(names[i])# ").font(.system(size: 11, design: .monospaced)).foregroundStyle(Color(white: 0.86))
+                            .padding(.leading, 6)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(5)
+                    .frame(width: 196, height: 92, alignment: .topLeading)
+                    .background(RoundedRectangle(cornerRadius: PaneVeil.D3.cornerRadius, style: .continuous).fill(Theme.termBackground))
+                    .overlay(RoundedRectangle(cornerRadius: PaneVeil.D3.cornerRadius, style: .continuous)
+                        .stroke(i == 4 ? Theme.accent.opacity(0.6) : Color.white.opacity(0.09)))
+                    .overlay(alignment: .trailing) {
+                        if zone {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.accent.opacity(0.28))
+                                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Theme.accent.opacity(0.8)))
+                                .frame(width: 98)
+                                .overlay { Image(systemName: "cursorarrow").font(.system(size: 14)).foregroundStyle(.white).shadow(radius: 1) }
+                        }
+                    }
+                }
+                let panes = VStack(spacing: PaneVeil.D3.gap) {
+                    ForEach(0..<3, id: \.self) { row in
+                        HStack(spacing: PaneVeil.D3.gap) {
+                            ForEach(0..<3, id: \.self) { col in card(row * 3 + col, zone: row * 3 + col == 5) }
+                        }
+                    }
+                }
+                .padding(PaneVeil.D3.margin)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 6 / 255, green: 7 / 255, blue: 8 / 255)))
+                .padding(28)
+                // Nested groups: the real sidebar over the scratch hosts.json.
+                let groups = SidebarView(store: AppModel.shared.store).frame(width: 270, height: 330)
+                    .clipShape(RoundedRectangle(cornerRadius: 10)).padding(24)
+                let fileServer = FileServerPopover()
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Theme.controlFill))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.chromeLine))
+                    .padding(28)
+                write(baud, "baud.png")
+                write(panes, "panes.png")
+                write(groups, "groups.png")
+                write(fileServer, "file-server.png")
             }
         }
         // SHEEPTERM_DEBUG_FAMILY_PNG=<path>: the File Server's no-family rows.
@@ -915,6 +990,7 @@ struct SheepTermCommands: Commands {
     @ObservedObject private var aiPanel = AIPanelChrome.shared
     @AppStorage(GroupTree.groupColorsKey) private var groupColors = GroupTree.groupColorsDefault
     @AppStorage(SidebarLaunch.key) private var sidebarAtLaunch = false
+    @AppStorage(SidebarKeepOpen.key) private var sidebarStaysOpen = false
 
     /// Highlighting only means something for a remote session. On a local
     /// shell the Device Family menu still opened and still moved its
@@ -955,6 +1031,12 @@ struct SheepTermCommands: Commands {
         // and an update check is not an every-day keystroke.
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { AppUpdater.shared.checkNow() }
+        }
+
+        // Help ▸ What's New… — any time, no shortcut (the window also opens
+        // on its own once per release, WhatsNewPlan).
+        CommandGroup(after: .help) {
+            Button("What's New…") { model.showWhatsNew = true }
         }
 
         CommandGroup(after: .newItem) {
@@ -1007,7 +1089,7 @@ struct SheepTermCommands: Commands {
             Button("Copy All Output") { model.copyAllOutput() }
                 .disabled(!model.canCopyAllOutput)
             Toggle("Safe Multi-line Paste", isOn: $model.safePasteEnabled)
-            Toggle("Confirm Dangerous Commands", isOn: $model.confirmDangerousCommands)
+            Toggle("Danger Command Guard", isOn: $model.confirmDangerousCommands)
             // A break condition on a serial console (a boot loader's "press
             // Break now"). Greyed out everywhere else: SSH and a local shell
             // have no line to put one on.
@@ -1049,6 +1131,7 @@ struct SheepTermCommands: Commands {
 
             Menu("Sidebar", systemImage: "sidebar.left") {
                 Toggle("Show Sidebar at Launch", isOn: $sidebarAtLaunch)
+                Toggle("Keep Sidebar Open", isOn: $sidebarStaysOpen)
                 // The sidebar's level bars (design G), on unless set.
                 Toggle("Group Colors", isOn: $groupColors)
                 Divider()

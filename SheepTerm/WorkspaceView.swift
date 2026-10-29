@@ -376,26 +376,28 @@ final class PaneTreeView: NSView {
     }
 
     /// Where a drop of `payload` at `point` (our coordinates) would go; nil
-    /// when it would be refused, so no zone is drawn for it.
+    /// when it would be refused, so no zone is drawn for it. Anywhere in a
+    /// pane counts while ANY side of it takes the drop: the nearest side
+    /// that does (`PaneLayout.dropTarget(at:frames:allowed:)`, 6.0 (13)) —
+    /// a refused nearest edge used to blank that half of the pane.
     private func zone(for payload: PaneDragPayload, at point: CGPoint) -> (pane: UUID, direction: PaneDirection)? {
         guard let state else { return nil }
         let frames = dropFrames(for: payload)
         zoneFrames = frames
-        guard let target = PaneLayout.dropTarget(at: point, frames: frames) else { return nil }
+        let book = AppModel.shared.book
+        let source: WorkspaceBook.DropSource
         switch payload {
         case .pane(let session):
-            // Over itself = nowhere; from another tab only while there is room.
-            guard session != target.pane,
-                  state.layout.contains(session) || state.paneCount < PaneLayout.maxPanes else { return nil }
-            // Never one off the grid (PaneLayout.isGrid) or one that would
-            // squeeze a Ping pane (PaneLayout.keepsWhole): the trial move says.
-            var trial = AppModel.shared.book
-            guard trial.move(session: session, beside: target.pane, target.direction) else { return nil }
+            // From another tab only while there is room (move says so too).
+            guard state.layout.contains(session) || state.paneCount < PaneLayout.maxPanes else { return nil }
+            source = .pane(session)
         case .host(let id):
-            guard state.paneCount < PaneLayout.maxPanes, AppModel.shared.savedHost(id: id) != nil,
-                  AppModel.shared.book.canSplit(beside: target.pane, target.direction) else { return nil }
+            guard state.paneCount < PaneLayout.maxPanes, AppModel.shared.savedHost(id: id) != nil else { return nil }
+            source = .newSession
         }
-        return target
+        // Over itself = nowhere; never one off the grid (PaneLayout.isGrid)
+        // or one that would squeeze a Ping pane (keepsWhole): the trial says.
+        return PaneLayout.dropTarget(at: point, frames: frames) { book.accepts(source, beside: $0, $1) }
     }
 
     /// The frames a drop is aimed at. A pane moved within its own tab is
@@ -487,11 +489,11 @@ final class PaneTreeView: NSView {
            let source = AppModel.shared.book.workspace(id: drag.workspace),
            source.paneCount + state.paneCount <= PaneLayout.maxPanes {
             let point = convert(window.convertPoint(fromScreen: drag.screenPoint), from: nil)
-            target = PaneLayout.dropTarget(at: point, frames: paneFrames())
-            // A merge that would squeeze a Ping pane shows no zone.
-            if let t = target {
-                var trial = AppModel.shared.book
-                if !trial.merge(workspace: drag.workspace, beside: t.pane, t.direction) { target = nil }
+            // The nearest side the merge takes (off the grid / squeezing a
+            // Ping pane = not taken), the same rule as a header drop.
+            let book = AppModel.shared.book
+            target = PaneLayout.dropTarget(at: point, frames: paneFrames()) {
+                book.accepts(.workspace(drag.workspace), beside: $0, $1)
             }
         }
         chipZoneShown = true

@@ -198,6 +198,42 @@ nonisolated enum FileServerPlan {
     /// devices' copy commands cannot carry one.
     static let tftpBindWindow: TimeInterval = 2
 
+    /// The same wait for the SFTP/SCP server's port 22 (6.0 (13): no 2222
+    /// fallback any more, for the same reason).
+    static let sshBindWindow: TimeInterval = 2
+
+    /// And for FTP's port 21 (6.0 (13): the 2121 fallback is gone too).
+    static let ftpBindWindow: TimeInterval = 2
+
+    /// Who to name in "Port 22 is in use by …". `process` = the listening
+    /// process libproc could see (this user's only); `remoteLoginOn` =
+    /// macOS Remote Login is on (asked of launchd only for port 22). A
+    /// visible sshd / launchd while Remote Login is on IS Remote Login; any
+    /// other visible process is named as it is; nothing visible but Remote
+    /// Login on = Remote Login (its socket is root's, libproc cannot see
+    /// it); else nil ("Port 22 is in use").
+    static func sshPortHolder(process: String?, remoteLoginOn: Bool) -> String? {
+        let remoteLogin = String(localized: "Remote Login")
+        if let process, !process.isEmpty {
+            if remoteLoginOn, remoteLoginProcesses.contains(process) { return remoteLogin }
+            return process
+        }
+        return remoteLoginOn ? remoteLogin : nil
+    }
+
+    /// Visible holders of port 22 that may be Remote Login's own.
+    static let remoteLoginProcesses: Set<String> = ["sshd", "sshd-session", "launchd"]
+
+    /// Whether asking launchd about Remote Login (a `launchctl` run, up to
+    /// 2 s) can change the answer of `sshPortHolder`: port 22 only, and only
+    /// when the visible holder is nothing or one of `remoteLoginProcesses` —
+    /// any other visible process is named as it is either way.
+    static func needsRemoteLoginCheck(port: UInt16, process: String?) -> Bool {
+        guard port == 22 else { return false }
+        guard let process, !process.isEmpty else { return true }
+        return remoteLoginProcesses.contains(process)
+    }
+
     /// The start error when the port stays taken; `owner` = the holding
     /// process's name when it can be seen. (Port as text: an Int would be
     /// grouped by the locale, "45,123".)

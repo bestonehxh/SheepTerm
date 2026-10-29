@@ -576,7 +576,7 @@ final class SessionTerminalHost {
             NSSound.beep()
             return false
         }
-        // Confirm Dangerous Commands looks at every paste, Safe Paste on or
+        // Danger Command Guard looks at every paste, Safe Paste on or
         // off — but with Safe Paste off it only ever ADDS a question for a
         // dangerous line; everything else pastes exactly as before.
         let guardOn = AppModel.shared.confirmDangerousCommands && !guardConfirmedSend
@@ -730,7 +730,7 @@ final class SessionTerminalHost {
         return CommandHistoryCapture.logicalLine(rows: rows, cursorRow: buffer.y)
     }
 
-    // MARK: - Confirm Dangerous Commands (5.0 (22))
+    // MARK: - Danger Command Guard (5.0 (22))
 
     /// The session's device family (`Host.highlightVendor`), set by the
     /// controller: Linux/Gaia-only rules (`shutdown`, `halt`) need it.
@@ -1053,7 +1053,7 @@ final class SessionTerminalHost {
         previewTextView.textColor = .labelColor
         previewTextView.backgroundColor = .textBackgroundColor
         if !dangerous.isEmpty, let storage = previewTextView.textStorage {
-            // The lines Confirm Dangerous Commands found, in the card's red —
+            // The lines Danger Command Guard found, in the card's red —
             // AFTER `textColor`, which recolours the whole text (the red never
             // showed until 6.0 (12)).
             let ranges = CommandGuard.lineRanges(plan.lines)
@@ -1339,7 +1339,7 @@ final class SessionTerminalHost {
         hudStop = onStop
         hudIsPaste = false
         if pasteHUD == nil {
-            let hud = NSVisualEffectView()
+            let hud = ArrowCursorEffectView()       // over the terminal's I-beam rect: the arrow on Stop
             hud.material = .hudWindow
             hud.state = .active
             hud.blendingMode = .withinWindow
@@ -1385,13 +1385,14 @@ final class SessionTerminalHost {
 
     private var baudHint: BaudHintView?
 
-    /// "Garbled? [Try rate] ×" top right, where the status HUD sits (one or
+    /// "Garbled? [Try rate] ×" (or "No response?") top right, where the status HUD sits (one or
     /// the other: the HUD takes the corner). Replaces one already up.
-    func showBaudHint(rate: Int, onTry: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+    func showBaudHint(_ reason: ConsoleBaudGuess.HintReason = .garbled, rate: Int,
+                      onTry: @escaping () -> Void, onDismiss: @escaping () -> Void) {
         hideBaudHint()
         // The corner is the status HUD's while it is up (`ConsoleBaudGuess.lineBusy`).
         guard !hasStatusHUD else { return }
-        let hint = BaudHintView(rootView: BaudHintContent(rate: rate, onTry: onTry, onDismiss: onDismiss))
+        let hint = BaudHintView(rootView: BaudHintContent(reason: reason, rate: rate, onTry: onTry, onDismiss: onDismiss))
         hint.translatesAutoresizingMaskIntoConstraints = false
         terminalView.addSubview(hint)
         NSLayoutConstraint.activate([
@@ -1435,5 +1436,12 @@ final class SessionTerminalHost {
     private static func byteCountText(_ count: Int) -> String {
         if count < 1_024 { return String(localized: "\(count) bytes") }
         return String(format: "%.1f KB", Double(count) / 1_024)
+    }
+}
+
+/// A HUD backdrop over the terminal shows the arrow, not the terminal's I-beam (its Stop button is a button).
+final class ArrowCursorEffectView: NSVisualEffectView {
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
     }
 }

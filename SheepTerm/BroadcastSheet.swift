@@ -140,7 +140,7 @@ struct BroadcastSheet: View {
         String(localized: "Sent to \(count) tabs")
     }
 
-    /// Confirm Dangerous Commands, once for every ticked tab instead of a
+    /// Danger Command Guard, once for every ticked tab instead of a
     /// card in each: nil = the user cancelled; true = asked and confirmed
     /// (the tabs do not ask again); false = nothing to ask.
     /// Dangerous for ANY target's family counts (`shutdown` is only on the

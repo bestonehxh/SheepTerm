@@ -283,7 +283,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(autoPage, forKey: "autoPage") }
     }
 
-    /// Edit → Confirm Dangerous Commands (5.0 (22), `CommandGuard`): a
+    /// Edit → Danger Command Guard (5.0 (22), `CommandGuard`): a
     /// reload / erase / factory reset in an SSH or serial tab waits for the
     /// user's Send. ON by default — it never sends anything, it only holds.
     @Published var confirmDangerousCommands = true {
@@ -2675,9 +2675,13 @@ final class AppModel: ObservableObject {
     }
 
     /// Sidebar auto-collapses once a session is opened from it,
-    /// giving the terminal the full window (expand again with ⌘0).
+    /// giving the terminal the full window (expand again with ⌘0) — unless
+    /// Keep Sidebar Open is on (`SidebarKeepOpen`). Every opening path comes
+    /// through here; the terminal takes the keyboard either way.
     func collapseSidebar() {
-        withAnimation(Self.sidebarAnimation) { sidebarShown = false }
+        if SidebarKeepOpen.closesOnOpen(stored: UserDefaults.standard.object(forKey: SidebarKeepOpen.key)) {
+            withAnimation(Self.sidebarAnimation) { sidebarShown = false }
+        }
         DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
     }
 

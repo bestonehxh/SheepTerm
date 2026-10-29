@@ -1,25 +1,34 @@
+import Darwin
 import Foundation
-import Network
 
 /// TFTP server (RFC 1350 + blksize/tsize/timeout options, RFC 2347–2349) for
 /// File ▸ File Server: a switch runs `copy tftp://<mac>/file …` and pulls the
 /// one file the user picked, or (with writes allowed) pushes a backup into
-/// the chosen folder. Ported from SheepDrop's server, which was hardened
-/// against real devices and an audit (2026-10-02); what changed here is
-/// WHAT a name resolves to — `FileServerPlan.readTarget` / `writeTarget`
-/// instead of a served root folder — and that a write never replaces a file.
+/// the chosen folder. What a name resolves to is `FileServerPlan.readTarget` /
+/// `writeTarget`; a write never replaces a file.
 ///
-/// - Network.framework UDP: the listener hands us one NWConnection per remote
-///   endpoint; each accepted transfer moves to its own ephemeral port (RFC
-///   1350's server TID), so ACKs cannot be forged blind on port 69.
-/// - Port 69 only (6.0 (12)): a fallback port broke the devices' copy
-///   commands (most forms cannot carry one). A restart waits for the
-///   listener the last stop left closing — any server object's, they are
-///   tracked app-wide in `Retired` — and retries 69 for
-///   `FileServerPlan.tftpBindWindow`; still busy = the start fails with
-///   "Port 69 is in use by <process>" (`PortOwner.udp`).
-/// - Everything runs on one serial queue; the app hears about transfers only
-///   through the @Sendable callbacks.
+/// 6.0 (13) restructure — the protocol is `TFTPTransfer` (TFTPProtocol.swift,
+/// sans-I/O, harness-tested); this file is only its I/O:
+/// - BSD UDP sockets (`UDPSocket`) on ONE serial queue, read through dispatch
+///   sources. The old Network.framework server lost replies: a refusal's ERROR
+///   was queued on the listener's per-peer flow and that flow was cancelled on
+///   the next line, which drops the queued datagram (42 % of "file not found"
+///   and 8 % of "file too large" answers never left the Mac in a 300-request
+///   loop); sendto(2) here has handed the datagram to the kernel when it returns.
+/// - Each accepted transfer gets its own socket on a fresh ephemeral port (RFC
+///   1350's server TID), so ACKs cannot be forged blind on port 69; a datagram
+///   to it from another port of the device gets ERROR 5 and the transfer goes
+///   on. Refusals are answered from port 69.
+/// - A device repeating its request while its transfer is open (same address
+///   and port) is answered by THAT transfer — one reply per request — instead
+///   of starting a second transfer from another port.
+/// - Port 69 only (6.0 (12)): a fallback port broke the devices' copy commands.
+///   close(2) frees the port at once; a restart waits only for listener sockets
+///   a stop has not closed yet (`Closing`, app-wide — the model makes a new
+///   server per start) and retries 69 for `FileServerPlan.tftpBindWindow`;
+///   still busy = "Port 69 is in use by <process>" (`PortOwner.udp`).
+/// - The app hears about transfers only through the @Sendable callbacks, which
+///   run on the server's queue.
 nonisolated final class TFTPServer: @unchecked Sendable {
     struct Failure: Error, CustomStringConvertible {
         let description: String
@@ -35,13 +44,25 @@ nonisolated final class TFTPServer: @unchecked Sendable {
     private let readURL: @Sendable (String) -> URL?
     private let writeURL: @Sendable (String) -> URL?
     fileprivate let onProgress: @Sendable (ServerTransfer) -> Void
-    /// The listener died after it was ready (interface gone, port taken
-    /// away): the app must show the server as off.
-    var onListenerFailed: (@Sendable (String) -> Void)?
+
+    private let callbackLock = NSLock()
+    nonisolated(unsafe) private var listenerFailed: (@Sendable (String) -> Void)?
+    /// The listener socket failed after it was ready: the app must show the
+    /// server as off. Set from any thread.
+    var onListenerFailed: (@Sendable (String) -> Void)? {
+        get { callbackLock.withLock { listenerFailed } }
+        set { callbackLock.withLock { listenerFailed = newValue } }
+    }
 
     // Queue-confined.
-    private var listener: NWListener?
+    /// Port 69 over IPv4 and over IPv6 (one socket each, see `UDPSocket.listeners`).
+    private var listeners: [Listener] = []
+    /// One bound socket. `token` keys it in `Closing` — never the fd number,
+    /// which the kernel hands out again the moment it is closed.
+    private typealias Listener = (fd: Int32, family: Int32, source: DispatchSourceRead, token: UUID)
     private var sessions: [ObjectIdentifier: Session] = [:]
+    private var stopped = false
+    private var buffer = [UInt8](repeating: 0, count: 65536)
 
     /// `readURL` / `writeURL` map the name a device asked for to a file, or
     /// nil to refuse; `writeURL` is consulted only for a write request, so
@@ -54,171 +75,101 @@ nonisolated final class TFTPServer: @unchecked Sendable {
         self.onProgress = onProgress
     }
 
-    /// Binds `preferredPort` and nothing else (69 in the app; a free high
-    /// port in the tests) and returns it.
+    /// Binds `preferredPort` and nothing else (69 in the app; 0 = any free
+    /// port, for the tests) and returns the port bound.
     func start(preferredPort: UInt16 = 69) async throws -> UInt16 {
         let deadline = Date().addingTimeInterval(FileServerPlan.tftpBindWindow)
-        // A stop → start: the listener the stop cancelled (this object's or
-        // an earlier server's — the app makes a new one per start) may still
-        // hold the port. Wait for it first, then retry the port itself.
-        while Retired.busy, Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(50))
+        // A stop → start: a listener the stop cancelled (this object's or an
+        // earlier server's) is closed on its queue's next turn. Wait for it,
+        // then retry the port itself (another program may be letting go).
+        while Closing.busy, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
         }
-        var lastError: Error?
+        var lastError: UDPSocket.Failure?
         repeat {
-            do {
-                return try await listen(on: preferredPort)
-            } catch {
-                lastError = error
-                guard Self.isAddressInUse(error) else { throw error }
+            switch UDPSocket.listeners(port: preferredPort) {
+            case .success(let bound):
+                return try await install(bound)
+            case .failure(let failure):
+                lastError = failure
+                guard failure.code == EADDRINUSE else {
+                    throw Failure(description: "cannot listen on port \(preferredPort): \(failure)")
+                }
                 try? await Task.sleep(for: .milliseconds(150))
             }
         } while Date() < deadline
-        if let lastError, Self.isAddressInUse(lastError) {
+        if lastError?.code == EADDRINUSE {
             throw PortInUse(description: FileServerPlan.portBusyMessage(port: preferredPort,
                                                                      owner: PortOwner.udp(port: preferredPort)))
         }
-        throw lastError ?? Failure(description: "cannot listen on port \(preferredPort)")
+        throw Failure(description: "cannot listen on port \(preferredPort)")
     }
 
-    private static func isAddressInUse(_ error: Error) -> Bool {
-        if case .posix(let code) = error as? NWError { return code == .EADDRINUSE }
-        return false
-    }
-
-    /// What a listener's state means to `listen` before it has answered.
-    enum ListenerOutcome: Equatable {
-        case ready
-        /// Never bound: cancel it and hand `start` the error (an
-        /// address-in-use is retried there until `tftpBindWindow`, then
-        /// `PortInUse`).
-        case failed(NWError)
-        case cancelled
-        case keepWaiting
-    }
-
-    /// `.waiting` with EADDRINUSE is the port taken, not a passing network
-    /// change: left alone (`default: break`) the listener waited there and
-    /// `start` never returned (6.0 (12) review) — it is a failure like
-    /// `.failed`. Any other `.waiting` (no network yet) keeps waiting.
-    static func listenerOutcome(_ state: NWListener.State) -> ListenerOutcome {
-        switch state {
-        case .ready: return .ready
-        case .failed(let error): return .failed(error)
-        case .waiting(let error) where isAddressInUse(error): return .failed(error)
-        case .cancelled: return .cancelled
-        default: return .keepWaiting
-        }
-    }
-
-    /// Listeners a stop cancelled that have not reported `.cancelled` yet,
-    /// across every TFTPServer object.
-    enum Retired {
-        private static let lock = NSLock()
-        /// Held strongly: a listener nobody holds never reports `.cancelled`
-        /// (the server object, and with it the listener, is dropped on stop).
-        nonisolated(unsafe) private static var closing: [ObjectIdentifier: (listener: NWListener, since: Date)] = [:]
-
-        static func add(_ listener: NWListener) {
-            // Only one that may still hold the port: a failed or cancelled
-            // listener reports nothing more and would hold up every start.
-            switch listener.state {
-            case .cancelled, .failed: return
-            default: break
+    private func install(_ bound: [(fd: Int32, family: Int32, port: UInt16)]) async throws -> UInt16 {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
+            queue.async { [self] in
+                guard !stopped else {
+                    for b in bound { close(b.fd) }
+                    continuation.resume(throwing: Failure(description: "server stopped before it began listening"))
+                    return
+                }
+                for old in listeners { closeListener(old) }
+                listeners = bound.map { b in
+                    let source = DispatchSource.makeReadSource(fileDescriptor: b.fd, queue: queue)
+                    let fd = b.fd
+                    let token = UUID()
+                    source.setEventHandler { [weak self] in self?.drainListener(fd) }
+                    source.setCancelHandler { close(fd); Closing.remove(token) }
+                    source.activate()
+                    return (b.fd, b.family, source, token)
+                }
+                continuation.resume(returning: bound[0].port)
             }
-            lock.withLock { closing[ObjectIdentifier(listener)] = (listener, Date()) }
         }
-        /// By identifier: the listener's own state handler calls this, and
-        /// capturing the listener there would keep it alive.
-        static func remove(_ id: ObjectIdentifier) {
-            _ = lock.withLock { closing.removeValue(forKey: id) }
-        }
-        /// A listener that never reports back is forgotten after 5 s.
+    }
+
+    /// Listener sockets a stop cancelled whose dispatch source has not
+    /// closed them yet (GCD runs the cancel handler, which closes the fd, on
+    /// the queue's next turn). App-wide: the model makes a new server per start.
+    /// Keyed per LISTENER (a token made with it), not by fd: the cancel
+    /// handler closes the fd before it removes its entry, and in that gap
+    /// the kernel may give the same number to a new listener whose own
+    /// close is then pending — an fd key would let the old handler erase it.
+    enum Closing {
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var open: [UUID: Date] = [:]
+        static func add(_ token: UUID) { lock.withLock { open[token] = Date() } }
+        static func remove(_ token: UUID) { _ = lock.withLock { open.removeValue(forKey: token) } }
+        static func isPending(_ token: UUID) -> Bool { lock.withLock { open[token] != nil } }
+        /// One that never closes (cannot happen with GCD, but never wait on
+        /// it forever) is forgotten after 5 s.
         static var busy: Bool {
             lock.withLock {
-                closing = closing.filter { $0.value.since.timeIntervalSinceNow > -5 }
-                return !closing.isEmpty
+                open = open.filter { $0.value.timeIntervalSinceNow > -5 }
+                return !open.isEmpty
             }
         }
+    }
+
+    private func closeListener(_ l: Listener) {
+        Closing.add(l.token)
+        l.source.cancel()
     }
 
     func stop() {
         queue.async { [self] in
-            if let listener { Retired.add(listener); listener.cancel() }
-            listener = nil
-            for session in sessions.values { session.cancel() }
+            stopped = true
+            for l in listeners { closeListener(l) }
+            listeners = []
+            for session in sessions.values { session.stop() }
             sessions.removeAll()
         }
     }
 
-    private func listen(on port: UInt16) async throws -> UInt16 {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async { [self] in
-                guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-                    continuation.resume(throwing: Failure(description: "bad port \(port)"))
-                    return
-                }
-                let candidate: NWListener
-                do {
-                    candidate = try NWListener(using: .udp, on: nwPort)
-                } catch {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                // Resume exactly once across ready/failed/cancelled.
-                let resumed = Box(false)
-                let candidateID = ObjectIdentifier(candidate)
-                candidate.stateUpdateHandler = { [weak self] state in
-                    if case .cancelled = state { Retired.remove(candidateID) }
-                    guard let self else { return }
-                    self.queue.async {
-                        switch Self.listenerOutcome(state) {
-                        case .ready:
-                            if !resumed.value {
-                                resumed.value = true
-                                continuation.resume(returning: port)
-                            }
-                        case .failed(let error):
-                            if !resumed.value {
-                                resumed.value = true
-                                // Never bound: not a listener to wait for
-                                // (the retry must not "retire" it).
-                                if self.listener === candidate { self.listener = nil }
-                                candidate.cancel()
-                                continuation.resume(throwing: error)
-                            } else if self.listener === candidate {
-                                self.listener = nil
-                                self.onListenerFailed?(String(describing: error))
-                            }
-                        case .cancelled:
-                            if !resumed.value {
-                                resumed.value = true
-                                continuation.resume(throwing: Failure(description: "server stopped before it began listening"))
-                            }
-                        case .keepWaiting:
-                            break
-                        }
-                    }
-                }
-                candidate.newConnectionHandler = { [weak self] connection in
-                    guard let self else { connection.cancel(); return }
-                    self.queue.async { self.accept(connection) }
-                }
-                if let old = listener { Retired.add(old); old.cancel() }
-                listener = candidate
-                candidate.start(queue: queue)
-            }
-        }
-    }
-
-    private final class Box<T>: @unchecked Sendable {
-        var value: T
-        init(_ value: T) { self.value = value }
-    }
-
     /// Transfers at once, overall and per device address. TFTP has no login,
     /// so these caps keep one host (or spoofed RRQs) from opening unbounded
-    /// sessions and file handles.
+    /// sessions and file handles. A transfer that has finished and only
+    /// dallies for a lost final ACK does not count.
     static let maximumSessions = 32
     static let maximumPerPeer = 4
     /// Largest file a device may push. Configs and tech-support bundles are
@@ -234,24 +185,45 @@ nonisolated final class TFTPServer: @unchecked Sendable {
         }
     }
 
-    private func accept(_ connection: NWConnection) {
-        let session = Session(server: self, connection: connection)
-        let host = session.peerHost
-        guard sessions.count < Self.maximumSessions,
-              sessions.values.filter({ $0.peerHost == host }).count < Self.maximumPerPeer else {
-            // Say so instead of dropping it: a device retrying (or a second
-            // copy) gets a reason, not a timeout (review 5.0 (58)).
-            var busy = Data([0, 5, 0, 0])
-            busy.append(contentsOf: Array("server busy, try again".utf8)); busy.append(0)
-            connection.start(queue: queue)
-            connection.send(content: busy, completion: .contentProcessed { _ in connection.cancel() })
-            // A flow that never gets ready never completes the send: cancel
-            // it anyway, so a flood cannot pile up connections (review 6.0).
-            queue.asyncAfter(deadline: .now() + 1) { connection.cancel() }
+    // MARK: Listener (port 69)
+
+    private func drainListener(_ fd: Int32) {
+        // Bounded per wake-up so one flood cannot starve the transfers.
+        for _ in 0..<64 {
+            switch UDPSocket.receive(fd, into: &buffer) {
+            case .datagram(let bytes, let from):
+                handleRequest(bytes, from: from, listenerFD: fd)
+            case .empty:
+                return
+            case .failed(let code):
+                guard listeners.contains(where: { $0.fd == fd }) else { return }
+                for l in listeners { closeListener(l) }
+                listeners = []
+                onListenerFailed?(String(cString: strerror(code)))
+                return
+            }
+        }
+    }
+
+    private func handleRequest(_ bytes: Data, from peer: UDPAddress, listenerFD: Int32) {
+        // Only a request opens anything; a stray ACK/DATA on port 69 gets no
+        // answer (this server must not be a reflector).
+        guard let op = TFTPPacket.opcode(of: bytes), op == TFTPOpcode.rrq.rawValue || op == TFTPOpcode.wrq.rawValue else { return }
+        let open = sessions.values.filter { !$0.isFinished }
+        if let same = open.first(where: { $0.peer.sameHost(peer) && $0.peer.port == peer.port }) {
+            same.repeatedRequest()
             return
         }
+        guard open.count < Self.maximumSessions,
+              open.filter({ $0.peer.sameHost(peer) }).count < Self.maximumPerPeer else {
+            // Say so instead of dropping it: a device retrying (or a second
+            // copy) gets a reason, not a timeout (review 5.0 (58)).
+            UDPSocket.send(listenerFD, TFTPPacket.error(code: TFTPErrorCode.notDefined, message: "server busy, try again").encoded, to: peer)
+            return
+        }
+        let session = Session(server: self, peer: peer, family: peer.family, listenerFD: listenerFD)
         sessions[ObjectIdentifier(session)] = session
-        session.begin()
+        session.begin(bytes)
     }
 
     fileprivate func sessionEnded(_ session: Session) {
@@ -269,183 +241,76 @@ nonisolated final class TFTPServer: @unchecked Sendable {
 
     // MARK: - One transfer
 
-    // Queue-confined like its owner — every callback hops onto serverQueue.
+    // Queue-confined like its owner: every source and timer runs on serverQueue.
     fileprivate final class Session: @unchecked Sendable {
         private unowned let server: TFTPServer
-        /// The listener-side flow the request arrived on (server port).
-        private let connection: NWConnection
-        /// The transfer's own socket on a fresh ephemeral port. Nil until the
-        /// request is accepted.
-        private var transfer: NWConnection?
-        private var io: NWConnection { transfer ?? connection }
-        private let peer: String
+        let peer: UDPAddress
+        private let family: Int32
+        /// Port 69's socket: refusals are answered from there.
+        private let listenerFD: Int32
+        /// The transfer's own socket (its TID), once the request is accepted.
+        private var fd: Int32 = -1
+        private var readSource: DispatchSourceRead?
+        private var timer: DispatchSourceTimer?
+        private var machine: TFTPTransfer?
 
         private var isWrite = false
         private var filename = ""
-        private var blockSize = 512
         // Reads stream from disk block by block — a 700 MB image must not be
         // resident in RAM for the whole transfer.
         private var readHandle: FileHandle?
-        private var fileSize: Int = 0
+        private var fileSize: Int64 = 0
         private var writeHandle: FileHandle?
         private var writeTemp: URL?
         private var writeFinal: URL?
-        private var writtenBytes: Int = 0
-        /// This upload's ceiling: 16 GB, or less when the disk is short.
-        private var writeLimit = TFTPServer.maximumWriteBytes
-        private var expectedTotal: Int?
-        private var currentBlock: UInt16 = 0   // last block sent (read) / acked (write)
-        private var lastPacket = Data()
-        private var retries = 0
-        /// Set once the peer acknowledges a DATA block (or sends data). Until
-        /// then the "peer" may be a spoofed address: answer once, retransmit
-        /// at most once, so this server is a poor reflector.
-        private var peerProven = false
-        private var generation = 0
-        private var finished = false
-        private var sentFinal = false
         private let token = UUID().uuidString
+        private var torn = false
         /// The bar this session reported last, and whether it completed.
         private var lastActive: ServerTransfer?
         private var transferDone = false
-        private var lastReported = 0
+        private var lastReported: Int64 = 0
+        private var shown = false
+        private var buffer = [UInt8](repeating: 0, count: 65536)
 
-        var isWriting: Bool { isWrite && !finished }
+        var isFinished: Bool { torn || (machine?.isFinished ?? false) }
+        var isWriting: Bool { isWrite && !isFinished }
+        private var peerHost: String { peer.host }
 
-        func abort(_ why: String) {
-            guard !finished else { return }
-            sendError(0, why)
-        }
-
-        /// The device's address without the (per-transfer) UDP port.
-        var peerHost: String {
-            if case let .hostPort(host, _) = connection.endpoint { return "\(host)" }
-            return peer
-        }
-
-        init(server: TFTPServer, connection: NWConnection) {
+        init(server: TFTPServer, peer: UDPAddress, family: Int32, listenerFD: Int32) {
             self.server = server
-            self.connection = connection
-            if case let .hostPort(host, port) = connection.endpoint {
-                self.peer = "\(host):\(port)"
-            } else {
-                self.peer = "?"
-            }
-        }
-
-        func begin() {
-            connection.stateUpdateHandler = { [weak self] state in
-                if case .failed = state { self?.finish(nil) }
-            }
-            connection.start(queue: server.serverQueue)
-            receiveNext(first: true)
-        }
-
-        func cancel() {
-            finished = true
-            if var t = lastActive, !transferDone { t.state = .failed; t.detail = "stopped"; server.onProgress(t) }
-            discardTemp()
-            connection.cancel()
-            transfer?.cancel()
-        }
-
-        /// Moves the session onto its own ephemeral UDP port, connected to the
-        /// device; the listener-side flow is released.
-        private func openTransferPort() {
-            // An explicit wildcard local endpoint is required: with none,
-            // Network.framework tries the listener's own port and the flow
-            // sits in .waiting(EADDRINUSE).
-            let params = NWParameters.udp
-            var anyHost: NWEndpoint.Host = .ipv4(.any)
-            if case let .hostPort(host, _) = connection.endpoint, case .ipv6 = host {
-                anyHost = .ipv6(.any)
-            }
-            params.requiredLocalEndpoint = .hostPort(host: anyHost, port: .any)
-            let next = NWConnection(to: connection.endpoint, using: params)
-            next.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .failed, .waiting: self?.finish("could not open a transfer port", failed: true)
-                default: break
-                }
-            }
-            next.start(queue: server.serverQueue)
-            transfer = next
-            connection.stateUpdateHandler = nil
-            connection.cancel()
-        }
-
-        private func receiveNext(first: Bool = false) {
-            io.receiveMessage { [weak self] data, _, _, error in
-                guard let self, !self.finished else { return }
-                if error != nil { self.finish(nil); return }
-                guard let data, data.count >= 2 else {
-                    if first { self.finish(nil) } else { self.receiveNext() }
-                    return
-                }
-                self.handle(packet: data, first: first)
-            }
-        }
-
-        private func handle(packet: Data, first: Bool) {
-            let opcode = UInt16(packet[packet.startIndex]) << 8 | UInt16(packet[packet.startIndex + 1])
-            // A new peer's first datagram must be a request.
-            if first && opcode != 1 && opcode != 2 { finish(nil); return }
-            switch opcode {
-            case 1, 2: // RRQ / WRQ
-                guard first else { receiveNext(); return }
-                startRequest(packet: packet, write: opcode == 2)
-            case 3: handleData(packet)
-            case 4: handleAck(packet)
-            case 5:
-                let message = String(data: packet.dropFirst(4).prefix(while: { $0 != 0 }), encoding: .utf8) ?? "error"
-                finish("device error: \(message)", failed: true)
-            default:
-                receiveNext()
-            }
+            self.peer = peer
+            self.family = family
+            self.listenerFD = listenerFD
         }
 
         // MARK: Request
 
-        private func startRequest(packet: Data, write: Bool) {
-            var fields: [String] = []
-            var current = Data()
-            for byte in packet.dropFirst(2) {
-                if byte == 0 {
-                    fields.append(String(decoding: current, as: UTF8.self))
-                    current.removeAll()
-                } else {
-                    current.append(byte)
-                }
+        func begin(_ bytes: Data) {
+            guard case .request(let request)? = TFTPPacket.parse(bytes) else {
+                refuse(TFTPErrorCode.illegalOperation, "malformed request")
+                return
             }
-            guard fields.count >= 2 else { sendError(4, "malformed request"); return }
-            filename = String(fields[0].prefix(255))
-            isWrite = write
-            let mode = fields[1].lowercased()
-            guard mode == "octet" || mode == "netascii" else {
-                sendError(4, "mode \(mode) not supported")
+            filename = String(request.name.prefix(255))
+            isWrite = request.isWrite
+            guard request.mode == "octet" || request.mode == "netascii" else {
+                refuse(TFTPErrorCode.illegalOperation, "mode \(request.mode) not supported")
                 return
             }
 
-            var options: [(String, String)] = []
-            var index = 2
-            while index + 1 < fields.count {
-                options.append((fields[index].lowercased(), fields[index + 1]))
-                index += 2
-            }
-
+            var limit = Int64.max
             if isWrite {
                 // Never past the free space less a reserve: an upload (TFTP
                 // has no login) must not take the Mac's disk to zero.
-                writeLimit = min(TFTPServer.maximumWriteBytes,
-                                 max(0, Self.freeSpace(near: server.resolveWriteFolderHint()) - Int(DownloadCap.reserve)))
-                if let size = options.first(where: { $0.0 == "tsize" }).flatMap({ Int($0.1) }), size > writeLimit {
-                    sendError(3, "file too large")
+                limit = Int64(min(TFTPServer.maximumWriteBytes,
+                                  max(0, Self.freeSpace(near: server.resolveWriteFolderHint()) - Int(DownloadCap.reserve))))
+                if let refusal = TFTPNegotiation.writeRefusal(request, limit: limit) {
+                    refuse(refusal.code, refusal.message)
                     return
                 }
                 var url = server.resolveWrite(filename)
                 if url == nil {
                     guard let folder = server.resolveWriteFolderHint() else {
-                        sendError(2, "receiving files is off")
+                        refuse(TFTPErrorCode.accessViolation, "receiving files is off")
                         return
                     }
                     // A name already there (re-running yesterday's backup
@@ -457,7 +322,7 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                     let taken = folder.appendingPathComponent(name, isDirectory: false)
                     guard FileServerPlan.isPlainName(name), Self.occupied(taken),
                           let variant = FileServerPlan.freeVariant(of: taken, exists: Self.occupied) else {
-                        sendError(2, "file name not accepted")
+                        refuse(TFTPErrorCode.accessViolation, "file name not accepted")
                         return
                     }
                     url = variant
@@ -469,183 +334,195 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                 guard let url = server.resolveRead(filename),
                       let handle = try? FileHandle(forReadingFrom: url),
                       let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int else {
-                    sendError(1, "file not found")
+                    refuse(TFTPErrorCode.fileNotFound, "file not found")
                     return
                 }
                 readHandle = handle
-                fileSize = size
+                fileSize = Int64(size)
             }
 
-            var acked: [(String, String)] = []
-            for (name, value) in options {
-                switch name {
-                case "blksize":
-                    blockSize = min(max(Int(value) ?? 512, 8), 8192)
-                    acked.append((name, "\(blockSize)"))
-                case "tsize":
-                    if isWrite {
-                        // Echo only a number (RFC 2349); anything else is
-                        // left out of the OACK, never reflected back.
-                        guard let size = Int(value), size >= 0 else { break }
-                        expectedTotal = size
-                        acked.append((name, "\(size)"))
-                    } else {
-                        acked.append((name, "\(fileSize)"))
+            let agreed = TFTPNegotiation.server(request, fileSize: isWrite ? nil : fileSize)
+            guard openTransferSocket() else {
+                refuse(TFTPErrorCode.notDefined, "could not open a transfer port")
+                return
+            }
+            var transfer = TFTPTransfer(role: isWrite ? .receiver : .sender,
+                                        opening: agreed.acknowledged.isEmpty ? .plain : .oack(agreed.acknowledged),
+                                        peerPort: peer.port, blockSize: agreed.blockSize, limit: limit,
+                                        expectedSize: isWrite ? agreed.expectedSize : nil,
+                                        policy: .server(timeout: agreed.timeout))
+            let actions = transfer.start(now: UDPSocket.now, source: read)
+            machine = transfer
+            perform(actions)
+        }
+
+        /// The request is refused before a transfer exists: ERROR from port
+        /// 69, and a failed bar so "file not found" (a typo in the device
+        /// command) shows in the popover.
+        private func refuse(_ code: UInt16, _ message: String) {
+            UDPSocket.send(listenerFD, TFTPPacket.error(code: code, message: message).encoded, to: peer)
+            lastActive = ServerTransfer(token: token, peer: peerHost, name: filename.isEmpty ? "?" : filename,
+                                        isUpload: isWrite, done: 0, total: 0)
+            reportFailure(message)
+            teardown()
+        }
+
+        /// A socket on a fresh ephemeral port, of the device's family.
+        private func openTransferSocket() -> Bool {
+            guard case .success(let bound) = UDPSocket.bound(port: 0, family: family) else { return false }
+            fd = bound.fd
+            let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: server.serverQueue)
+            let socket = fd
+            source.setEventHandler { [weak self] in self?.drain() }
+            source.setCancelHandler { close(socket) }
+            readSource = source
+            source.activate()
+            return true
+        }
+
+        // MARK: Machine I/O
+
+        private func drain() {
+            for _ in 0..<64 {
+                guard !torn else { return }
+                switch UDPSocket.receive(fd, into: &buffer) {
+                case .datagram(let bytes, let from):
+                    // Another host is not part of this transfer at all; another
+                    // port of the device's host is a wrong TID (the machine
+                    // answers it with ERROR 5).
+                    guard from.sameHost(peer), var m = machine else { continue }
+                    let actions = m.receive(bytes, from: from.port, now: UDPSocket.now, source: read)
+                    machine = m
+                    perform(actions)
+                case .empty:
+                    return
+                case .failed:
+                    fail("transfer socket failed")
+                    return
+                }
+            }
+        }
+
+        func repeatedRequest() {
+            guard var m = machine else { return }
+            let actions = m.repeatedRequest()
+            machine = m
+            perform(actions)
+        }
+
+        func abort(_ why: String) {
+            guard var m = machine else { return }
+            let actions = m.abort(code: TFTPErrorCode.notDefined, message: why)
+            machine = m
+            perform(actions)
+        }
+
+        private func fail(_ why: String) {
+            reportFailure(why)
+            teardown()
+        }
+
+        private func perform(_ actions: [TFTPTransfer.Action]) {
+            for action in actions {
+                guard !torn else { return }
+                switch action {
+                case .send(let bytes, let port):
+                    UDPSocket.send(fd, bytes, to: peer.withPort(port))
+                case .deliver(let payload):
+                    guard deliver(payload) else { return }
+                case .progress(let done):
+                    reportProgress(done: done)
+                case .lastBlock:
+                    finishWrite()
+                    return   // finishWrite fed the machine; its actions ran
+                case .finished(let outcome):
+                    switch outcome {
+                    case .done(let bytes):
+                        reportDone(done: bytes)
+                    case .failed(let failure):
+                        reportFailure(Self.detail(failure), aborted: { if case .aborted = failure { return true } else { return false } }())
                     }
-                case "timeout":
-                    // RFC 2349: 1–255 seconds.
-                    guard let seconds = Int(value), (1...255).contains(seconds) else { break }
-                    acked.append((name, "\(seconds)"))
-                default:
-                    break
                 }
             }
+            afterStep()
+        }
 
-            openTransferPort()
-            reportProgress(done: 0, total: isWrite ? (expectedTotal ?? 0) : fileSize, force: true)
-
-            if !acked.isEmpty {
-                var oack = Data([0, 6])
-                for (name, value) in acked {
-                    oack.append(contentsOf: name.utf8); oack.append(0)
-                    oack.append(contentsOf: value.utf8); oack.append(0)
-                }
-                lastPacket = oack
-                send(oack)
-                scheduleRetransmit()
-            } else if isWrite {
-                sendAck(0)
+        /// Re-arms the timer to the machine's next deadline, or lets go once
+        /// it is closed.
+        private func afterStep() {
+            guard !torn, let m = machine else { return }
+            if m.isClosed { teardown(); return }
+            guard let deadline = m.nextDeadline else { timer?.cancel(); timer = nil; return }
+            if timer == nil {
+                let t = DispatchSource.makeTimerSource(queue: server.serverQueue)
+                t.setEventHandler { [weak self] in self?.tick() }
+                timer = t
+                t.schedule(deadline: .now() + max(0, deadline - UDPSocket.now), leeway: .milliseconds(10))
+                t.activate()
             } else {
-                sendDataBlock(1)
+                timer?.schedule(deadline: .now() + max(0, deadline - UDPSocket.now), leeway: .milliseconds(10))
             }
-            receiveNext()
         }
 
-        // MARK: Read path (device pulls)
-
-        private func handleAck(_ packet: Data) {
-            guard !isWrite else { receiveNext(); return }
-            guard packet.count >= 4 else { receiveNext(); return }
-            let block = UInt16(packet[packet.startIndex + 2]) << 8 | UInt16(packet[packet.startIndex + 3])
-            // Only the ACK for the block in flight advances (no Sorcerer's
-            // Apprentice); lost packets are resent by the timer.
-            guard block == currentBlock else { receiveNext(); return }
-            retries = 0
-            // Any ACK on our transfer port proves the peer, ACK 0 too (after
-            // an OACK): a spoofer never saw that port. Without it a lost
-            // DATA 1 was never resent and the read failed (review 6.0 (2)).
-            peerProven = true
-            if sentFinal {
-                reportDone(done: fileSize)
-                finish(nil)
-                return
-            }
-            sendDataBlock(block &+ 1)
-            receiveNext()
+        private func tick() {
+            guard !torn, var m = machine else { return }
+            let actions = m.tick(now: UDPSocket.now)
+            machine = m
+            perform(actions)
         }
 
-        private func sendDataBlock(_ block: UInt16) {
-            guard let handle = readHandle else { return }
-            let offset = sendOffset(for: block)
-            guard offset <= fileSize,
-                  let chunk = try? { () -> Data in
-                      try handle.seek(toOffset: UInt64(offset))
-                      return try handle.read(upToCount: blockSize) ?? Data()
-                  }() else {
-                sendError(0, "read failed")
-                return
-            }
-            var packet = Data([0, 3, UInt8(block >> 8), UInt8(block & 0xFF)])
-            packet.append(chunk)
-            currentBlock = block
-            if chunk.count < blockSize { sentFinal = true }
-            lastPacket = packet
-            send(packet)
-            reportProgress(done: min(offset + chunk.count, fileSize), total: fileSize)
-            scheduleRetransmit()
+        /// The sender's block reader.
+        private func read(_ offset: Int64, _ count: Int) throws -> Data {
+            guard let handle = readHandle, offset <= fileSize else { throw Failure(description: "read failed") }
+            try handle.seek(toOffset: UInt64(offset))
+            return try handle.read(upToCount: count) ?? Data()
         }
 
-        /// Absolute file offset for a (possibly wrapped) block number.
-        private var wrapCount = 0
-        private var lastRawBlock: UInt16 = 0
-        private func sendOffset(for block: UInt16) -> Int {
-            if block < lastRawBlock && lastRawBlock &- block > 0x8000 {
-                wrapCount += 1
-            }
-            lastRawBlock = block
-            return (wrapCount * 65536 + Int(block) - 1) * blockSize
-        }
-
-        // MARK: Write path (device sends a backup)
-
-        private func handleData(_ packet: Data) {
-            // Receive into a hidden temp beside the target; it becomes the
-            // real file only once the last block arrives, and only if the
-            // name is still free (link(2) refuses to replace).
-            // Only for a real block 1: a stray or short first packet must not
-            // end "waiting for the first block" (`writeTemp == nil` is that
-            // wait — ACK 0 is never repeated before block 1; review 6.0 (2)).
-            if isWrite, currentBlock == 0, writeHandle == nil, writeTemp == nil, let url = writeFinal,
-               packet.count >= 4, packet[packet.startIndex + 2] == 0, packet[packet.startIndex + 3] == 1 {
-                let temp = url.deletingLastPathComponent()
-                    .appendingPathComponent(".sheepterm-tftp-\(UUID().uuidString)")
+        /// Receive into a hidden temp beside the target; it becomes the real
+        /// file only once the last block arrives, and only if the name is
+        /// still free.
+        private func deliver(_ payload: Data) -> Bool {
+            if writeHandle == nil {
+                guard writeTemp == nil, let url = writeFinal else { return false }
+                let temp = url.deletingLastPathComponent().appendingPathComponent(".sheepterm-tftp-\(UUID().uuidString)")
                 guard FileManager.default.createFile(atPath: temp.path, contents: nil),
                       let handle = try? FileHandle(forWritingTo: temp) else {
                     try? FileManager.default.removeItem(at: temp)
-                    sendError(2, "cannot create file")
-                    return
+                    abort(code: TFTPErrorCode.accessViolation, "cannot create file")
+                    return false
                 }
                 writeHandle = handle
                 writeTemp = temp
             }
-            guard isWrite, let handle = writeHandle else { receiveNext(); return }
-            guard packet.count >= 4 else { receiveNext(); return }
-            let block = UInt16(packet[packet.startIndex + 2]) << 8 | UInt16(packet[packet.startIndex + 3])
-            let payload = packet.dropFirst(4)
-            peerProven = true
-            retries = 0
-            if block == currentBlock &+ 1 {
-                guard writtenBytes + payload.count <= writeLimit else {
-                    sendError(3, "file too large")
-                    return
-                }
-                do {
-                    try handle.write(contentsOf: payload)
-                } catch {
-                    finish("write failed", failed: true)
-                    return
-                }
-                writtenBytes += payload.count
-                currentBlock = block
-                reportProgress(done: writtenBytes, total: expectedTotal ?? 0)
+            do {
+                try writeHandle?.write(contentsOf: payload)
+                return true
+            } catch {
+                abort(code: TFTPErrorCode.diskFull, "write failed")
+                return false
             }
-            // Last block = a short payload on the block just written.
-            if block == currentBlock && payload.count < blockSize {
-                try? handle.close()
-                writeHandle = nil
-                // The device announced the size (tsize): a file that did not
-                // arrive whole is refused, never saved as a silently short
-                // backup (a live Aruba CX run once lost its first block).
-                if let expected = expectedTotal, expected > 0, writtenBytes != expected {
-                    sendError(3, "size mismatch: got \(writtenBytes) of \(expected) bytes")
-                    return
-                }
-                // Promote BEFORE the final ACK: the device hears success only
-                // once the file is really in place.
-                let saved = promoteWrite()
-                guard saved == 0 else {
-                    sendError(saved == EEXIST ? 6 : 3, saved == EEXIST ? "file already exists" : "could not save file")
-                    return
-                }
-                sendAck(block)
-                reportDone(done: writtenBytes)
-                dallyForFinalAck(block)
-                return
-            }
-            // A stale or out-of-order block re-ACKs what was really written,
-            // never a block that was not.
-            sendAck(currentBlock)
-            receiveNext()
+        }
+
+        private func abort(code: UInt16, _ why: String) {
+            guard var m = machine else { return }
+            let actions = m.abort(code: code, message: why)
+            machine = m
+            perform(actions)
+        }
+
+        /// The last block is in: promote BEFORE the final ACK — the device
+        /// hears success only once the file is really in place.
+        private func finishWrite() {
+            try? writeHandle?.close()
+            writeHandle = nil
+            guard var m = machine else { return }
+            let saved = promoteWrite()
+            let actions = saved == 0
+                ? m.commit(now: UDPSocket.now)
+                : m.abort(code: saved == EEXIST ? TFTPErrorCode.fileExists : TFTPErrorCode.diskFull,
+                          message: saved == EEXIST ? "file already exists" : "could not save file")
+            machine = m
+            perform(actions)
         }
 
         /// The temp becomes the final name with renamex_np(RENAME_EXCL):
@@ -689,101 +566,82 @@ nonisolated final class TFTPServer: @unchecked Sendable {
             writeTemp = nil
         }
 
-        /// RFC 1350 §6: after the last ACK, stay a few seconds and answer a
-        /// repeat of the last block — if that ACK was lost the device would
-        /// otherwise report a failure for a backup that is saved.
-        private func dallyForFinalAck(_ block: UInt16) {
-            generation += 1      // no retransmit timer now
-            dallyReceive(block, until: Date().addingTimeInterval(3))
-            server.serverQueue.asyncAfter(deadline: .now() + 3) { [weak self] in self?.finish(nil) }
+        /// The server stopped: the bar says so, nothing is left behind.
+        func stop() {
+            guard !torn else { return }
+            if var t = lastActive, !transferDone { t.state = .failed; t.detail = "stopped"; server.onProgress(t) }
+            transferDone = true
+            teardown()
         }
 
-        private func dallyReceive(_ block: UInt16, until deadline: Date) {
-            io.receiveMessage { [weak self] data, _, _, error in
-                guard let self, !self.finished else { return }
-                guard error == nil, let data, data.count >= 4, Date() < deadline else { return }
-                let isLastBlock = data[data.startIndex + 1] == 3
-                    && UInt16(data[data.startIndex + 2]) << 8 | UInt16(data[data.startIndex + 3]) == block
-                if isLastBlock { self.send(self.lastPacket) }
-                self.dallyReceive(block, until: deadline)
-            }
-        }
-
-        private func sendAck(_ block: UInt16) {
-            let packet = Data([0, 4, UInt8(block >> 8), UInt8(block & 0xFF)])
-            lastPacket = packet
-            send(packet)
-            scheduleRetransmit()
+        private func teardown() {
+            guard !torn else { return }
+            torn = true
+            timer?.cancel()
+            timer = nil
+            // Every reply already went out with a synchronous sendto: the
+            // socket can close now without losing an ERROR.
+            readSource?.cancel()
+            readSource = nil
+            try? readHandle?.close()
+            readHandle = nil
+            // Still holding a temp ⇒ the upload never completed; discard it.
+            discardTemp()
+            server.sessionEnded(self)
         }
 
         // MARK: Progress
+
+        static func detail(_ failure: TFTPTransfer.Failure) -> String {
+            switch failure {
+            case .timedOut: return "timed out"
+            case .peer(_, let message): return "device error: \(message.isEmpty ? "error" : message)"
+            case .tooLarge: return "file too large"
+            case .sizeMismatch(let got, let expected): return "size mismatch: got \(got) of \(expected) bytes"
+            case .badOption(let why): return why
+            case .aborted(_, let message): return message
+            }
+        }
 
         /// Throttled to ~128 KB so a big image doesn't flood main. Nothing
         /// shows until the peer is proven (its first DATA block, or an ACK on
         /// the transfer port): a bare or spoofed request repeated every few
         /// minutes kept an "active" bar up, so the server never turned itself
         /// off and the Transfer Log filled with timeouts (review 6.0 (4)).
-        private var shown = false
-        private func reportProgress(done: Int, total: Int, force: Bool = false) {
-            guard peerProven else { return }
-            let t = ServerTransfer(token: token, peer: peerHost, name: filename, isUpload: isWrite,
-                                 done: Int64(done), total: Int64(total))
+        private func reportProgress(done: Int64) {
+            guard machine?.proven == true else { return }
+            let total = isWrite ? (machine?.expectedSize ?? 0) : fileSize
+            let t = ServerTransfer(token: token, peer: peerHost, name: filename, isUpload: isWrite, done: done, total: total)
             lastActive = t
-            if !shown || force || done - lastReported >= 128 * 1024 || (total > 0 && done >= total) {
+            if !shown || done - lastReported >= 128 * 1024 || (total > 0 && done >= total) {
                 shown = true
                 lastReported = done
                 server.onProgress(t)
             }
         }
 
-        private func reportDone(done: Int) {
+        private func reportDone(done: Int64) {
             transferDone = true
             // A write saved beside a taken name shows (and logs) the name it got.
             let name = isWrite ? (writeFinal?.lastPathComponent ?? filename) : filename
             server.onProgress(ServerTransfer(token: token, peer: peerHost, name: name, isUpload: isWrite,
-                                           done: Int64(done), total: Int64(done), state: .done))
+                                             done: done, total: done, state: .done))
         }
 
-        // MARK: Plumbing
-
-        private func send(_ packet: Data) {
-            io.send(content: packet, completion: .contentProcessed { _ in })
-        }
-
-        /// Before a device's FIRST data block (a write) the OACK / ACK 0 is
-        /// NOT repeated: a switch can take over 5 s to render its
-        /// running-config, and an Aruba CX that receives the OACK twice
-        /// restarts its numbering one chunk late — its first 1468 bytes never
-        /// arrive (seen live 2026-10-25). If the OACK was really lost, the
-        /// device repeats its WRQ (RFC 1350: the requester retransmits) and a
-        /// new session answers it. This is how long we wait for block 1.
-        static let firstDataWait: TimeInterval = 30
-
-        private func scheduleRetransmit() {
-            generation += 1
-            let expected = generation
-            // Waiting for the FIRST block (no temp yet) — not a block number
-            // that wrapped back to 0 on a file past 32 MB × blksize.
-            if isWrite && writeTemp == nil {
-                server.serverQueue.asyncAfter(deadline: .now() + Self.firstDataWait) { [weak self] in
-                    guard let self, !self.finished, self.generation == expected else { return }
-                    self.finish("timed out", failed: true)
-                }
-                return
+        /// A failed bar — for a transfer that showed one, or one THIS end
+        /// refused or aborted (writes turned off, a read error). An unproven
+        /// request that timed out or was ended by its sender shows nothing.
+        private func reportFailure(_ detail: String, aborted: Bool = false) {
+            guard !transferDone else { return }
+            if lastActive == nil, aborted {
+                lastActive = ServerTransfer(token: token, peer: peerHost, name: filename.isEmpty ? "?" : filename,
+                                            isUpload: isWrite, done: 0, total: 0)
             }
-            server.serverQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                guard let self, !self.finished, self.generation == expected else { return }
-                self.retries += 1
-                // No retransmit to a peer that never answered: a spoofed
-                // request must not get a second block toward its "victim"
-                // (security review 6.0). A real device asks again itself.
-                if self.retries > (self.peerProven ? 5 : 0) {
-                    self.finish("timed out", failed: true)
-                } else {
-                    self.send(self.lastPacket)
-                    self.scheduleRetransmit()
-                }
-            }
+            guard var t = lastActive else { return }
+            transferDone = true
+            t.state = .failed
+            t.detail = detail
+            server.onProgress(t)
         }
 
         private static func freeSpace(near folder: URL?) -> Int {
@@ -791,42 +649,6 @@ nonisolated final class TFTPServer: @unchecked Sendable {
                   let values = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
                   let free = values.volumeAvailableCapacityForImportantUsage else { return Int.max }
             return Int(clamping: free)
-        }
-
-        private func sendError(_ code: UInt16, _ message: String) {
-            var packet = Data([0, 5, UInt8(code >> 8), UInt8(code & 0xFF)])
-            packet.append(contentsOf: message.utf8)
-            packet.append(0)
-            send(packet)
-            // A refused request shows as a failed bar, so "file not found"
-            // (a typo in the device command) is visible in the popover.
-            if lastActive == nil {
-                lastActive = ServerTransfer(token: token, peer: peerHost, name: filename.isEmpty ? "?" : filename,
-                                          isUpload: isWrite, done: 0, total: 0)
-            }
-            finish(message, failed: true)
-        }
-
-        private func finish(_ detail: String?, failed: Bool = false) {
-            guard !finished else { return }
-            finished = true
-            generation += 1
-            try? readHandle?.close()
-            readHandle = nil
-            // Still holding a temp ⇒ the upload never completed; discard it.
-            discardTemp()
-            if var t = lastActive, !transferDone {
-                t.state = .failed
-                t.detail = detail ?? "interrupted"
-                server.onProgress(t)
-            }
-            connection.cancel()
-            // Not at once: an ERROR sent just before (mid-transfer) was
-            // dropped with the flow and never reached the device.
-            if let flow = transfer {
-                server.serverQueue.asyncAfter(deadline: .now() + 0.3) { flow.cancel() }
-            }
-            server.sessionEnded(self)
         }
     }
 }

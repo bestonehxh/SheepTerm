@@ -1350,7 +1350,7 @@ final class WebTabView: NSView {
 /// the URL field, Fill Login (key) and Open in Default Browser. A find field
 /// appears only while ⌘F is in use; a short notice only while there is one.
 final class WebBarView: NSView, NSSearchFieldDelegate {
-    static let height: CGFloat = 30
+    static let height: CGFloat = WebBarGeometry.barHeight
 
     weak var controller: WebTabController?
 
@@ -1358,7 +1358,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
     private let forward = WebBarView.button("chevron.right", String(localized: "Forward (⌘])"), HistoryButton())
     private let reload = WebBarView.button("arrow.clockwise", String(localized: "Reload (⌘R)"), ChromeBoxButton())
     private let external = WebBarView.button("arrow.up.right.square", String(localized: "Open in Default Browser"), ChromeBoxButton())
-    private let urlField = NSTextField()
+    private let urlField = LocationField()
     /// The URL field (an empty tab's keyboard target).
     var locationField: NSView { urlField }
     private let findField = NSSearchField()
@@ -1400,20 +1400,24 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         urlField.isBordered = false
         urlField.drawsBackground = false
         urlField.focusRingType = .none
-        urlField.font = .systemFont(ofSize: 12)
+        urlField.font = .systemFont(ofSize: WebBarGeometry.fontSize)
         urlField.textColor = NSColor(Theme.tabText)
         urlField.lineBreakMode = .byTruncatingTail
         urlField.cell?.isScrollable = true
         urlField.cell?.wraps = false
         urlField.placeholderString = String(localized: "Search or enter address")
         urlField.delegate = self
+        urlField.onFocusChange = { [weak self] in self?.refreshFocusBorder() }
         urlField.target = self
         urlField.action = #selector(urlEntered)
         urlField.wantsLayer = true
         let fieldBack = NSView()
         fieldBack.wantsLayer = true
         fieldBack.layer?.backgroundColor = NSColor(Theme.tabActive).cgColor
-        fieldBack.layer?.cornerRadius = 6
+        fieldBack.layer?.cornerRadius = WebBarGeometry.fieldCornerRadius
+        fieldBack.layer?.cornerCurve = .continuous
+        fieldBack.layer?.borderColor = NSColor(Theme.accent).cgColor
+        fieldBack.layer?.borderWidth = 0
         fieldBack.identifier = NSUserInterfaceItemIdentifier("urlBack")
         addSubview(fieldBack)
         addSubview(urlField)
@@ -1426,12 +1430,12 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         findField.delegate = self
         findField.isHidden = true
         addSubview(findField)
-        noticeLabel.font = .systemFont(ofSize: 11)
+        noticeLabel.font = .systemFont(ofSize: WebBarGeometry.noticeFontSize)
         noticeLabel.textColor = SheepAlert.cautionYellow
         noticeLabel.lineBreakMode = .byTruncatingTail
         noticeLabel.isHidden = true
         addSubview(noticeLabel)
-        promptLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        promptLabel.font = .systemFont(ofSize: WebBarGeometry.noticeFontSize, weight: .medium)
         promptLabel.textColor = NSColor(Theme.tabText)
         promptLabel.lineBreakMode = .byTruncatingTail
         for (button, action) in [(promptYes, #selector(promptSaid(_:))), (promptNo, #selector(promptSaid(_:)))] {
@@ -1456,7 +1460,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
 
     private static func button<B: NSButton>(_ symbol: String, _ help: String, _ button: B) -> B {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: WebBarGeometry.buttonSymbolSize, weight: .regular))
         button.image = image ?? NSImage()
         button.title = ""
         button.isBordered = false
@@ -1469,32 +1473,47 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         return button
     }
 
+    /// 1 pt accent border while the URL field (its field editor) has the keyboard.
+    /// Called when the field takes the keyboard and when its editing ends
+    /// (the field editor reports that on every resign, typed or not).
+    private func refreshFocusBorder() {
+        let responder = window?.firstResponder
+        let focused = urlField.currentEditor() != nil
+            && (responder === urlField || (responder as? NSTextView)?.delegate === urlField)
+        let fieldBack = subviews.first { $0.identifier?.rawValue == "urlBack" }
+        fieldBack?.layer?.borderWidth = focused ? WebBarGeometry.focusBorderWidth : 0
+    }
+
     override func layout() {
         super.layout()
         let h = Self.height
-        let size: CGFloat = 24
-        var x: CGFloat = 8
-        for button in [back, forward, reload] {
-            button.frame = CGRect(x: x, y: (h - size) / 2, width: size, height: size)
-            x += size + 2
+        let size = WebBarGeometry.buttonSize
+        let buttonY = WebBarGeometry.centredY(size)
+        for (index, button) in [back, forward, reload].enumerated() {
+            button.frame = CGRect(x: WebBarGeometry.buttonX(index), y: buttonY, width: size, height: size)
         }
-        var right = bounds.width - 8
+        var right = bounds.width - WebBarGeometry.edgeInset
         for button in [external] {
             right -= size
-            button.frame = CGRect(x: right, y: (h - size) / 2, width: size, height: size)
-            right -= 2
+            button.frame = CGRect(x: right, y: buttonY, width: size, height: size)
+            right -= WebBarGeometry.buttonGap
         }
-        right -= 4
+        right -= WebBarGeometry.fieldGap - WebBarGeometry.buttonGap
         if findShown {
             let width: CGFloat = 170
-            findField.frame = CGRect(x: right - width, y: (h - 22) / 2, width: width, height: 22)
+            let findHeight = findField.intrinsicContentSize.height
+            findField.frame = CGRect(x: right - width, y: (h - findHeight) / 2, width: width, height: findHeight)
             right -= width + 6
         }
-        let fieldX = x + 6
+        let fieldX = WebBarGeometry.fieldX
         let fieldWidth = max(40, right - fieldX)
+        let fieldY = WebBarGeometry.centredY(WebBarGeometry.fieldHeight)
         let fieldBack = subviews.first { $0.identifier?.rawValue == "urlBack" }
-        fieldBack?.frame = CGRect(x: fieldX, y: 4, width: fieldWidth, height: h - 8)
+        fieldBack?.frame = CGRect(x: fieldX, y: fieldY, width: fieldWidth, height: WebBarGeometry.fieldHeight)
         let textHeight = urlField.intrinsicContentSize.height
+        // The text sits on the field's own centre line.
+        let textY = (fieldY + (WebBarGeometry.fieldHeight - textHeight) / 2).rounded()
+        let inset = WebBarGeometry.textInset
         if promptShown {
             promptLabel.sizeToFit()
             promptYes.sizeToFit()
@@ -1502,14 +1521,14 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
             let buttons = promptYes.frame.width + promptNo.frame.width + 4
             let labelWidth = min(promptLabel.frame.width, max(60, fieldWidth * 0.7 - buttons - 8))
             let width = labelWidth + 8 + buttons
-            var px = fieldX + fieldWidth - width - 4
+            var px = fieldX + fieldWidth - width - 6
             promptLabel.frame = CGRect(x: px, y: (h - promptLabel.frame.height) / 2, width: labelWidth, height: promptLabel.frame.height)
             px += labelWidth + 8
             promptNo.frame = CGRect(x: px, y: (h - promptNo.frame.height) / 2, width: promptNo.frame.width, height: promptNo.frame.height)
             px += promptNo.frame.width + 4
             promptYes.frame = CGRect(x: px, y: (h - promptYes.frame.height) / 2, width: promptYes.frame.width, height: promptYes.frame.height)
             let textWidth = WebBarGeometry.urlTextWidth(fieldWidth: fieldWidth, noticeWidth: width)
-            urlField.frame = CGRect(x: fieldX + 8, y: (h - textHeight) / 2, width: textWidth, height: textHeight)
+            urlField.frame = CGRect(x: fieldX + inset, y: textY, width: textWidth, height: textHeight)
             noticeLabel.frame = .zero
             return
         }
@@ -1517,8 +1536,8 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         let noticeWidth = min(noticeLabel.frame.width, fieldWidth * 0.6)
         // The URL text stops where a shown notice starts (it used to run under it).
         let textWidth = WebBarGeometry.urlTextWidth(fieldWidth: fieldWidth, noticeWidth: noticeLabel.isHidden ? nil : noticeWidth)
-        urlField.frame = CGRect(x: fieldX + 8, y: (h - textHeight) / 2, width: textWidth, height: textHeight)
-        noticeLabel.frame = CGRect(x: fieldX + fieldWidth - noticeWidth - 8, y: (h - noticeLabel.frame.height) / 2,
+        urlField.frame = CGRect(x: fieldX + inset, y: textY, width: textWidth, height: textHeight)
+        noticeLabel.frame = CGRect(x: fieldX + fieldWidth - noticeWidth - inset, y: (h - noticeLabel.frame.height) / 2,
                                    width: noticeWidth, height: noticeLabel.frame.height)
     }
 
@@ -1530,7 +1549,7 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
         forward.isEnabled = web.canGoForward
         let symbol = web.isLoading ? "xmark" : "arrow.clockwise"
         reload.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: WebBarGeometry.buttonSymbolSize, weight: .regular))
         reload.setAccessibilityLabel(web.isLoading ? String(localized: "Stop") : String(localized: "Reload"))
         reload.isEnabled = !controller.isEmpty
         external.isEnabled = WebAddress.isLoadable(controller.webView.url ?? URL(string: controller.host.address))
@@ -1666,6 +1685,8 @@ final class WebBarView: NSView, NSSearchFieldDelegate {
 
     func controlTextDidEndEditing(_ obj: Notification) {
         if (obj.object as? NSTextField) === urlField {
+            // The field editor is still first responder while this is posted.
+            DispatchQueue.main.async { [weak self] in self?.refreshFocusBorder() }
             hideSuggestions()
             refresh()
         }
@@ -1851,6 +1872,17 @@ final class LoginKeyButton: NSButton {
         let fill = pressing ? accent.blended(withFraction: 0.25, of: .black) : (hovering ? accent.blended(withFraction: 0.12, of: .white) : accent)
         layer?.backgroundColor = (fill ?? accent).cgColor
         contentTintColor = .white
+    }
+}
+
+/// The web bar's URL field: tells the bar when it takes the keyboard, so the
+/// focus border (`WebBarGeometry.focusBorderWidth`) can follow it.
+final class LocationField: NSTextField {
+    var onFocusChange: (() -> Void)?
+    override func becomeFirstResponder() -> Bool {
+        let took = super.becomeFirstResponder()
+        if took { DispatchQueue.main.async { [weak self] in self?.onFocusChange?() } }
+        return took
     }
 }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-// Confirm Dangerous Commands (5.0 (22)): a command that restarts, erases or
+// Danger Command Guard (5.0 (22)): a command that restarts, erases or
 // factory-resets the device is held until the user says Send. Foundation
 // only and in `sharedSources` (root Package.swift), like SafePastePlan: the
 // rules are the same on Windows. The hook (holding the Return, the card) is

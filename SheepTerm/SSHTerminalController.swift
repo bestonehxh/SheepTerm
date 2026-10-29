@@ -898,7 +898,7 @@ extension SSHTerminalController: TerminalViewDelegate {
         // keystroke must not answer `takeLastSendAccepted` for these bytes.
         lastWriteAccepted = false
         // A typed Return on a dangerous command is held for the user's
-        // answer (Confirm Dangerous Commands) — and the keys behind it.
+        // answer (Danger Command Guard) — and the keys behind it.
         guard terminalHost.admitOutgoing(bytes) else { return }
         // A refused write means the worker took nothing: keep the answer so
         // a paced paste can end on it instead of counting the line as sent.

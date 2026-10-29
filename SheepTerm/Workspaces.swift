@@ -83,6 +83,32 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         return trial.attach(probe, .split(beside: target, direction)).layout.contains(target)
     }
 
+    /// What is being dragged onto a pane.
+    enum DropSource: Equatable, Sendable {
+        /// A pane header (this tab's or another's).
+        case pane(UUID)
+        /// A tab chip pulled down over the panes: the whole tab merges.
+        case workspace(UUID)
+        /// A sidebar host: a new session opens there.
+        case newSession
+    }
+
+    /// Would dropping `source` beside `target`, on that side, be done? The
+    /// very call the release makes, on a copy (`move` / `merge` /
+    /// `canSplit`), so the zone a drag shows is the thing a drop does.
+    /// Over itself = no.
+    func accepts(_ source: DropSource, beside target: UUID, _ direction: PaneDirection) -> Bool {
+        var trial = self
+        switch source {
+        case .pane(let session):
+            return session != target && trial.move(session: session, beside: target, direction)
+        case .workspace(let id):
+            return trial.merge(workspace: id, beside: target, direction)
+        case .newSession:
+            return canSplit(beside: target, direction)
+        }
+    }
+
     // MARK: - reading
 
     func workspace(containing session: UUID) -> WorkspaceState? {

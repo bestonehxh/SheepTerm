@@ -280,6 +280,11 @@ final class FileServerModel: ObservableObject {
                 engines[server] = nil
                 if let busy = error as? TFTPServer.PortInUse {
                     startError = busy.description
+                } else if let busy = error as? SSHFileServer.PortInUse {
+                    // Port 22 only: Remote Login holding it is named.
+                    startError = busy.description
+                } else if let busy = error as? FTPServer.PortInUse {
+                    startError = busy.description
                 } else {
                     startError = String(localized: "Could not start \(server.label): \(String(describing: error))")
                 }

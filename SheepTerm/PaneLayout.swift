@@ -410,6 +410,14 @@ nonisolated struct PaneLayout: Equatable, Sendable {
     /// distance taken as a share of the pane's width or height so a wide
     /// pane does not favour top/bottom. Ties go left, right, up, down.
     static func dropDirection(at point: CGPoint, in rect: CGRect) -> PaneDirection {
+        dropDirections(at: point, in: rect)[0]
+    }
+
+    /// All four sides of `rect`, nearest edge first (same measure and tie
+    /// order as `dropDirection`): the order a drop falls back through when
+    /// the nearest side is refused (6.0 (13): a 4th column, a row from a tab
+    /// that would leave the grid — that half of the pane showed no zone).
+    static func dropDirections(at point: CGPoint, in rect: CGRect) -> [PaneDirection] {
         let w = max(rect.width, 1), h = max(rect.height, 1)
         let distances: [(PaneDirection, CGFloat)] = [
             (.left, (point.x - rect.minX) / w),
@@ -417,9 +425,13 @@ nonisolated struct PaneLayout: Equatable, Sendable {
             (.up, (point.y - rect.minY) / h),
             (.down, (rect.maxY - point.y) / h),
         ]
-        var best = distances[0]
-        for candidate in distances.dropFirst() where candidate.1 < best.1 { best = candidate }
-        return best.0
+        // Insertion sort keeps equal distances in the tie order above.
+        var sorted: [(PaneDirection, CGFloat)] = []
+        for candidate in distances {
+            let at = sorted.firstIndex { candidate.1 < $0.1 } ?? sorted.count
+            sorted.insert(candidate, at: at)
+        }
+        return sorted.map(\.0)
     }
 
     /// The half of `rect` on `direction`'s side — what the drop zone covers.
@@ -435,8 +447,19 @@ nonisolated struct PaneLayout: Equatable, Sendable {
     /// The pane under `point` (a divider strip counts as nobody's) and the
     /// side a drop there means. `frames` are the panes as laid out.
     static func dropTarget(at point: CGPoint, frames: [UUID: CGRect]) -> (pane: UUID, direction: PaneDirection)? {
+        dropTarget(at: point, frames: frames) { _, _ in true }
+    }
+
+    /// The drop rule (6.0 (13), the owner: "anywhere in that half"): the pane
+    /// under `point`, and of its four sides the NEAREST one `allowed` takes,
+    /// falling back to the next nearest; nil only off every pane or when no
+    /// side of that pane is allowed. The zone drawn and the action on release
+    /// both come from this — never pick a side and then refuse it.
+    static func dropTarget(at point: CGPoint, frames: [UUID: CGRect],
+                           allowed: (UUID, PaneDirection) -> Bool) -> (pane: UUID, direction: PaneDirection)? {
         guard let hit = frames.first(where: { $0.value.contains(point) }) else { return nil }
-        return (hit.key, dropDirection(at: point, in: hit.value))
+        guard let side = dropDirections(at: point, in: hit.value).first(where: { allowed(hit.key, $0) }) else { return nil }
+        return (hit.key, side)
     }
 
     /// A divider drag: new fractions for one split. Refused unless the count

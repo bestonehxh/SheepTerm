@@ -32,6 +32,8 @@ final class SheepTermSync: SyncDataSource {
         "collapsedGroups", "collapsedHostSections", "openSubgroups", "sidebarWidth", "TSMLanguageIndicatorEnabled",
         // Show Sidebar at Launch: this Mac's window, like sidebarWidth.
         "sidebarAtLaunch",
+        // Keep Sidebar Open: this Mac's window too.
+        "sidebarStaysOpen",
         // The sidebar's level bars: this Mac's look, like its width.
         "sidebarGroupColors",
         // A RAM trade for THIS machine (CLAUDE.md), not a preference.

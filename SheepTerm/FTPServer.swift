@@ -26,10 +26,14 @@ import Foundation
 /// - one upload is capped at `maximumUploadBytes` (16 GB): ALLO above it and a
 ///   stream that passes it are refused;
 /// - anonymous is refused; ≤3 wrong logins and the connection is dropped, and
-///   commands pipelined behind the third are not run.
+///   commands pipelined behind the third are not run;
+/// - port 21 only (6.0 (13), like TFTP's 69 and SFTP/SCP's 22): a fallback
+///   port (2121 until 6.0 (12)) broke the copy commands of devices that
+///   cannot carry one. A restart waits for the listener a stop left closing
+///   (`Closing`, app-wide) and retries 21 for `FileServerPlan.ftpBindWindow`;
+///   still busy = `PortInUse`, "Port 21 is in use by <process>"
+///   (`TCPPortOwner.listener`). The PASV/EPSV data ports are not affected.
 nonisolated final class FTPServer: @unchecked Sendable {
-    static let fallbackPort: UInt16 = 2121
-
     static let maximumSessions = 16
     static let maximumPerPeer = 4
     static let maximumLine = 4096
@@ -89,25 +93,49 @@ nonisolated final class FTPServer: @unchecked Sendable {
 
     struct Failure: Error, CustomStringConvertible {
         let description: String
+        /// The errno of a failed bind/listen (0 = not a socket error).
+        var code: Int32 = 0
     }
 
-    /// Binds and returns the actual port: the preferred one, or `fallbackPort`
-    /// when that is taken / needs root (21). Port 0 = any free port.
+    /// The port stayed taken past `FileServerPlan.ftpBindWindow`: the
+    /// popover shows `description` as it is ("Port 21 is in use by …").
+    struct PortInUse: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Listening sockets a `stop()` let go that their accept thread has not
+    /// closed yet (it notices within a 250 ms poll) — of ANY server object
+    /// (the app makes a new one per start), so the next start waits for them
+    /// instead of reading our own closing socket as "in use".
+    private enum Closing {
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var count = 0
+        static var busy: Bool { lock.withLock { count > 0 } }
+        static func begin() { lock.withLock { count += 1 } }
+        static func end() { lock.withLock { count -= 1 } }
+    }
+
+    /// Binds `preferredPort` and nothing else (21 in the app; a free high
+    /// port in the tests) and returns it. Port 0 = any free port.
     func start(preferredPort: UInt16 = 21) async throws -> UInt16 {
         stop()
+        if preferredPort == 0 { return try begin(on: 0) }
+        let deadline = Date().addingTimeInterval(FileServerPlan.ftpBindWindow)
+        while Closing.busy, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
         var lastError: Failure?
-        for attempt in 0..<4 {
+        repeat {
             do { return try begin(on: preferredPort) } catch let error as Failure {
                 lastError = error
-                guard preferredPort != Self.fallbackPort else { throw error }
-                // A restart's previous socket may still be closing: retry the
-                // standard port briefly before moving to the fallback.
-                if attempt < 3, error.description.contains("in use") {
-                    try? await Task.sleep(for: .milliseconds(150))
-                } else { break }
+                guard error.code == EADDRINUSE else { throw error }
+                try? await Task.sleep(for: .milliseconds(150))
             }
+        } while Date() < deadline
+        if let lastError, lastError.code == EADDRINUSE {
+            throw PortInUse(description: FileServerPlan.portBusyMessage(port: preferredPort,
+                                                                     owner: TCPPortOwner.listener(port: preferredPort)))
         }
-        if preferredPort != Self.fallbackPort, let port = try? begin(on: Self.fallbackPort) { return port }
         throw lastError ?? Failure(description: "cannot listen")
     }
 
@@ -116,6 +144,7 @@ nonisolated final class FTPServer: @unchecked Sendable {
         generation += 1
         let live = Array(sessions.values)
         sessions.removeAll()
+        if listenFD >= 0 { Closing.begin() }   // ended by acceptLoop once it closes the socket
         listenFD = -1       // the accept thread closes its own descriptor
         lock.unlock()
         for session in live { session.abort() }
@@ -152,7 +181,8 @@ nonisolated final class FTPServer: @unchecked Sendable {
             let code = errno
             close(fd)
             throw Failure(description: code == EADDRINUSE ? "port \(port) in use"
-                                                         : "port \(port): \(String(cString: strerror(code)))")
+                                                         : "port \(port): \(String(cString: strerror(code)))",
+                          code: code)
         }
         let actual = FTPSocket.localPort(fd) ?? port
         lock.lock()
@@ -170,7 +200,9 @@ nonisolated final class FTPServer: @unchecked Sendable {
     }
 
     private func acceptLoop(fd: Int32, generation gen: Int) {
-        defer { close(fd) }
+        // Only stop() moves the generation off a running loop (start stops
+        // first), and it began this.
+        defer { close(fd); Closing.end() }
         while isCurrent(gen) {
             guard FTPSocket.poll(fd, events: Int16(POLLIN), timeoutMs: 250) > 0 else { continue }
             var peer = sockaddr_storage()

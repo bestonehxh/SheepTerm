@@ -870,11 +870,39 @@ public nonisolated enum WebRecentRename {
     }
 }
 
-/// The web bar's URL field: its text area loses the notice's width (plus a
-/// gap) while a notice is shown, so the two never overlap.
+/// The web bar's metrics (6.0 (13): the size of the Claude desktop app's
+/// browser bar — a 44 pt bar, three plain 28 pt icon buttons, a 29 pt field
+/// with an 8 pt corner, a 1 pt accent border only while it has the keyboard,
+/// 14 pt text 12 pt in from its left edge; was 30 / 24 / 22 / 6 / none / 12 / 8).
+/// The Windows bar mirrors these numbers. The URL field's text area loses the
+/// notice's width (plus a gap) while a notice is shown, so the two never overlap.
 public nonisolated enum WebBarGeometry {
-    public static let textInset: CGFloat = 8
+    public static let barHeight: CGFloat = 44
+    public static let buttonSize: CGFloat = 28
+    public static let buttonSymbolSize: CGFloat = 15
+    public static let buttonGap: CGFloat = 4
+    /// From the bar's left / right edge to the first / last button.
+    public static let edgeInset: CGFloat = 6
+    /// From Reload's right edge to the field.
+    public static let fieldGap: CGFloat = 6
+    public static let fieldHeight: CGFloat = 29
+    public static let fieldCornerRadius: CGFloat = 8
+    /// Accent border while the field has the keyboard; none otherwise.
+    public static let focusBorderWidth: CGFloat = 1
+    public static let fontSize: CGFloat = 14
+    /// Notice and Save-login line at the field's right end.
+    public static let noticeFontSize: CGFloat = 12
+    public static let textInset: CGFloat = 12
     public static let noticeGap: CGFloat = 6
+
+    /// Left edge of the leading button `index` (0 back, 1 forward, 2 reload).
+    public static func buttonX(_ index: Int) -> CGFloat {
+        edgeInset + CGFloat(index) * (buttonSize + buttonGap)
+    }
+    /// Left edge of the URL field (after the three leading buttons).
+    public static var fieldX: CGFloat { buttonX(2) + buttonSize + fieldGap }
+    /// Top of the field (and of any control centred like it), whole points.
+    public static func centredY(_ height: CGFloat) -> CGFloat { ((barHeight - height) / 2).rounded(.down) }
 
     public static func urlTextWidth(fieldWidth: CGFloat, noticeWidth: CGFloat?) -> CGFloat {
         var width = fieldWidth - 2 * textInset

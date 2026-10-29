@@ -65,7 +65,7 @@ enum BackupManager {
         // Settings → Clipboard (OSC 52 write; off unless set). The literal
         // is `SessionTerminalHost.clipboardWriteKey`.
         "allowOSC52ClipboardWrite",
-        "showStatusBar", "sidebarWidth", "sidebarAtLaunch", "sidebarGroupColors", "statusShowClock", "statusShowHints",
+        "showStatusBar", "sidebarWidth", "sidebarAtLaunch", "sidebarStaysOpen", "sidebarGroupColors", "statusShowClock", "statusShowHints",
         "statusShowIP", "statusShowSession", "statusShowSheep", "statusConnectionStyle", "statusShowFileServer", "statusShowTransfers", "terminalTheme",
         // The terminal's own look and its scrollback depth: restoring onto a
         // fresh Mac without these gives back the hosts but not the terminal

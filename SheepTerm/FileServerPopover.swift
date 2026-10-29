@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 /// The status-bar File Server button: a server glyph, green while any server
 /// listens, that opens `FileServerPopover`.
 struct FileServerStatusButton: View {
+    /// The hover box: the size the AI panel's / popovers' small icon buttons use.
+    static let box = CGSize(width: 22, height: 20)
     @ObservedObject private var server = FileServerModel.shared
 
     var body: some View {
@@ -13,9 +15,15 @@ struct FileServerStatusButton: View {
         } label: {
             FileServerGlyph(running: server.isAnyRunning, busy: server.inFlight > 0)
                 .frame(width: 14, height: 12)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // The app's small icon buttons' rounded hover/pressed box, and the
+        // click area is that whole box (6.0 (13), the user: the glyph alone
+        // was hard to see and hit). The negative padding gives the box back
+        // to the bar, so the bar's height, the glyph and the transfer strip
+        // beside it stay exactly where they were.
+        .buttonStyle(ChromeIconButtonStyle(width: Self.box.width, height: Self.box.height))
+        .padding(.horizontal, -(Self.box.width - 14) / 2)
+        .padding(.vertical, -(Self.box.height - 12) / 2)
         .help("File Server")
         .popover(isPresented: $server.popoverShown, arrowEdge: .top) {
             FileServerPopover()
@@ -317,8 +325,9 @@ private struct ServerChip: View {
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(on ? Theme.ok : Theme.dimText)
-            // One line always (FTP's ":2121" / SSH's ":2222"); the address
-            // beside it gives way.
+            // One line always; the address beside it gives way. (Every server
+            // binds its standard port only since 6.0 (13), so the port badge
+            // above shows only for a test/odd port.)
             .lineLimit(1)
             .padding(.horizontal, 9)
             .padding(.vertical, 3)

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The question Confirm Dangerous Commands puts over the tab (5.0 (22)):
+/// The question Danger Command Guard puts over the tab (5.0 (22)):
 /// since 6.0 (11) the connection card's own layout and size (card J,
 /// `CommandGuardCardContent`) — the host's name, the command, Cancel and Send.
 ///

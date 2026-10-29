@@ -186,7 +186,7 @@ final class SerialTerminalController: NSObject {
         terminalHost.lineBusy = { [weak self] in self?.worker.isTransferring ?? false }
         // A Safe Paste paced run takes the top-right corner: the wrong-speed
         // hint goes and the stream is judged afresh after the run.
-        terminalHost.onPacedRunStart = { [weak self] in self?.baudGuess.reset() }
+        terminalHost.onPacedRunStart = { [weak self] in self?.baudGuess.reset(); self?.silenceWatch.reset() }
         // Safe Paste times its line delay from here: bytes still in the
         // worker (or the tty's output queue / telnet's socket outbox) = not yet.
         terminalHost.lineDrained = { [weak self] in !(self?.worker.hasUnsentWrites ?? false) }
@@ -203,6 +203,7 @@ final class SerialTerminalController: NSObject {
         }
         terminalView.highlightProvider = highlightProvider
         terminalView.highlightEnabled = highlightEnabled
+        silenceWatch = ConsoleBaudGuess.SilenceWatch(cable: host.kind != .telnet)
         // Parking the worker to bound memory also parks `takeWrites()` — the
         // same I/O loop drains queued keystrokes — so a slow log disk shows up
         // as a session that has stopped echoing. Say so, once per episode.
@@ -413,13 +414,22 @@ final class SerialTerminalController: NSObject {
     /// offered a change too: a saved speed can be wrong, and Try leaves the
     /// saved host as it is, like the menu.
     private func considerBaudGuess(_ bytes: [UInt8]) {
-        let lineBusy = ConsoleBaudGuess.lineBusy(transferring: worker.isTransferring, pacingPaste: terminalHost.isPacingPaste,
-                                                 statusHUDShown: terminalHost.hasStatusHUD)
+        silenceWatch.received(bytes)
+        let lineBusy = baudLineBusy
         if lineBusy { terminalHost.hideBaudHint() }
         guard serialWorker != nil, !baudHintDismissed,
               !terminalHost.hasBaudHint, baudGuess.feed(bytes, lineBusy: lineBusy),
               let rate = ConsoleBaudGuess.suggestion(current: host.port, tried: triedBauds) else { return }
-        terminalHost.showBaudHint(rate: rate, onTry: { [weak self] in
+        showBaudHint(.garbled, rate: rate)
+    }
+
+    private var baudLineBusy: Bool {
+        ConsoleBaudGuess.lineBusy(transferring: worker.isTransferring, pacingPaste: terminalHost.isPacingPaste,
+                                  statusHUDShown: terminalHost.hasStatusHUD)
+    }
+
+    private func showBaudHint(_ reason: ConsoleBaudGuess.HintReason, rate: Int) {
+        terminalHost.showBaudHint(reason, rate: rate, onTry: { [weak self] in
             guard let self else { return }
             self.terminalHost.hideBaudHint()
             self.onTryBaud?(rate)
@@ -429,11 +439,40 @@ final class SerialTerminalController: NSObject {
         })
     }
 
+    /// "No response?" (6.0 (13)): Returns the user typed with nothing back.
+    private var silenceWatch = ConsoleBaudGuess.SilenceWatch(cable: true)
+    /// `userTyped` came just before this `send`: the bytes are a keystroke
+    /// (a paste, a snippet, a paced run, a DA reply never pass there).
+    private var sendIsKeystroke = false
+
+    /// A Return the user typed went out: counted, and looked at again when
+    /// the watch's deadline comes.
+    private func noteUserReturn() {
+        guard ConsoleBaudGuess.watchesSilence(cableSession: serialWorker != nil, hintDismissed: baudHintDismissed) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        silenceWatch.userReturn(at: now, busy: baudLineBusy)
+        guard let deadline = silenceWatch.deadline, !silenceWatch.fired else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline - now) + 0.01) { [weak self] in
+            self?.checkSilence()
+        }
+    }
+
+    private func checkSilence() {
+        // Bytes already at the worker count as an answer.
+        drainPendingFeed()
+        guard ConsoleBaudGuess.watchesSilence(cableSession: serialWorker != nil, hintDismissed: baudHintDismissed),
+              !terminalHost.hasBaudHint,
+              silenceWatch.tick(now: ProcessInfo.processInfo.systemUptime, busy: baudLineBusy),
+              let rate = ConsoleBaudGuess.suggestion(current: host.port, tried: triedBauds) else { return }
+        showBaudHint(.noResponse, rate: rate)
+    }
+
     /// The speed moved off `old` (the hint's Try or the menu): `old` is
     /// tried, and the stream is judged afresh at the new one.
     private func baudGuessRestart(leaving old: Int) {
         triedBauds.insert(old)
         baudGuess.reset()
+        silenceWatch.reset()
         terminalHost.hideBaudHint()
     }
 
@@ -495,6 +534,7 @@ final class SerialTerminalController: NSObject {
         // The corner is the transfer's; the stream is judged afresh after it.
         terminalHost.hideBaudHint()
         baudGuess.reset()
+        silenceWatch.reset()
         printNotice("\(label): \(name) (\(Self.sizeText(data.count))) — waiting for the device to ask for it…")
         if isTelnet {
             printNotice("over telnet: binary mode was asked for — a console server that refuses it will corrupt the file")
@@ -521,6 +561,7 @@ final class SerialTerminalController: NSObject {
         terminalHost.hideStatusHUD()
         // The protocol's bytes are behind it: judge the text afresh.
         baudGuess.reset()
+        silenceWatch.reset()
         let seconds = Int(Date().timeIntervalSince(started).rounded())
         let elapsed = seconds >= 60 ? "\(seconds / 60) min \(seconds % 60) s" : "\(seconds) s"
         switch phase {
@@ -690,6 +731,8 @@ extension SerialTerminalController: TerminalViewDelegate {
         // Every early return below = not taken; a stale true from an earlier
         // keystroke must not answer `takeLastSendAccepted` for these bytes.
         lastWriteAccepted = false
+        let typed = sendIsKeystroke
+        sendIsKeystroke = false
         // The line is the file's while a transfer runs.
         if worker.isTransferring {
             terminalHost.discardPendingKeystroke()
@@ -697,12 +740,13 @@ extension SerialTerminalController: TerminalViewDelegate {
             return
         }
         // A typed Return on a dangerous command is held for the user's
-        // answer (Confirm Dangerous Commands) — and the keys behind it.
+        // answer (Danger Command Guard) — and the keys behind it.
         guard terminalHost.admitOutgoing(bytes) else { return }
         // A refused write means the worker took nothing: keep the answer so
         // a paced paste can end on it instead of counting the line as sent.
         lastWriteAccepted = worker.write(bytes)
         terminalHost.noteOutgoing(bytes)
+        if typed, lastWriteAccepted, ConsoleBaudGuess.isReturnKey(bytes) { noteUserReturn() }
         if telnetLocalEcho, lastWriteAccepted {
             let echo = TelnetProtocol.localEcho(bytes)
             if !echo.isEmpty { terminalView.feed(echo) }
@@ -712,6 +756,7 @@ extension SerialTerminalController: TerminalViewDelegate {
     /// Only a real keystroke cancels a running Safe Paste — a DA/DSR reply
     /// or a mouse report also travels through `send` and used to abort it.
     func userTyped(_ view: TerminalView) {
+        sendIsKeystroke = true
         terminalHost.prepareForOrdinaryUserInput()
     }
 

@@ -6,13 +6,15 @@ import SwiftUI
 /// non-modal: nothing is dimmed and the keyboard stays in the terminal. The
 /// popups' glass (`popupChrome`) and the card's accent button (`CardButton`).
 struct BaudHintContent: View {
+    /// "Garbled?" or, when nothing came back at all, "No response?" (6.0 (13)).
+    var reason: ConsoleBaudGuess.HintReason = .garbled
     let rate: Int
     let onTry: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("Garbled?")
+            (reason == .noResponse ? Text("No response?") : Text("Garbled?"))
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -41,4 +43,9 @@ struct BaudHintContent: View {
 /// The AppKit side: an NSHostingView that never takes the keyboard.
 final class BaudHintView: NSHostingView<BaudHintContent> {
     override var acceptsFirstResponder: Bool { false }
+    /// The arrow over the card: it sits on the terminal, whose cursor rect is the I-beam everywhere (the user saw a text cursor on
+    /// "Try 115200", 6.0 (12)). Same rule as the connection card.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
 }

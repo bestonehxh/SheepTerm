@@ -22,8 +22,15 @@ import SheepSSH
 ///   `renamex_np(RENAME_EXCL)`, which refuses an existing name — a device can
 ///   never replace a file on the Mac. 16 GB per upload, and never more than
 ///   the volume has free.
+/// - Port 22 only (6.0 (13)), like TFTP's 69: a fallback port (2222 until
+///   6.0 (12)) broke the copy commands of every device that cannot carry a
+///   port (ArubaOS, Huawei, H3C, FortiGate …). A restart waits for the
+///   listener a stop left closing — any server object's, `Closing` counts
+///   them app-wide — and retries 22 for `FileServerPlan.sshBindWindow`;
+///   still busy = the start fails with `PortInUse`, "Port 22 is in use by
+///   Remote Login" (`FileServerPlan.sshPortHolder`) — the user turns Remote
+///   Login off and starts again.
 nonisolated final class SSHFileServer: @unchecked Sendable {
-    static let fallbackPort: UInt16 = 2222
     static let maximumConnections = 16
     static let maximumPerPeer = 4
     /// Wrong passwords from one address before it waits out `lockout` —
@@ -36,6 +43,26 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
 
     struct Failure: Error, CustomStringConvertible {
         let description: String
+        /// The errno of a failed bind/listen (0 = not a socket error).
+        var code: Int32 = 0
+    }
+
+    /// The port stayed taken past `FileServerPlan.sshBindWindow`: the
+    /// popover shows `description` as it is ("Port 22 is in use by …").
+    struct PortInUse: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Listening sockets a `stop()` has asked to close that the accept
+    /// thread has not closed yet — of ANY server object (the app makes a new
+    /// one per start), so the next start waits for them instead of reading
+    /// our own closing socket as "in use".
+    private enum Closing {
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var count = 0
+        static var busy: Bool { lock.withLock { count > 0 } }
+        static func begin() { lock.withLock { count += 1 } }
+        static func end() { lock.withLock { count -= 1 } }
     }
 
     let access: FileServerAccess
@@ -100,29 +127,16 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
 
     // MARK: Start / stop
 
-    /// Loads (or makes) the host keys, binds and starts accepting. Returns
-    /// the bound port: `preferredPort` (retried briefly — a restart's old
-    /// socket may still be closing), else `fallbackPort` (macOS Remote Login
-    /// may own 22). `preferredPort` 0 = any free port (tests).
+    /// Loads (or makes) the host keys, binds and starts accepting. Binds
+    /// `preferredPort` and nothing else (22 in the app; a free high port in
+    /// the tests) and returns it; `preferredPort` 0 = any free port (tests).
     func start(preferredPort: UInt16 = 22) async throws -> UInt16 {
         let directory = hostKeyDirectory
         let task = Task.detached { () throws -> [SSHPrivateKey] in try HostKeyStore.ensureAll(directory: directory) }
         let keys = try await task.value
         let signers: [SSHSigner] = keys.map { PrivateKeySigner($0, label: "file server host key") }
 
-        var bound: (fd: Int32, port: UInt16)?
-        var lastError: Error?
-        for attempt in 0..<4 where bound == nil {
-            do { bound = try Self.bindAndListen(port: preferredPort) } catch {
-                lastError = error
-                if preferredPort == 0 { break }
-                if attempt < 3 { try? await Task.sleep(for: .milliseconds(150)) }
-            }
-        }
-        if bound == nil, preferredPort != Self.fallbackPort, preferredPort != 0 {
-            bound = try Self.bindAndListen(port: Self.fallbackPort)
-        }
-        guard let bound else { throw lastError ?? Failure(description: "cannot listen on port \(preferredPort)") }
+        let bound = try await Self.bindPortOnly(preferredPort)
 
         var pipeFDs: [Int32] = [-1, -1]
         guard pipe(&pipeFDs) == 0 else {
@@ -161,6 +175,7 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
         let (wasRunning, live, wake): (Bool, [Session], Int32) = lock.withLock {
             let was = running
             running = false
+            if was { Closing.begin() }   // ended by acceptLoop once the socket is closed
             return (was, Array(sessions.values), wakePipe.write)
         }
         guard wasRunning else { return }
@@ -187,6 +202,35 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
 
     // MARK: Socket
 
+    /// `port`, retried while it is our own closing listener or still
+    /// address-in-use, up to `FileServerPlan.sshBindWindow`; then
+    /// `PortInUse` naming the holder. Never another port.
+    private static func bindPortOnly(_ port: UInt16) async throws -> (fd: Int32, port: UInt16) {
+        if port == 0 { return try bindAndListen(port: 0) }
+        let deadline = Date().addingTimeInterval(FileServerPlan.sshBindWindow)
+        while Closing.busy, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        var lastError: Failure?
+        repeat {
+            do { return try bindAndListen(port: port) } catch let error as Failure {
+                lastError = error
+                guard error.code == EADDRINUSE else { throw error }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+        } while Date() < deadline
+        if let lastError, lastError.code == EADDRINUSE {
+            let process = TCPPortOwner.listener(port: port)
+            // launchctl only when it can change the name, and never on the
+            // cooperative pool (it blocks up to 2 s).
+            let remoteLogin = FileServerPlan.needsRemoteLoginCheck(port: port, process: process)
+                ? await TCPPortOwner.remoteLoginOnAsync() : false
+            let holder = FileServerPlan.sshPortHolder(process: process, remoteLoginOn: remoteLogin)
+            throw PortInUse(description: FileServerPlan.portBusyMessage(port: port, owner: holder))
+        }
+        throw lastError ?? Failure(description: "cannot listen on port \(port)")
+    }
+
     private static func bindAndListen(port: UInt16) throws -> (fd: Int32, port: UInt16) {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw Failure(description: "socket failed: \(String(cString: strerror(errno)))") }
@@ -202,9 +246,9 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         guard bound == 0, listen(fd, 16) == 0 else {
-            let message = String(cString: strerror(errno))
+            let code = errno
             close(fd)
-            throw Failure(description: "cannot listen on port \(port): \(message)")
+            throw Failure(description: "cannot listen on port \(port): \(String(cString: strerror(code)))", code: code)
         }
         var actual = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -218,6 +262,7 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
     private func acceptLoop(listen fd: Int32, wake: Int32, signers: [SSHSigner]) {
         defer {
             close(fd)
+            Closing.end()   // only stop() ends the loop, and it began this
             lock.withLock {
                 close(wakePipe.read); close(wakePipe.write)
                 wakePipe = (-1, -1)
@@ -818,3 +863,4 @@ nonisolated private struct SignerList: @unchecked Sendable {
     let signers: [any SSHSigner]
     init(_ signers: [any SSHSigner]) { self.signers = signers }
 }
+

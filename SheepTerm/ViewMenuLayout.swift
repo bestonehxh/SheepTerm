@@ -14,7 +14,7 @@ nonisolated enum ViewMenuLayout {
     enum Item: String, CaseIterable, Sendable {
         case toggleSidebar
         // Sidebar ▸
-        case sidebarAtLaunch, groupColors, reorderGroups, addHosts
+        case sidebarAtLaunch, keepSidebarOpen, groupColors, reorderGroups, addHosts
         // Terminal ▸
         case toggleHighlighting, autoPage, deviceFamily, clearScrollback, theme, font
         // Terminal ▸ Font ▸ (the rest of Font is the family/weight lists)
@@ -32,6 +32,7 @@ nonisolated enum ViewMenuLayout {
             switch self {
             case .toggleSidebar: "Toggle Sidebar"
             case .sidebarAtLaunch: "Show Sidebar at Launch"
+            case .keepSidebarOpen: "Keep Sidebar Open"
             case .groupColors: "Group Colors"
             case .reorderGroups: "Reorder Groups…"
             case .addHosts: "Add Hosts…"
@@ -74,7 +75,7 @@ nonisolated enum ViewMenuLayout {
 
     static let tree: [Node] = [
         .item(.toggleSidebar),
-        .submenu("Sidebar", [.item(.sidebarAtLaunch), .item(.groupColors), .item(.reorderGroups), .item(.addHosts)]),
+        .submenu("Sidebar", [.item(.sidebarAtLaunch), .item(.keepSidebarOpen), .item(.groupColors), .item(.reorderGroups), .item(.addHosts)]),
         .submenu("Terminal", [
             .item(.toggleHighlighting), .item(.autoPage), .item(.deviceFamily), .item(.clearScrollback),
             .item(.theme),
