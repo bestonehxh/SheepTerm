@@ -121,6 +121,25 @@ final class SessionTerminalHost {
     /// Paste's line delay starts only then (`PaceSchedule`). nil = always
     /// drained (SSH, local).
     var lineDrained: (() -> Bool)?
+    /// When the session last received a byte from the device (the serial /
+    /// SSH controller stamps it as it feeds the terminal). Safe Paste's
+    /// quiet gap counts from it (`PaceSchedule`, 6.0 (14)); nil = never.
+    private(set) var lastDeviceByteAt: Date?
+    /// The device's last (partial) line — what came after its last newline,
+    /// at most 512 bytes — for Safe Paste's prompt check (`PaceSchedule.promptAtEnd`).
+    private(set) var deviceTail: [UInt8] = []
+
+    /// The serial / SSH controller calls this with every chunk the device sent, after the terminal has it.
+    func noteDeviceBytes(_ bytes: [UInt8]) {
+        lastDeviceByteAt = Date()
+        if let newline = bytes.lastIndex(of: 0x0A) { deviceTail = Array(bytes[(newline + 1)...]) } else { deviceTail += bytes }
+        if deviceTail.count > 512 { deviceTail.removeFirst(deviceTail.count - 512) }
+    }
+    /// When the controller last answered a pager prompt for a paced run; the
+    /// pacer counts it as progress (`PaceSchedule.noteProgress`), so a long
+    /// paged output is not ended by the quiet cap. nil = never.
+    private(set) var lastPagerAnswerAt: Date?
+    func notePagerAnswered() { lastPagerAnswerAt = Date() }
     /// The line's speed (serial controller: the open port's baud), for Safe
     /// Paste's drain cap (`PaceSchedule.drainCap`). nil = unknown (telnet).
     var lineBaud: (() -> Int?)?
@@ -668,7 +687,8 @@ final class SessionTerminalHost {
         }
     }
 
-    /// A paced Safe Paste is still sending (Send File via XMODEM waits for it).
+    /// A paced Safe Paste is still sending (Send File via XMODEM waits for it;
+    /// the controllers answer a pager prompt while it is).
     var isPacingPaste: Bool { pastePacer.isActive }
 
     // MARK: - Command history (5.0 (1))
@@ -1250,6 +1270,9 @@ final class SessionTerminalHost {
                 return self.takeLastSendAccepted?() ?? true
             },
             drained: { [weak self] in self?.lineDrained?() ?? true },
+            lastDeviceByte: { [weak self] in self?.lastDeviceByteAt },
+            deviceTail: { [weak self] in self?.deviceTail ?? [] },
+            lastPagerAnswer: { [weak self] in self?.lastPagerAnswerAt },
             baud: lineBaud?(),
             progress: { [weak self] sent, total in
                 self?.showPasteHUD(sent: sent, total: total, delayMilliseconds: delayMilliseconds)
@@ -1263,7 +1286,7 @@ final class SessionTerminalHost {
                 // a config with holes in the middle.
                 // The same goes for a session that ended or a tab switched
                 // away mid-paste: the switch is half-configured either way.
-                if reason == .inputDiscarded || reason == .deviceNotTakingInput
+                if reason == .inputDiscarded || reason == .deviceNotTakingInput || reason == .deviceStillSending || reason == .deviceAtPager
                     || (reason == .sessionEnded && sent < plan.lines.count) {
                     // Deferred: this completion can run inside SwiftUI's
                     // `dismantleNSView` (tab switch), where a modal must not spin.
@@ -1286,6 +1309,15 @@ final class SessionTerminalHost {
             // The last line is still waiting to leave (flow control held,
             // or the far end stopped reading) past `PaceSchedule.drainCap`.
             String(localized: "The device is not taking input (\(sent) of \(total) lines sent), so the rest was not sent.")
+        case .deviceStillSending:
+            // The device kept printing for the whole quiet cap after a line
+            // left (`PaceSchedule.quietCapMilliseconds`): the next line would
+            // have been typed into that output and lost.
+            String(localized: "The device was still sending after \(PaceSchedule.quietCapMilliseconds / 1000) s (\(sent) of \(total) lines sent), so the rest was not sent.")
+        case .deviceAtPager:
+            // The quiet cap passed with the device at a pager prompt that two
+            // answers did not turn: the next line would have quit the pager.
+            String(localized: "The device stayed at a --More-- prompt for \(PaceSchedule.quietCapMilliseconds / 1000) s (\(sent) of \(total) lines sent), so the rest was not sent.")
         default:
             String(localized: "The session ended or the tab was switched away after \(sent) of \(total) lines, so the rest was not sent.")
         }

@@ -1,10 +1,10 @@
 import Foundation
 
-/// A USB serial cable plugged in while the app runs (5.0 (29), the user's
-/// option 1): a dashed "shadow" tab at the end of the tab strip for
-/// `lifetime` seconds — click = open that console. In the app only, never a
-/// system notification. The pure rules; `SerialWatcher` feeds the paths
-/// (IOKit notifications, no polling) and `AppModel` shows the shadow.
+/// A USB serial cable plugged in while the app runs (5.0 (29)): since
+/// 6.0 (14) the "Console cable" card (`SerialArrivalCard`, its lifecycle) for
+/// `lifetime` seconds. In the app only, never a system notification. The
+/// pure rules; `SerialWatcher` feeds the paths (IOKit notifications, no
+/// polling) and `AppModel` drives the card.
 nonisolated enum SerialArrival {
     static let lifetime: TimeInterval = 15
     /// A cable's callout device, not one of the Mac's own ports.
@@ -23,13 +23,13 @@ nonisolated enum SerialArrival {
         return ((path as NSString).deletingLastPathComponent as NSString).appendingPathComponent("cu." + name.dropFirst(4))
     }
 
-    /// The name on the shadow tab: `usbserial-1410`, not `/dev/cu.usbserial-1410`.
+    /// The name on the card: `usbserial-1410`, not `/dev/cu.usbserial-1410`.
     static func shortName(_ path: String) -> String {
         let name = (path as NSString).lastPathComponent
         return name.hasPrefix("cu.") ? String(name.dropFirst(3)) : name
     }
 
-    /// What the shadow opens: the saved serial host on that device, else a
+    /// What the card opens by default: the saved serial host on that device, else a
     /// fresh console at the speed its USB device asks for (`ConsoleBaud`:
     /// an Aruba CX USB-C port 115200, every console cable 9600). Not the last
     /// recent's baud any more (5.0 (39)): one cable goes from a Cisco to an
@@ -48,28 +48,6 @@ nonisolated enum SerialArrival {
     static func recentStep(didNote: Bool, noted: Int?, baud: Int) -> RecentStep? {
         if let noted, noted != baud { return .move(from: noted) }
         return didNote ? nil : .note
-    }
-
-    /// The shadow tab now: one device at a time (the newest arrival), gone
-    /// when it expires, when the cable is pulled, or when a tab already
-    /// holds that device.
-    struct Shadow: Equatable {
-        let path: String
-        let shownAt: Date
-
-        var name: String { SerialArrival.shortName(path) }
-
-        func isLive(now: Date) -> Bool { now.timeIntervalSince(shownAt) < SerialArrival.lifetime && now >= shownAt }
-    }
-
-    /// The shadow after a device event. `arrived`: a cable appeared (nil = a
-    /// device went away, `gone`). `openPaths`: devices a tab already holds.
-    static func next(current: Shadow?, arrived: String?, gone: String?, openPaths: Set<String>, now: Date) -> Shadow? {
-        let open = Set(openPaths.map(calloutPath))
-        if let arrived, isCable(arrived), !open.contains(calloutPath(arrived)) { return Shadow(path: arrived, shownAt: now) }
-        if let current, let gone, calloutPath(current.path) == calloutPath(gone) { return nil }
-        guard let current, current.isLive(now: now), !open.contains(calloutPath(current.path)) else { return nil }
-        return current
     }
 
     /// A device re-enumerating on wake is not a cable just plugged in.

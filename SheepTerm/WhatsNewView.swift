@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// What's New for 6.0 (13): one page per user-visible change (a picture of
+/// What's New for 6.0 (14): one page per user-visible change (a picture of
 /// the real UI with sample data where it helps, else a symbol per line),
-/// then what else is new. Centred, one fixed picture box so the pages never
+/// then the fixes. 6.0 (14)'s pages are text only (the 6.0 (13) pictures
+/// left the asset catalog with their pages). Centred, one fixed picture box so the pages never
 /// jump. Opens on its own once per release (`WhatsNewPlan`, recorded when
 /// SHOWN) and from Help ▸ What's New…; Close / Esc on every page.
 struct WhatsNewView: View {
@@ -26,38 +27,34 @@ struct WhatsNewView: View {
     }
 
     private static let pages: [Page] = [
-        Page(image: "WhatsNewGroups", title: "Groups inside groups",
-             lead: "Folders in folders, three levels deep.",
-             steps: ["Right-click a group ▸ New Group…, or drag one group onto another.",
-                     "A coloured bar marks each level.",
-                     "View ▸ Sidebar ▸ Group Colors turns the bars off."]),
-        Page(image: "WhatsNewPanes", title: "Split panes in a grid",
-             lead: "Up to 3 × 3, always tidy.",
-             steps: ["⌘D splits right, ⇧⌘D splits down.",
-                     "Drag a tab, a pane or a host anywhere into a pane: the lit half is where it goes.",
-                     "Closing a tab of several panes asks first."]),
-        Page(image: "WhatsNewBaud", title: "Wrong console speed",
-             lead: "A hint offers the next speed.",
-             steps: ["Garbled text: Garbled? Try 115200.",
-                     "Three Returns and no answer: No response?",
-                     "Try only changes the port's speed — nothing is sent."]),
-        Page(image: "WhatsNewFileServer", title: "File Server address",
-             lead: "Pick the address your devices reach.",
-             steps: ["Click the server icon, left of the clock.",
-                     "Automatic, or one network interface.",
-                     "TFTP listens on port 69, the one devices expect."]),
+        Page(image: nil, title: "Ping tab",
+             lead: "",
+             steps: ["Rows keep the order you type: an address typed between two rows lands there.",
+                     "Drag rows to reorder them.",
+                     "Right-click an IP ▸ Rename…: a name for this tab only, nothing saved.",
+                     "An empty tab shows three chasing dots; the tab icon is three circles."],
+             symbols: ["list.bullet.rectangle", "arrow.up.arrow.down", "pencil", "circle.dotted"]),
+        Page(image: nil, title: "Console cable",
+             lead: "",
+             steps: ["Plug in a USB console cable: a card opens at the bottom right.",
+                     "Device and cable kind, a speed menu with Other…, and Connect.",
+                     "It goes after 15 s, when the cable is pulled, or when a tab opens the port.",
+                     "The chip at the end of the tab strip is gone."],
+             symbols: ["cable.connector", "chevron.up.chevron.down", "timer", "xmark.circle"]),
         Page(image: nil, title: "Safe Paste",
              lead: "",
-             steps: ["Send Line by Line waits for each line to leave a serial line.",
-                     "100 ms between lines by default.",
-                     "Hidden characters are removed: what you review is what is sent."],
-             symbols: ["text.line.first.and.arrowtriangle.forward", "timer", "eye"]),
-        Page(image: nil, title: "Also",
+             steps: ["Send Line by Line waits until the device is quiet for the delay and its prompt is back.",
+                     "A --More-- prompt is answered during the run, after a short pause.",
+                     "A device that keeps sending or stays at --More-- ends the run with a notice, not a garbled command."],
+             symbols: ["text.line.first.and.arrowtriangle.forward", "return", "exclamationmark.triangle.fill"]),
+        Page(image: nil, title: "Fixes",
              lead: "",
-             steps: ["View ▸ Sidebar: Show Sidebar at Launch, Keep Sidebar Open, Group Colors.",
-                     "The View menu is grouped: Sidebar, Terminal, Web, AI, Bottom Bar.",
-                     "Earlier in 6.0: Open File, Serve File and Ping tabs."],
-             symbols: ["sidebar.left", "menubar.rectangle", "clock.arrow.circlepath"]),
+             steps: ["Ping: the Rename… popover hangs off the name.",
+                     "The console card's 15 s waits while SheepTerm is hidden or its window is in the Dock.",
+                     "Click anywhere else to drop a selection.",
+                     "Split-pane headers light up under the pointer.",
+                     "File Server: a tidier card — the server chips on top, one command box, the interface beside the address."],
+             symbols: ["pencil", "timer", "selection.pin.in.out", "menubar.rectangle", "network"]),
     ]
 
     static var pageCount: Int { pages.count }

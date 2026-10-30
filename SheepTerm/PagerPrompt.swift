@@ -132,3 +132,57 @@ nonisolated struct PagerDetector {
         return answered <= PagerDetector.maxPerSecond
     }
 }
+
+/// When the space that answers a pager prompt goes out (6.0 (14), found with
+/// a pty replaying a 2930F's recorded output): never at the instant the
+/// prompt is seen — the device is still writing the cursor sequences after
+/// its `-- MORE --` legend and drops input meanwhile — but
+/// `answerSettleMilliseconds` later; and once more if nothing at all came
+/// back within `answerRetryMilliseconds` of it (a turned page prints within
+/// a few ms at any speed, so a silent 1.5 s means the space was lost), never
+/// a third time for the same prompt. One per session; a new detection
+/// replaces the pending answer (`generation`). Used by View ▸ Auto-page and
+/// by a paced Safe Paste run alike. Pure: the controller owns the timers.
+nonisolated struct PagerAnswerPlan {
+    static let answerSettleMilliseconds = 150
+    static let answerRetryMilliseconds = 1_500
+
+    /// The current detection; a timer carrying an older one does nothing.
+    private(set) var generation = 0
+    /// Spaces sent for the current detection (0, 1 or 2).
+    private(set) var attempts = 0
+    /// When the last space for it went out (the caller's clock, seconds).
+    private(set) var sentAt: Double?
+
+    init() {}
+
+    /// The detector saw a prompt: the caller arms the settle timer with the
+    /// returned generation.
+    mutating func detected() -> Int {
+        generation += 1
+        attempts = 0
+        sentAt = nil
+        return generation
+    }
+
+    /// The settle timer fired: true = send the space now (the caller then
+    /// arms the retry timer with the same generation).
+    mutating func settleFired(generation: Int, now: Double) -> Bool {
+        guard generation > 0, generation == self.generation, attempts == 0 else { return false }   // 0 = no detection yet
+        attempts = 1
+        sentAt = now
+        return true
+    }
+
+    /// The retry timer fired: true = the first space was lost (no device
+    /// byte since it went out, `lastDeviceByte` on the same clock, nil =
+    /// none ever), send it once more.
+    mutating func retryFired(generation: Int, lastDeviceByte: Double?, now: Double) -> Bool {
+        guard generation == self.generation, attempts == 1, let sentAt,
+              ((now - sentAt) * 1000).rounded() >= Double(Self.answerRetryMilliseconds) else { return false }
+        if let lastDeviceByte, lastDeviceByte > sentAt { return false }
+        attempts = 2
+        self.sentAt = now
+        return true
+    }
+}

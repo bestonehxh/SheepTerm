@@ -1,158 +1,210 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "100 ms between lines by default." : {
+    "%@ baud" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Standardmäßig 100 ms zwischen den Zeilen."
+            "value" : "%@ Baud"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "100 ms entre líneas por defecto."
+            "value" : "%@ baudios"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "100 ms entre les lignes par défaut."
+            "value" : "%@ bauds"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "行間はデフォルトで 100 ms。"
+            "value" : "%@ bps"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "기본적으로 줄 사이 100 ms."
+            "value" : "%@ 보드"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "100 ms entre linhas por padrão."
+            "value" : "%@ baud"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "По умолчанию 100 мс между строками."
+            "value" : "%@ бод"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "默认行间隔 100 ms。"
+            "value" : "%@ 波特"
           }
         }
       }
     },
-    "A coloured bar marks each level." : {
+    "50 – 4000000 baud" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ein farbiger Balken kennzeichnet jede Ebene."
+            "value" : "50 – 4000000 Baud"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Una barra de color marca cada nivel."
+            "value" : "50 – 4000000 baudios"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Une barre de couleur marque chaque niveau."
+            "value" : "50 – 4000000 bauds"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "色付きのバーで階層がわかります。"
+            "value" : "50 – 4000000 bps"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "색 막대로 각 단계를 표시합니다."
+            "value" : "50 – 4000000 보드"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uma barra colorida marca cada nível."
+            "value" : "50 – 4000000 baud"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Цветная полоса отмечает каждый уровень."
+            "value" : "50 – 4000000 бод"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "彩色竖条标出每一层。"
+            "value" : "50 – 4000000 波特"
           }
         }
       }
     },
-    "A hint offers the next speed." : {
+    "A --More-- prompt is answered during the run, after a short pause." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ein Hinweis bietet die nächste Geschwindigkeit an."
+            "value" : "Eine --More--Aufforderung wird während des Sendens nach kurzer Pause beantwortet."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Un aviso ofrece la siguiente velocidad."
+            "value" : "Durante el envío, un aviso --More-- se responde tras una breve pausa."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Une suggestion propose la vitesse suivante."
+            "value" : "Pendant l’envoi, une invite --More-- reçoit une réponse après une courte pause."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "次の速度を提案します。"
+            "value" : "送信中の --More-- プロンプトには、少し間を置いて応答します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "다음 속도를 제안합니다."
+            "value" : "보내는 동안 --More-- 프롬프트에는 잠깐 멈춘 뒤 응답합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uma dica oferece a próxima velocidade."
+            "value" : "Durante o envio, um aviso --More-- é respondido após uma breve pausa."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Подсказка предложит следующую скорость."
+            "value" : "Во время отправки приглашение --More-- получает ответ после короткой паузы."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "提示会建议下一个速率。"
+            "value" : "发送过程中遇到 --More-- 提示，会稍等片刻后自动应答。"
+          }
+        }
+      }
+    },
+    "A device that keeps sending or stays at --More-- ends the run with a notice, not a garbled command." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sendet ein Gerät ununterbrochen oder bleibt es bei --More-- stehen, endet das Senden mit einem Hinweis statt mit einem verstümmelten Befehl."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si el dispositivo no deja de enviar o se queda en --More--, el envío termina con un aviso, no con un comando mutilado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un appareil qui n’arrête pas d’envoyer ou reste sur --More-- met fin à l’envoi avec un avis, pas avec une commande tronquée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送り続けるデバイスや --More-- で止まったデバイスでは、壊れたコマンドを送らずにお知らせを出して終了します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계속 출력하거나 --More--에 머무는 장치는 깨진 명령 대신 알림과 함께 전송을 끝냅니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um dispositivo que não para de enviar ou fica em --More-- encerra o envio com um aviso, não com um comando truncado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Если устройство не умолкает или застряло на --More--, отправка завершается уведомлением, а не искажённой командой."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备一直在输出或停在 --More-- 时，会以提示结束发送，而不是发出残缺的命令。"
           }
         }
       }
@@ -209,106 +261,106 @@
         }
       }
     },
-    "Also" : {
+    "An empty tab shows three chasing dots; the tab icon is three circles." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Außerdem"
+            "value" : "Ein leerer Tab zeigt drei wandernde Punkte; das Tab-Symbol sind drei Kreise."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Además"
+            "value" : "Una pestaña vacía muestra tres puntos que se persiguen; el icono de la pestaña son tres círculos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aussi"
+            "value" : "Un onglet vide affiche trois points qui se suivent ; l’icône de l’onglet est faite de trois cercles."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "そのほか"
+            "value" : "空のタブには追いかけ合う 3 つの点が表示され、タブのアイコンは 3 つの円になりました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "그 밖에"
+            "value" : "빈 탭에는 서로 쫓는 점 세 개가 보이고, 탭 아이콘은 원 세 개입니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Também"
+            "value" : "Uma aba vazia mostra três pontos em sequência; o ícone da aba são três círculos."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "А также"
+            "value" : "В пустой вкладке бегут три точки; значок вкладки — три круга."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "其他"
+            "value" : "空标签页显示三个追逐的圆点；标签页图标是三个圆圈。"
           }
         }
       }
     },
-    "Automatic, or one network interface." : {
+    "Baud" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatisch oder eine Netzwerkschnittstelle."
+            "value" : "Baud"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automática o una interfaz de red."
+            "value" : "Baudios"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatique, ou une interface réseau."
+            "value" : "Bauds"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動、またはネットワークインターフェイスを1つ選択。"
+            "value" : "ボーレート"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자동 또는 네트워크 인터페이스 하나."
+            "value" : "보드"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automático ou uma interface de rede."
+            "value" : "Baud"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Автоматически или один сетевой интерфейс."
+            "value" : "Бод"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自动，或指定一个网络接口。"
+            "value" : "波特率"
           }
         }
       }
@@ -469,106 +521,158 @@
         }
       }
     },
-    "Click the server icon, left of the clock." : {
+    "Click anywhere else to drop a selection." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auf das Server-Symbol links neben der Uhr klicken."
+            "value" : "Ein Klick an eine andere Stelle hebt eine Auswahl auf."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Haz clic en el icono del servidor, a la izquierda del reloj."
+            "value" : "Haz clic en cualquier otro sitio para quitar una selección."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cliquez sur l’icône du serveur, à gauche de l’horloge."
+            "value" : "Cliquez ailleurs pour retirer une sélection."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "時計の左にあるサーバアイコンをクリック。"
+            "value" : "ほかの場所をクリックすると選択が解除されます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "시계 왼쪽의 서버 아이콘을 클릭하세요."
+            "value" : "다른 곳을 클릭하면 선택이 해제됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clique no ícone do servidor, à esquerda do relógio."
+            "value" : "Clique em qualquer outro lugar para desfazer uma seleção."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Нажмите значок сервера слева от часов."
+            "value" : "Щелчок в любом другом месте снимает выделение."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "点按时钟左侧的服务器图标。"
+            "value" : "点击其他任何地方即可取消选择。"
           }
         }
       }
     },
-    "Closing a tab of several panes asks first." : {
+    "Console cable" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Das Schließen eines Tabs mit mehreren Bereichen fragt vorher nach."
+            "value" : "Konsolenkabel"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cerrar una pestaña con varios paneles pide confirmación."
+            "value" : "Cable de consola"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fermer un onglet à plusieurs volets demande d’abord confirmation."
+            "value" : "Câble console"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "複数ペインのタブを閉じるときは確認します。"
+            "value" : "コンソールケーブル"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "여러 창이 있는 탭을 닫을 때는 먼저 묻습니다."
+            "value" : "콘솔 케이블"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fechar uma aba com vários painéis pede confirmação."
+            "value" : "Cabo de console"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Перед закрытием вкладки с несколькими панелями появится вопрос."
+            "value" : "Консольный кабель"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "关闭含多个窗格的标签页前会先询问。"
+            "value" : "控制台线缆"
+          }
+        }
+      }
+    },
+    "Console cable %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Konsolenkabel %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cable de consola %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Câble console %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンソールケーブル %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "콘솔 케이블 %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cabo de console %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Консольный кабель %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "控制台线缆 %@"
           }
         }
       }
@@ -683,366 +787,210 @@
         }
       }
     },
-    "Drag a tab, a pane or a host anywhere into a pane: the lit half is where it goes." : {
+    "Device and cable kind, a speed menu with Other…, and Connect." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Einen Tab, Bereich oder Host irgendwo in einen Bereich ziehen: Die hervorgehobene Hälfte zeigt, wohin er kommt."
+            "value" : "Gerät und Kabeltyp, ein Geschwindigkeitsmenü mit „Andere …“ und „Verbinden“."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arrastra una pestaña, un panel o un host a cualquier parte de un panel: la mitad iluminada indica dónde irá."
+            "value" : "Dispositivo y tipo de cable, un menú de velocidad con Otra… y Conectar."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Faites glisser un onglet, un volet ou un hôte n’importe où dans un volet : la moitié éclairée montre où il ira."
+            "value" : "Appareil et type de câble, un menu de vitesse avec Autre… et Se connecter."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "タブ・ペイン・ホストをペインのどこにでもドラッグ。光った半分が配置先です。"
+            "value" : "デバイスとケーブルの種類、「その他…」付きの速度メニュー、「接続」。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "탭, 창 또는 호스트를 창의 아무 곳에나 드래그하세요. 밝게 표시된 절반이 놓일 위치입니다."
+            "value" : "장치와 케이블 종류, 기타…가 있는 속도 메뉴, 연결 버튼."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arraste uma aba, um painel ou um host para qualquer lugar de um painel: a metade destacada mostra onde ele vai ficar."
+            "value" : "Dispositivo e tipo de cabo, um menu de velocidade com Outra… e Conectar."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Перетащите вкладку, панель или хост в любое место панели: подсвеченная половина покажет, куда он встанет."
+            "value" : "Устройство и тип кабеля, меню скорости с пунктом «Другая…» и «Подключиться»."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "把标签页、窗格或主机拖到窗格任意位置：亮起的一半就是放置位置。"
+            "value" : "设备和线缆类型、带“其他…”的速率菜单，以及“连接”。"
           }
         }
       }
     },
-    "Earlier in 6.0: Open File, Serve File and Ping tabs." : {
+    "Drag rows to reorder them." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bereits in 6.0: Datei öffnen, Datei bereitstellen und Ping-Tabs."
+            "value" : "Zeilen zum Umsortieren ziehen."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antes en 6.0: Abrir archivo, Servir archivo y pestañas de Ping."
+            "value" : "Arrastra las filas para reordenarlas."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Plus tôt en 6.0 : Ouvrir un fichier, Servir un fichier et onglets Ping."
+            "value" : "Faites glisser les lignes pour les réordonner."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "6.0 の既存機能：ファイルを開く、ファイルを配信、Ping タブ。"
+            "value" : "行をドラッグして並べ替えます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "6.0에서 먼저 추가됨: 파일 열기, 파일 제공, Ping 탭."
+            "value" : "행을 드래그해 순서를 바꿉니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antes no 6.0: Abrir arquivo, Servir arquivo e abas de Ping."
+            "value" : "Arraste as linhas para reordená-las."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ранее в 6.0: открытие файлов, раздача файлов и вкладки Ping."
+            "value" : "Перетаскивайте строки, чтобы изменить порядок."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "6.0 早先加入：打开文件、提供文件和 Ping 标签页。"
+            "value" : "拖动行即可调整顺序。"
           }
         }
       }
     },
-    "File Server address" : {
+    "File Server: a tidier card — the server chips on top, one command box, the interface beside the address." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "File-Server-Adresse"
+            "value" : "Dateiserver: eine aufgeräumtere Karte – die Server-Chips oben, ein Befehlsfeld, die Schnittstelle neben der Adresse."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dirección del servidor de archivos"
+            "value" : "Servidor de archivos: una tarjeta más ordenada: los chips de servidor arriba, un solo cuadro de comandos y la interfaz junto a la dirección."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Adresse du serveur de fichiers"
+            "value" : "Serveur de fichiers : une carte plus nette — les puces des serveurs en haut, un seul cadre de commandes, l’interface à côté de l’adresse."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ファイルサーバのアドレス"
+            "value" : "ファイルサーバ：カードを整理 — サーバのチップを上に、コマンド欄を1つに、アドレスの横にインターフェイス。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "파일 서버 주소"
+            "value" : "파일 서버: 더 깔끔해진 카드 — 서버 칩은 위에, 명령 상자는 하나로, 주소 옆에 인터페이스."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endereço do servidor de arquivos"
+            "value" : "Servidor de Arquivos: um cartão mais organizado — os chips dos servidores no topo, uma caixa de comandos, a interface ao lado do endereço."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Адрес файл-сервера"
+            "value" : "Файловый сервер: карточка аккуратнее — кнопки серверов сверху, одно поле команд, интерфейс рядом с адресом."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "文件服务器地址"
+            "value" : "文件服务器：卡片更整洁——服务器按钮在上方，命令合为一个框，地址旁显示网络接口。"
           }
         }
       }
     },
-    "Folders in folders, three levels deep." : {
+    "Fixes" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ordner in Ordnern, bis zu drei Ebenen."
+            "value" : "Korrekturen"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Carpetas dentro de carpetas, hasta tres niveles."
+            "value" : "Correcciones"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Des dossiers dans des dossiers, sur trois niveaux."
+            "value" : "Corrections"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "フォルダの中にフォルダ、3階層まで。"
+            "value" : "修正"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "폴더 안의 폴더, 세 단계까지."
+            "value" : "수정 사항"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pastas dentro de pastas, até três níveis."
+            "value" : "Correções"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Папки в папках, до трёх уровней."
+            "value" : "Исправления"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "文件夹中套文件夹，最多三层。"
-          }
-        }
-      }
-    },
-    "Garbled text: Garbled? Try 115200." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unleserlicher Text: Unleserlich? 115200 versuchen."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto ilegible: ¿Ilegible? Probar 115200."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texte illisible : Illisible ? Essayer 115200."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "文字化け：文字化け？ 115200 を試す。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "글자가 깨질 때: 글자가 깨지나요? 115200 시도."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto ilegível: Ilegível? Tentar 115200."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Мусор на экране: «Мусор на экране? Попробовать 115200»."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "乱码：乱码？试试 115200。"
-          }
-        }
-      }
-    },
-    "Groups inside groups" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gruppen in Gruppen"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Grupos dentro de grupos"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Des groupes dans les groupes"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "グループの中にグループ"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "그룹 안의 그룹"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Grupos dentro de grupos"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Группы внутри групп"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "组中有组"
-          }
-        }
-      }
-    },
-    "Hidden characters are removed: what you review is what is sent." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unsichtbare Zeichen werden entfernt: Gesendet wird genau, was du prüfst."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se eliminan los caracteres ocultos: se envía lo que revisas."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Les caractères cachés sont retirés : ce que vous relisez est ce qui est envoyé."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "隠れた文字は取り除かれ、確認した内容がそのまま送信されます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "숨은 문자는 제거되어, 검토한 내용 그대로 전송됩니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Caracteres ocultos são removidos: o que você revisa é o que é enviado."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скрытые символы удаляются: отправляется ровно то, что вы проверили."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "隐藏字符会被移除：你检查的内容就是发送的内容。"
+            "value" : "修复"
           }
         }
       }
@@ -1251,6 +1199,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "间隔"
+          }
+        }
+      }
+    },
+    "It goes after 15 s, when the cable is pulled, or when a tab opens the port." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sie verschwindet nach 15 s, wenn das Kabel gezogen wird oder ein Tab den Port öffnet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desaparece a los 15 s, al desconectar el cable o cuando una pestaña abre el puerto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elle disparaît après 15 s, quand le câble est retiré ou quand un onglet ouvre le port."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "15 秒後、ケーブルを抜いたとき、またはタブがポートを開いたときに消えます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "15초가 지나거나, 케이블을 뽑거나, 탭이 포트를 열면 사라집니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ele some após 15 s, quando o cabo é desconectado ou quando uma aba abre a porta."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Она исчезает через 15 с, когда кабель вынут или когда вкладка открывает порт."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "15 秒后、拔下线缆时或有标签页打开该端口时，卡片会消失。"
           }
         }
       }
@@ -1827,54 +1827,106 @@
         }
       }
     },
-    "Pick the address your devices reach." : {
+    "Open this console at %@ baud" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die Adresse wählen, die deine Geräte erreichen."
+            "value" : "Diese Konsole mit %@ Baud öffnen"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige la dirección a la que llegan tus dispositivos."
+            "value" : "Abrir esta consola a %@ baudios"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choisissez l’adresse que vos appareils atteignent."
+            "value" : "Ouvrir cette console à %@ bauds"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "機器から届くアドレスを選べます。"
+            "value" : "このコンソールを %@ bps で開く"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "장비가 접속할 주소를 고르세요."
+            "value" : "이 콘솔을 %@ 보드로 열기"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolha o endereço que seus dispositivos alcançam."
+            "value" : "Abrir este console a %@ baud"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Выберите адрес, доступный вашим устройствам."
+            "value" : "Открыть эту консоль на %@ бод"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择设备能访问到的地址。"
+            "value" : "以 %@ 波特打开此控制台"
+          }
+        }
+      }
+    },
+    "Other…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Andere …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otra…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autre…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その他…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기타…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outra…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Другая…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他…"
           }
         }
       }
@@ -1931,6 +1983,58 @@
         }
       }
     },
+    "Ping tab" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping-Tab"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pestaña de ping"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Onglet Ping"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping タブ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping 탭"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aba de Ping"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вкладка Ping"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping 标签页"
+          }
+        }
+      }
+    },
     "Ping · %lld" : {
       "localizations" : {
         "de" : {
@@ -1979,6 +2083,110 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ping · %lld"
+          }
+        }
+      }
+    },
+    "Ping: the Rename… popover hangs off the name." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping: Das Popover von „Umbenennen …“ hängt jetzt am Namen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping: el globo de Renombrar… sale del nombre."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping : la bulle Renommer… part du nom."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping：名称変更…のポップオーバーが名前から出るようになりました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping: 이름 변경… 팝오버가 이름에서 나옵니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping: o balão de Renomear… sai do nome."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping: всплывающее окно «Переименовать…» теперь крепится к имени."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ping：“重命名…”的弹出框现在挂在名称上。"
+          }
+        }
+      }
+    },
+    "Plug in a USB console cable: a card opens at the bottom right." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USB-Konsolenkabel einstecken: Unten rechts öffnet sich eine Karte."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conecta un cable de consola USB: se abre una tarjeta abajo a la derecha."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Branchez un câble console USB : une carte s’ouvre en bas à droite."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USB コンソールケーブルを挿すと、右下にカードが開きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USB 콘솔 케이블을 꽂으면 오른쪽 아래에 카드가 열립니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conecte um cabo de console USB: um cartão abre no canto inferior direito."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключите USB-консольный кабель — справа внизу откроется карточка."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "插入 USB 控制台线缆：右下角会打开一张卡片。"
           }
         }
       }
@@ -2243,54 +2451,106 @@
         }
       }
     },
-    "Right-click a group ▸ New Group…, or drag one group onto another." : {
+    "Right-click an IP ▸ Rename…: a name for this tab only, nothing saved." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Rechtsklick auf eine Gruppe ▸ Neue Gruppe … oder eine Gruppe auf eine andere ziehen."
+            "value" : "Rechtsklick auf eine IP ▸ Umbenennen …: ein Name nur für diesen Tab, nichts wird gespeichert."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clic derecho en un grupo ▸ Nuevo grupo…, o arrastra un grupo sobre otro."
+            "value" : "Clic derecho en una IP ▸ Renombrar…: un nombre solo para esta pestaña, no se guarda nada."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clic droit sur un groupe ▸ Nouveau groupe…, ou faites glisser un groupe sur un autre."
+            "value" : "Clic droit sur une IP ▸ Renommer… : un nom pour cet onglet seulement, rien n’est enregistré."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "グループを右クリック ▸ 新規グループ…、またはグループを別のグループにドラッグ。"
+            "value" : "IP を右クリック ▸ 名称変更…：このタブだけの名前で、何も保存されません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "그룹을 오른쪽 클릭 ▸ 새 그룹…, 또는 그룹을 다른 그룹 위로 드래그하세요."
+            "value" : "IP를 오른쪽 클릭 ▸ 이름 변경…: 이 탭에서만 쓰는 이름이며 저장되지 않습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clique com o botão direito em um grupo ▸ Novo grupo…, ou arraste um grupo para outro."
+            "value" : "Clique com o botão direito em um IP ▸ Renomear…: um nome só para esta aba, nada é salvo."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Правый клик по группе ▸ Новая группа… или перетащите одну группу на другую."
+            "value" : "Правый клик по IP ▸ Переименовать…: имя только для этой вкладки, ничего не сохраняется."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "右键点按组 ▸ 新建组…，或把一个组拖到另一个组上。"
+            "value" : "右键点按 IP ▸ 重命名…：名称仅用于此标签页，不会保存。"
+          }
+        }
+      }
+    },
+    "Rows keep the order you type: an address typed between two rows lands there." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeilen behalten die eingegebene Reihenfolge: Eine zwischen zwei Zeilen eingetippte Adresse landet genau dort."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las filas siguen el orden en que las escribes: una dirección escrita entre dos filas queda ahí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les lignes gardent l’ordre de saisie : une adresse tapée entre deux lignes se place à cet endroit."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行は入力した順に並びます。2 つの行の間に入力したアドレスはその位置に入ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "행은 입력한 순서를 유지합니다. 두 행 사이에 입력한 주소는 그 자리에 들어갑니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As linhas mantêm a ordem digitada: um endereço digitado entre duas linhas entra ali."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Строки идут в том порядке, в каком вы их ввели: адрес, введённый между двумя строками, встаёт туда."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各行保持输入的顺序：输入在两行之间的地址就放在那里。"
           }
         }
       }
@@ -2399,106 +2659,158 @@
         }
       }
     },
-    "Send Line by Line waits for each line to leave a serial line." : {
+    "Send Line by Line waits until the device is quiet for the delay and its prompt is back." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zeilenweise senden wartet, bis jede Zeile die serielle Leitung verlassen hat."
+            "value" : "„Zeile für Zeile senden“ wartet, bis das Gerät eine Pause lang still ist und seine Eingabeaufforderung wieder da ist."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enviar línea a línea espera a que cada línea salga por la línea serie."
+            "value" : "Enviar línea por línea espera a que el dispositivo calle durante la pausa y vuelva su prompt."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Envoyer ligne par ligne attend que chaque ligne ait quitté la liaison série."
+            "value" : "Envoyer ligne par ligne attend que l’appareil reste silencieux pendant le délai et que son invite revienne."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「1行ずつ送信」はシリアル回線で各行が送り出されるのを待ちます。"
+            "value" : "「1 行ずつ送信」は、デバイスが待ち時間のあいだ静かになり、プロンプトが戻るまで待ちます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "한 줄씩 보내기는 시리얼 회선에서 각 줄이 나갈 때까지 기다립니다."
+            "value" : "한 줄씩 보내기는 장치가 지연 시간 동안 조용해지고 프롬프트가 돌아올 때까지 기다립니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enviar linha por linha espera cada linha sair pela linha serial."
+            "value" : "Enviar Linha por Linha espera o dispositivo ficar em silêncio pelo intervalo e o prompt voltar."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "«Отправлять построчно» ждёт, пока каждая строка уйдёт в последовательную линию."
+            "value" : "«Отправлять построчно» ждёт, пока устройство помолчит в течение задержки и снова покажет приглашение."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“逐行发送”会等每一行从串口线路发出。"
+            "value" : "“逐行发送”会等设备安静满一个延迟时间、且提示符回来后再发下一行。"
           }
         }
       }
     },
-    "Split panes in a grid" : {
+    "Speed" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Geteilte Bereiche im Raster"
+            "value" : "Geschwindigkeit"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Paneles divididos en cuadrícula"
+            "value" : "Velocidad"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Volets en grille"
+            "value" : "Vitesse"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "グリッドで画面分割"
+            "value" : "速度"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "격자로 창 분할"
+            "value" : "속도"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Painéis divididos em grade"
+            "value" : "Velocidade"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Панели сеткой"
+            "value" : "Скорость"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "网格分屏"
+            "value" : "速率"
+          }
+        }
+      }
+    },
+    "Split-pane headers light up under the pointer." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Kopfzeilen geteilter Bereiche leuchten unter dem Zeiger auf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las cabeceras de los paneles divididos se iluminan bajo el puntero."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les en-têtes des volets s’éclairent sous le pointeur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分割ペインのヘッダがポインタの下で明るくなります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "분할 패널의 머리글이 포인터 아래에서 밝아집니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os cabeçalhos dos painéis divididos se iluminam sob o ponteiro."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заголовки разделённых панелей подсвечиваются под указателем."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分屏窗格的标题栏在指针下会亮起。"
           }
         }
       }
@@ -2555,366 +2867,158 @@
         }
       }
     },
-    "TFTP listens on port 69, the one devices expect." : {
+    "The chip at the end of the tab strip is gone." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TFTP lauscht auf Port 69, den die Geräte erwarten."
+            "value" : "Der Chip am Ende der Tableiste ist weg."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TFTP escucha en el puerto 69, el que esperan los dispositivos."
+            "value" : "El chip al final de la barra de pestañas ya no está."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TFTP écoute sur le port 69, celui qu’attendent les appareils."
+            "value" : "La puce en bout de barre d’onglets a disparu."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TFTP は機器が想定するポート 69 で待ち受けます。"
+            "value" : "タブバーの末尾にあったチップはなくなりました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TFTP는 장비가 기대하는 포트 69에서 대기합니다."
+            "value" : "탭 막대 끝의 칩은 없어졌습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O TFTP escuta na porta 69, a que os dispositivos esperam."
+            "value" : "O chip no fim da barra de abas saiu."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TFTP слушает порт 69 — тот, что ждут устройства."
+            "value" : "Значка в конце полосы вкладок больше нет."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TFTP 监听设备默认使用的 69 端口。"
+            "value" : "标签栏末尾的小标签已移除。"
           }
         }
       }
     },
-    "The View menu is grouped: Sidebar, Terminal, Web, AI, Bottom Bar." : {
+    "The console card's 15 s waits while SheepTerm is hidden or its window is in the Dock." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Das Menü Darstellung ist gegliedert: Seitenleiste, Terminal, Web, KI, Statusleiste."
+            "value" : "Die 15 s der Konsolenkarte laufen nicht, solange SheepTerm ausgeblendet oder sein Fenster im Dock ist."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El menú Visualización está agrupado: Barra lateral, Terminal, Web, IA, Barra inferior."
+            "value" : "Los 15 s de la tarjeta de consola se detienen mientras SheepTerm está oculto o su ventana está en el Dock."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le menu Présentation est regroupé : Barre latérale, Terminal, Web, IA, Barre du bas."
+            "value" : "Les 15 s de la carte console s’arrêtent tant que SheepTerm est masqué ou que sa fenêtre est dans le Dock."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "表示メニューを整理：サイドバー、ターミナル、Web、AI、下部バー。"
+            "value" : "SheepTerm が非表示のときやウインドウが Dock にあるとき、コンソールカードの 15 秒は進みません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "보기 메뉴를 묶었습니다: 사이드바, 터미널, 웹, AI, 하단 막대."
+            "value" : "SheepTerm이 가려져 있거나 창이 Dock에 있는 동안 콘솔 카드의 15초는 멈춥니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O menu Visualizar foi agrupado: Barra lateral, Terminal, Web, IA, Barra inferior."
+            "value" : "Os 15 s do cartão de console param enquanto o SheepTerm está oculto ou sua janela está no Dock."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Меню «Вид» сгруппировано: боковая панель, терминал, веб, ИИ, нижняя панель."
+            "value" : "15 с карточки консоли не идут, пока SheepTerm скрыт или его окно в Dock."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "显示菜单已分组：边栏、终端、网页、AI、底栏。"
+            "value" : "SheepTerm 隐藏或其窗口在程序坞中时，控制台卡片的 15 秒不会计时。"
           }
         }
       }
     },
-    "Three Returns and no answer: No response?" : {
+    "Type a whole number" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dreimal Return und keine Antwort: Keine Antwort?"
+            "value" : "Ganze Zahl eingeben"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tres Retornos sin respuesta: ¿Sin respuesta?"
+            "value" : "Escribe un número entero"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Trois Retours sans réponse : Pas de réponse ?"
+            "value" : "Saisissez un nombre entier"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Return を3回押しても応答なし：応答なし？"
+            "value" : "整数を入力してください"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Return을 세 번 눌러도 응답이 없을 때: 응답이 없나요?"
+            "value" : "정수를 입력하세요"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Três Returns sem resposta: Sem resposta?"
+            "value" : "Digite um número inteiro"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Три нажатия Return без ответа: «Нет ответа?»"
+            "value" : "Введите целое число"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "按三次回车仍无回应：没有响应？"
-          }
-        }
-      }
-    },
-    "Try only changes the port's speed — nothing is sent." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Versuchen ändert nur die Geschwindigkeit des Ports – es wird nichts gesendet."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Probar solo cambia la velocidad del puerto: no se envía nada."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Essayer ne change que la vitesse du port — rien n’est envoyé."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "「試す」はポートの速度を変えるだけで、何も送信しません。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "시도는 포트 속도만 바꾸며 아무것도 보내지 않습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tentar só muda a velocidade da porta — nada é enviado."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "«Попробовать» только меняет скорость порта — ничего не отправляется."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "“试试”只更改端口速率，不发送任何内容。"
-          }
-        }
-      }
-    },
-    "Up to 3 × 3, always tidy." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bis zu 3 × 3, immer ordentlich."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hasta 3 × 3, siempre ordenado."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Jusqu’à 3 × 3, toujours bien rangé."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最大 3 × 3、いつも整然と。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "최대 3 × 3, 항상 깔끔하게."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Até 3 × 3, sempre organizado."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "До 3 × 3, всегда аккуратно."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最多 3 × 3，始终整齐。"
-          }
-        }
-      }
-    },
-    "View ▸ Sidebar ▸ Group Colors turns the bars off." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Darstellung ▸ Seitenleiste ▸ Gruppenfarben schaltet die Balken aus."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Visualización ▸ Barra lateral ▸ Colores de grupo desactiva las barras."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Présentation ▸ Barre latérale ▸ Couleurs des groupes masque les barres."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "表示 ▸ サイドバー ▸ グループの色 でバーをオフにできます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "보기 ▸ 사이드바 ▸ 그룹 색상으로 막대를 끌 수 있습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Visualizar ▸ Barra lateral ▸ Cores dos grupos desliga as barras."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Вид ▸ Боковая панель ▸ Цвета групп отключает полосы."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示 ▸ 边栏 ▸ 组颜色 可关闭色条。"
-          }
-        }
-      }
-    },
-    "View ▸ Sidebar: Show Sidebar at Launch, Keep Sidebar Open, Group Colors." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Darstellung ▸ Seitenleiste: Seitenleiste beim Start zeigen, Seitenleiste geöffnet lassen, Gruppenfarben."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Visualización ▸ Barra lateral: Mostrar barra lateral al abrir, Mantener la barra lateral abierta, Colores de grupo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Présentation ▸ Barre latérale : Afficher au lancement, Garder la barre latérale ouverte, Couleurs des groupes."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "表示 ▸ サイドバー：起動時にサイドバーを表示、サイドバーを開いたままにする、グループの色。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "보기 ▸ 사이드바: 시작 시 사이드바 표시, 사이드바 열어 두기, 그룹 색상."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Visualizar ▸ Barra lateral: Mostrar ao abrir, Manter a barra lateral aberta, Cores dos grupos."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Вид ▸ Боковая панель: показывать при запуске, не скрывать боковую панель, цвета групп."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示 ▸ 边栏：启动时显示边栏、保持边栏打开、组颜色。"
+            "value" : "请输入整数"
           }
         }
       }
@@ -2971,58 +3075,6 @@
         }
       }
     },
-    "Wrong console speed" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Falsche Konsolengeschwindigkeit"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Velocidad de consola incorrecta"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mauvaise vitesse de console"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "コンソール速度の不一致"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "잘못된 콘솔 속도"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Velocidade de console errada"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Неверная скорость консоли"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "控制台速率不对"
-          }
-        }
-      }
-    },
     "ping tab · press ↩" : {
       "localizations" : {
         "de" : {
@@ -3071,58 +3123,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ping 标签页 · 按 ↩"
-          }
-        }
-      }
-    },
-    "⌘D splits right, ⇧⌘D splits down." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D teilt nach rechts, ⇧⌘D nach unten."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D divide a la derecha, ⇧⌘D hacia abajo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D divise à droite, ⇧⌘D vers le bas."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D で右に、⇧⌘D で下に分割。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D는 오른쪽, ⇧⌘D는 아래로 분할합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D divide à direita, ⇧⌘D para baixo."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D — разделить вправо, ⇧⌘D — вниз."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⌘D 向右拆分，⇧⌘D 向下拆分。"
           }
         }
       }
@@ -12986,6 +12986,110 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "设备不接受输入（已发送 %1$lld/%2$lld 行），其余内容未发送。"
+          }
+        }
+      }
+    },
+    "The device was still sending after %lld s (%lld of %lld lines sent), so the rest was not sent." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Gerät sendete nach %lld s noch immer (%lld von %lld Zeilen gesendet), daher wurde der Rest nicht gesendet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El dispositivo seguía enviando datos tras %lld s (%lld de %lld líneas enviadas), así que el resto no se envió."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’appareil envoyait encore des données après %lld s (%lld lignes sur %lld envoyées) ; le reste n’a donc pas été envoyé."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デバイスは %lld 秒経っても送信を続けていました（%lld / %lld 行を送信済み）。残りは送信されませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "장치가 %lld초가 지나도 계속 보내고 있었습니다(%lld/%lld줄 전송). 나머지는 보내지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O dispositivo ainda estava enviando após %lld s (%lld de %lld linhas enviadas), então o restante não foi enviado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Устройство всё ещё передавало данные спустя %lld с (отправлено %lld из %lld строк), поэтому остальное не отправлено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备在 %1$lld 秒后仍在发送（已发送 %2$lld/%3$lld 行），其余内容未发送。"
+          }
+        }
+      }
+    },
+    "The device stayed at a --More-- prompt for %lld s (%lld of %lld lines sent), so the rest was not sent." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Gerät blieb %lld s an der Eingabeaufforderung --More-- stehen (%lld von %lld Zeilen gesendet), daher wurde der Rest nicht gesendet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El dispositivo se quedó %lld s en un aviso --More-- (%lld de %lld líneas enviadas), así que el resto no se envió."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’appareil est resté %lld s sur une invite --More-- (%lld lignes sur %lld envoyées) ; le reste n’a donc pas été envoyé."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デバイスは %lld 秒間 --More-- プロンプトで止まったままでした（%lld / %lld 行を送信済み）。残りは送信されませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "장치가 %lld초 동안 --More-- 프롬프트에 머물러 있었습니다(%lld/%lld줄 전송). 나머지는 보내지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O dispositivo ficou %lld s parado em um aviso --More-- (%lld de %lld linhas enviadas), então o restante não foi enviado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Устройство %lld с оставалось на приглашении --More-- (отправлено %lld из %lld строк), поэтому остальное не отправлено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备在 --More-- 提示处停留了 %1$lld 秒（已发送 %2$lld/%3$lld 行），其余内容未发送。"
           }
         }
       }
@@ -54926,58 +55030,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "打开日志文件夹"
-          }
-        }
-      }
-    },
-    "Open serial console %@" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Serielle Konsole %@ öffnen"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abrir consola serie %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ouvrir la console série %@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "シリアルコンソール %@ を開く"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Serial 콘솔 %@ 열기"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abrir console serial %@"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Открыть последовательную консоль %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开串口控制台 %@"
           }
         }
       }

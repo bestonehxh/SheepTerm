@@ -90,17 +90,59 @@ struct PingTabView: View {
     }
 }
 
+/// An empty tab shows only this (6.0 (14), the owner's design "E · chase
+/// across"): three faint dots — green, yellow, red — running left → right
+/// across the track, no text. Positions and opacity are `PingPlan.chase`.
+/// Still dots with Reduce Motion; the timeline pauses whenever the view is
+/// off a window (a hidden tab or pane), so a hidden tab does no work.
 private struct PingEmptyState: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var onWindow = false
+    /// Theme.ok, Theme.warn, Theme.destructive (= SheepAlert.destructiveRed).
+    private static let colors: [Color] = [Theme.ok, Theme.warn, Theme.destructive]
+
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "waveform.path.ecg")
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(Theme.dimText.opacity(0.6))
-            Text("Type an address above")
-                .foregroundStyle(Theme.dimText)
+        TimelineView(.animation(paused: reduceMotion || !onWindow)) { timeline in
+            Canvas { context, size in
+                let d = PingPlan.chaseDot
+                let left = (size.width - PingPlan.chaseTrack) / 2
+                let time = reduceMotion ? nil : timeline.date.timeIntervalSinceReferenceDate
+                for index in 0..<PingPlan.chaseDots {
+                    let dot = PingPlan.chase(index: index, time: time)
+                    guard dot.opacity > 0.001 else { continue }
+                    let rect = CGRect(x: left + dot.x - d / 2, y: (size.height - d) / 2, width: d, height: d)
+                    context.fill(Path(ellipseIn: rect), with: .color(Self.colors[index].opacity(dot.opacity)))
+                }
+            }
+            .frame(width: PingPlan.chaseTrack + PingPlan.chaseDot, height: PingPlan.chaseDot)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WindowPresence { onWindow = $0 })
+        .accessibilityHidden(true)
     }
+}
+
+/// Reports whether the view is in a window (a hidden tab/pane leaves it).
+private struct WindowPresence: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    final class Probe: NSView {
+        var onChange: ((Bool) -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let inWindow = window != nil
+            DispatchQueue.main.async { [weak self] in self?.onChange?(inWindow) }
+        }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> Probe {
+        let view = Probe()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: Probe, context: Context) { view.onChange = onChange }
 }
 
 // MARK: - List
@@ -135,6 +177,8 @@ private enum PingColumns {
     static func ipWidth(_ shown: Set<PingPlan.Column>) -> CGFloat { shown.contains(.graph) ? ip : ipBase }
     /// Hostname may shrink to this before columns are dropped.
     static let hostnameMin: CGFloat = 110
+    /// Every row is this tall (the drag maps a point to a row by it).
+    static let rowHeight: CGFloat = 32
 
     /// The columns a list `width` wide shows (`PingPlan.visibleColumns`);
     /// the dot and the row padding are spent first.
@@ -151,6 +195,16 @@ private struct PingList: View {
     @EnvironmentObject private var ping: PingTabController
     @State private var anchor: PingTabController.Row.ID?
     @FocusState private var focused: Bool
+    /// Drag to reorder (6.0 (14)): the rows being dragged and where they
+    /// would land (nil = nowhere new). A plain DragGesture inside the list —
+    /// no pasteboard and no drop target, so nothing dragged in from another
+    /// app (or from elsewhere in this one) can reorder or add rows.
+    @State private var dragIDs = Set<PingTabController.Row.ID>()
+    @State private var dropIndex: Int?
+    @GestureState private var dragging = false
+    private static let space = "pingRows"
+    /// Rename… (6.0 (14)): the row whose name field is open.
+    @State private var renaming: PingTabController.Row.ID?
 
     var body: some View {
         // A split pane is narrower than every column: drop the least needed
@@ -187,10 +241,24 @@ private struct PingList: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(ping.rows) { row in
-                        PingRowView(row: row, selected: ping.selection.contains(row.id), shown: shown, gap: gap)
+                        PingRowView(row: row, selected: ping.selection.contains(row.id), shown: shown, gap: gap, renaming: $renaming)
+                            .opacity(dragIDs.contains(row.id) ? 0.45 : 1)
                             .contentShape(Rectangle())
                             .onTapGesture { click(row.id) }
+                            .gesture(reorder(row.id))
                             .contextMenu { menu(for: row.id) }
+                    }
+                }
+                .coordinateSpace(name: Self.space)
+                // The thin insertion line where the drop lands.
+                .overlay(alignment: .top) {
+                    if let dropIndex {
+                        Capsule()
+                            .fill(Theme.accent)
+                            .frame(height: 2)
+                            .padding(.horizontal, 6)
+                            .offset(y: CGFloat(dropIndex) * PingColumns.rowHeight - 1)
+                            .allowsHitTesting(false)
                     }
                 }
                 .padding(.bottom, 4)
@@ -200,11 +268,32 @@ private struct PingList: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
+        // A cancelled drag never reaches onEnded: clear it here too.
+        .onChange(of: dragging) { if !dragging { dragIDs = []; dropIndex = nil } }
         .onKeyPress(keys: [.delete, .deleteForward]) { _ in
             guard !ping.selection.isEmpty else { return .ignored }
             ping.remove(ping.selection)
             return .handled
         }
+    }
+
+    /// Drag a row up/down: a selected row takes the whole selection along
+    /// (in list order); the drop moves them (`PingPlan.move`) — rows keep
+    /// running. A drop that would change nothing shows no line.
+    private func reorder(_ id: PingTabController.Row.ID) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
+            .updating($dragging) { _, state, _ in state = true }
+            .onChanged { value in
+                if dragIDs.isEmpty { dragIDs = ping.selection.contains(id) ? ping.selection : [id] }
+                let ids = ping.rows.map(\.id)
+                let index = min(max(0, Int((value.location.y / PingColumns.rowHeight).rounded())), ids.count)
+                dropIndex = PingPlan.move(ids, moving: dragIDs, to: index) != ids ? index : nil
+            }
+            .onEnded { _ in
+                if let dropIndex { ping.move(dragIDs, to: dropIndex) }
+                dragIDs = []
+                dropIndex = nil
+            }
     }
 
     /// Click = this row; ⌘ = toggle it; ⇧ = the range from the last click.
@@ -231,8 +320,38 @@ private struct PingList: View {
         Button("Restart") { ping.restart(ids) }
         Button("Remove") { ping.remove(ids) }
         Divider()
+        // One IP row only: a row typed as a name already has one.
+        if ids.count == 1, let row = ping.rows.first(where: { ids.contains($0.id) }), PingPlan.canRename(row.address) {
+            Button("Rename…") { renaming = row.id }
+        }
         Button("Copy Address") { ping.copyAddresses(ids) }
         Button("Open SSH") { ping.openSSH(ids) }
+    }
+}
+
+/// Rename… (6.0 (14)): one field in a popover — Return saves (empty = the
+/// saved host's name or the address again), Escape cancels.
+private struct PingRenameField: View {
+    @ObservedObject var row: PingTabController.Row
+    /// nil = cancelled.
+    let done: (String?) -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(row.address, text: $text)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 12))
+            .frame(width: 220)
+            .focused($focused)
+            .onSubmit { done(text) }
+            .onExitCommand { done(nil) }
+            .noAutoFill()
+            .padding(10)
+            .onAppear {
+                text = row.customName ?? ""
+                DispatchQueue.main.async { focused = true }
+            }
     }
 }
 
@@ -241,6 +360,10 @@ private struct PingRowView: View {
     let selected: Bool
     let shown: Set<PingPlan.Column>
     let gap: CGFloat
+    /// Rename… (6.0 (14)): the row whose name field is open; the popover
+    /// hangs off the Hostname cell, not the whole row.
+    @Binding var renaming: PingTabController.Row.ID?
+    @EnvironmentObject private var ping: PingTabController
     @State private var hovering = false
 
     var body: some View {
@@ -260,6 +383,14 @@ private struct PingRowView: View {
                 // (a long name was cut while slack sat to its right).
                 .layoutPriority(1)
                 .help(row.resolvedIP.isEmpty ? row.address : "\(row.address) → \(row.resolvedIP)")
+                .popover(isPresented: Binding(get: { renaming == row.id },
+                                              set: { if !$0, renaming == row.id { renaming = nil } }),
+                         arrowEdge: .bottom) {
+                    PingRenameField(row: row) { text in
+                        if let text { ping.rename(row.id, to: text) }
+                        renaming = nil
+                    }
+                }
             if shown.contains(.ip) {
                 Text(cells.ip)
                     .foregroundStyle(Theme.dimText)
@@ -302,7 +433,7 @@ private struct PingRowView: View {
         }
         .font(.system(size: 12, design: .monospaced).monospacedDigit())
         .padding(.horizontal, 14)
-        .frame(height: 32)
+        .frame(height: PingColumns.rowHeight)
         // The Sidebar's own selection: white 14 %, hover 6 %, no outline.
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)

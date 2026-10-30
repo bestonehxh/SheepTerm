@@ -258,13 +258,25 @@ nonisolated enum FileServerPlan {
     /// Automatic). Per Mac: not backed up, not synced.
     static let interfaceKey = "fileServerInterface"
 
+    /// What the popover's top row shows: the address, and the interface it
+    /// goes out of (6.0 (14), "192.168.1.34 · en0") — nil when no interface
+    /// up with an IPv4 owns the address (a tunnel that is not listed).
+    struct ShownAddress: Equatable, Sendable {
+        let ip: String
+        let interface: String?
+    }
+
     /// The address the commands use: the chosen interface's IPv4 while it is
     /// up with one; otherwise (Automatic, or the choice is gone — the choice
     /// stays saved so it comes back with the interface) the route toward the
-    /// device, else this Mac's primary IPv4.
-    static func address(chosen: String?, interfaces: [Interface], routed: String?, primary: String?) -> String? {
-        if let chosen, !chosen.isEmpty, let match = interfaces.first(where: { $0.bsdName == chosen }) { return match.ip }
-        return routed ?? primary
+    /// device, else this Mac's primary IPv4 — with the BSD name of the
+    /// interface that holds it (the route's address matched back to the list).
+    static func address(chosen: String?, interfaces: [Interface], routed: String?, primary: String?) -> ShownAddress? {
+        if let chosen, !chosen.isEmpty, let match = interfaces.first(where: { $0.bsdName == chosen }) {
+            return ShownAddress(ip: match.ip, interface: match.bsdName)
+        }
+        guard let ip = routed ?? primary else { return nil }
+        return ShownAddress(ip: ip, interface: interfaces.first(where: { $0.ip == ip })?.bsdName)
     }
 
     // MARK: This Mac's address, as the device sees it

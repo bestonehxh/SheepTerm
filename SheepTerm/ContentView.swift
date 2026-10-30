@@ -248,6 +248,9 @@ struct DetailPane: View {
                 } else {
                     EmptyPaneView()
                 }
+                // A USB serial cable just plugged in (6.0 (14)): bottom right of
+                // the terminal area — above the status bar, left of the AI panel.
+                SerialArrivalCardOverlay()
             }
             .aiPanel()
             if model.showStatusBar

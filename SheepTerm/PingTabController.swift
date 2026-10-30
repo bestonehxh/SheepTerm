@@ -14,7 +14,13 @@ final class PingTabController: ObservableObject {
     final class Row: ObservableObject, Identifiable {
         let id = UUID()
         let address: String
-        let name: String
+        /// A saved host's name on that address, else the address.
+        let savedOrAddress: String
+        /// Rename… (6.0 (14)): this tab's own name for an IP row — in the row
+        /// only, never saved, synced or written to hosts.json.
+        @Published fileprivate(set) var customName: String?
+        /// What the row shows: its own name, else the saved host's, else the address.
+        var name: String { customName ?? savedOrAddress }
         @Published fileprivate(set) var stats = PingPlan.Stats()
         @Published fileprivate(set) var resolvedIP = ""
         /// Totals since added / restarted (SheepPing's Success / Failed).
@@ -29,7 +35,7 @@ final class PingTabController: ObservableObject {
 
         init(address: String, name: String) {
             self.address = address
-            self.name = name
+            self.savedOrAddress = name
         }
     }
 
@@ -94,16 +100,37 @@ final class PingTabController: ObservableObject {
 
     var addresses: [String] { rows.map(\.address) }
 
-    /// Adds what a line expands to (`PingPlan.expand`) and starts each.
-    /// Returns false when nothing could be added.
+    /// Adds what a line expands to (`PingPlan.expand`) and starts each; the
+    /// rows the line names follow its order (`PingPlan.arrange`, 6.0 (14):
+    /// a refused line kept in the field, edited to slot a target between two
+    /// others, appended it at the end). Existing rows are moved, never
+    /// restarted. Returns false when nothing was added or moved.
     @discardableResult
     func add(_ text: String) -> Bool {
         guard !closed else { return false }
         let expansion = PingPlan.expand(text, existing: addresses)
         refused = expansion.refused
         if expansion.truncated { NSSound.beep() }
+        let before = rows.map(\.id)
+        // Only what will really be in the tab: existing rows + the new
+        // targets the cap let through.
+        let kept = Set((addresses + expansion.targets).map { $0.lowercased() })
+        let typed = PingPlan.typedOrder(text).filter { kept.contains($0.lowercased()) }
         add(targets: expansion.targets)
-        return !expansion.targets.isEmpty
+        let byKey = Dictionary(rows.map { ($0.address.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        let order = PingPlan.arrange(current: addresses, typed: typed).compactMap { byKey[$0.lowercased()] }
+        if order.count == rows.count, order.map(\.id) != rows.map(\.id) { rows = order }
+        return rows.map(\.id) != before
+    }
+
+    /// Drag to reorder (6.0 (14)): `ids` land before the row at `index`
+    /// (`rows.count` = the end), keeping their order. Rows keep running.
+    func move(_ ids: Set<Row.ID>, to index: Int) {
+        guard !closed else { return }
+        let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+        let order = PingPlan.move(rows.map(\.id), moving: ids, to: index).compactMap { byID[$0] }
+        guard order.count == rows.count, order.map(\.id) != rows.map(\.id) else { return }
+        rows = order
     }
 
     func add(targets: [String]) {
@@ -173,6 +200,17 @@ final class PingTabController: ObservableObject {
     }
 
     func selectedRows(_ ids: Set<Row.ID>) -> [Row] { rows.filter { ids.contains($0.id) } }
+
+    /// Rename… (6.0 (14)): an IP row's name for this tab (`PingPlan.rowName`;
+    /// empty = back to the saved host's name or the address). The row keeps
+    /// running — nothing restarts, nothing is stored.
+    func rename(_ id: Row.ID, to text: String) {
+        guard !closed, let row = rows.first(where: { $0.id == id }), PingPlan.canRename(row.address) else { return }
+        let name = PingPlan.rowName(text)
+        guard name != row.customName else { return }
+        row.customName = name
+        statusTick &+= 1
+    }
 
     func copyAddresses(_ ids: Set<Row.ID>) {
         let text = selectedRows(ids).map(\.address).joined(separator: "\n")

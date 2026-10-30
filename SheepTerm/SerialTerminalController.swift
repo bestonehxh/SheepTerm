@@ -359,10 +359,41 @@ final class SerialTerminalController: NSObject {
 
     /// Auto-page on a console: same as SSH. "Disable paging on connect" is
     /// SSH-only on purpose — a console may be sitting at a login prompt or
-    /// a boot loader, where typing a command blind is wrong.
+    /// a boot loader, where typing a command blind is wrong. A paced Safe
+    /// Paste run answers too (6.0 (14)): the line sent into a pager would
+    /// quit it and the rest of the output is lost. The detector reads every
+    /// chunk, so its window is never stale when either switch turns on. The
+    /// space is never written at once: `PagerAnswerPlan` (settle + one retry).
     private func answerPagerIfNeeded(_ chunk: [UInt8]) {
-        guard AppModel.shared.autoPage, pager.consume(chunk) else { return }
+        let prompt = pager.consume(chunk)
+        guard prompt, pagerAnswerWanted else { return }
+        armPagerAnswer(generation: pagerAnswer.detected(), afterMilliseconds: PagerAnswerPlan.answerSettleMilliseconds, retry: false)
+    }
+
+    /// Pending answer to the last pager prompt (`PagerAnswerPlan`): the space
+    /// goes out a settle later, once more if the device stays silent.
+    private var pagerAnswer = PagerAnswerPlan()
+    private var pagerAnswerTimer: DispatchWorkItem?
+    private var pagerAnswerWanted: Bool { AppModel.shared.autoPage || terminalHost.isPacingPaste }
+
+    private func armPagerAnswer(generation: Int, afterMilliseconds: Int, retry: Bool) {
+        pagerAnswerTimer?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.firePagerAnswer(generation: generation, retry: retry) }
+        pagerAnswerTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(afterMilliseconds), execute: item)
+    }
+
+    private func firePagerAnswer(generation: Int, retry: Bool) {
+        // Auto-page turned off / the paced run ended meanwhile: nothing goes out.
+        guard pagerAnswerWanted else { return }
+        let now = Date().timeIntervalSinceReferenceDate
+        let send = retry
+            ? pagerAnswer.retryFired(generation: generation, lastDeviceByte: terminalHost.lastDeviceByteAt?.timeIntervalSinceReferenceDate, now: now)
+            : pagerAnswer.settleFired(generation: generation, now: now)
+        guard send else { return }
         worker.write([0x20])
+        if terminalHost.isPacingPaste { terminalHost.notePagerAnswered() }
+        if !retry { armPagerAnswer(generation: generation, afterMilliseconds: PagerAnswerPlan.answerRetryMilliseconds, retry: true) }
     }
 
     /// Send Break (⌃⌥B): a break condition on the line, for a boot loader
@@ -684,6 +715,7 @@ final class SerialTerminalController: NSObject {
         let pending = mainFeed.take()
         guard !pending.isEmpty else { return }
         terminalView.feed(pending)
+        terminalHost.noteDeviceBytes(pending)       // Safe Paste's quiet gap and prompt check read this
         answerPagerIfNeeded(pending)
         considerPromptName(pending)
         considerBaudGuess(pending)

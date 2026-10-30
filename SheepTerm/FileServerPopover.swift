@@ -80,13 +80,20 @@ struct FileServerHiddenAnchor: View {
     }
 }
 
-/// The File Server panel, minimal: server chips + this Mac's address, the
-/// one file a device may pull, the command for the focused tab's device
-/// family, writes. No titles, no dividers, icons with tooltips (clean-UI rule).
+/// The File Server panel, minimal (design "B", the owner's pick, 6.0 (14)):
+/// the four server chips share the top row; the one file a device may pull;
+/// ONE box holding the device family menu (when the tab does not name one)
+/// over the command(s); the transfers; under a hairline the footer with
+/// Receive files, this Mac's address + interface and the Transfer Log. No
+/// titles; anything that only does something on a click shows its box
+/// under the pointer only (clean-UI rule) — at rest only the chips (they
+/// show a state) and the command box are filled.
 struct FileServerPopover: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var server = FileServerModel.shared
-    @State private var macIP: String?
+    /// This Mac's address toward the device and its interface (`FileServerPlan.address`).
+    @State private var macAddress: FileServerPlan.ShownAddress?
+    private var macIP: String? { macAddress?.ip }
     @State private var dropTargeted = false
     @State private var fileHover = false
     @State private var editingLogin = false
@@ -109,21 +116,9 @@ struct FileServerPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Equal widths: the chips have the row to themselves.
             HStack(spacing: 6) {
                 ForEach(FileServerPlan.Proto.allCases) { ServerChip(proto: $0) }
-                Spacer(minLength: 8)
-                AddressButton(ip: macIP, chosen: $chosenInterface)
-                    .layoutPriority(-1)
-                Button {
-                    server.popoverShown = false
-                    model.showTransferLog = true
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .foregroundStyle(Theme.dimText)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Transfer Log")
             }
             if server.running.keys.contains(where: \.needsLogin) { loginLine }
             if let error = server.startError {
@@ -134,8 +129,8 @@ struct FileServerPopover: View {
             }
             fileRow
             if let proto = server.commandProto { commands(for: proto) }
-            writesRow
             ForEach(server.transfers) { TransferRow(transfer: $0) }
+            footer
         }
         .padding(14)
         .frame(width: 360)
@@ -143,11 +138,11 @@ struct FileServerPopover: View {
         .task(id: "\(tab.flatMap { model.deviceAddress(of: $0) } ?? "")|\(chosenInterface)") {
             #if DEBUG
             // Screenshots (What's New art): a sample address, not this Mac's.
-            if let ip = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_MAC_IP"] { macIP = ip; return }
+            if let ip = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_MAC_IP"] { macAddress = .init(ip: ip, interface: "en0"); return }
             #endif
             let address = tab.flatMap { model.deviceAddress(of: $0) }
             let routed = await Task.detached { address.flatMap { FileServerPlan.ipv4(toReach: $0) } }.value
-            macIP = FileServerPlan.address(chosen: chosenInterface, interfaces: NetworkInfo.ipv4Interfaces(),
+            macAddress = FileServerPlan.address(chosen: chosenInterface, interfaces: NetworkInfo.ipv4Interfaces(),
                                            routed: routed, primary: NetworkInfo.primaryIPv4()?.ip)
         }
     }
@@ -217,6 +212,7 @@ struct FileServerPopover: View {
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
             }
+            .frame(height: FileServerPopover.rowHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -259,47 +255,107 @@ struct FileServerPopover: View {
                                                file: file, hostName: isDeviceTab ? (tab?.title ?? "") : "switch")
                     .filter { $0.kind == .pull || server.allowWrites }
             }()
-            if lines.isEmpty {
-                // No family yet: the address to copy, always (never an empty panel).
-                CommandRow(command: .init(kind: .pull,
-                                          text: FileServerPlan.url(proto: proto, ip: ip, port: port(for: proto),
-                                                                   user: server.username, file: file),
-                                          verified: false),
-                           tabID: nil)
-            } else {
-                ForEach(lines, id: \.text) { CommandRow(command: $0, tabID: isDeviceTab ? tab?.id : nil) }
-            }
-            // The family picker unless the device tab already names one.
-            if tabFamily == nil || tabFamily == .auto {
-                FamilyPickerRow(current: server.pickedVendor) { picked in
-                    if let tab, isDeviceTab {
-                        model.setHighlightVendorForTabOnly(picked, tabID: tab.id)
-                    } else {
-                        server.pickedVendor = picked
+            // One box: the family menu (unless the device tab already names
+            // one) over the command(s) it decides.
+            VStack(alignment: .leading, spacing: 2) {
+                if tabFamily == nil || tabFamily == .auto {
+                    FamilyPickerRow(current: server.pickedVendor) { picked in
+                        if let tab, isDeviceTab {
+                            model.setHighlightVendorForTabOnly(picked, tabID: tab.id)
+                        } else {
+                            server.pickedVendor = picked
+                        }
                     }
                 }
+                if lines.isEmpty {
+                    // No family yet: the address to copy, always (never an empty panel).
+                    CommandRow(command: .init(kind: .pull,
+                                              text: FileServerPlan.url(proto: proto, ip: ip, port: port(for: proto),
+                                                                       user: server.username, file: file),
+                                              verified: false),
+                               tabID: nil, boxed: false)
+                } else {
+                    ForEach(lines, id: \.text) { CommandRow(command: $0, tabID: isDeviceTab ? tab?.id : nil, boxed: false) }
+                }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background { ControlFill(zone: .sidebar, cornerRadius: 8) }
         }
     }
 
-    private var writesRow: some View {
-        HStack(spacing: 6) {
-            Toggle(isOn: $server.allowWrites) {
-                Text("Receive files").font(.system(size: 12))
+    /// The file row and a one-line command row are this tall (the owner: the
+    /// boxes must not differ in height).
+    static let rowHeight: CGFloat = 22
+
+    /// Under a hairline: Receive files (+ its folder), this Mac's address and
+    /// interface, the Transfer Log — this Mac's side of the transfer.
+    private var footer: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+            HStack(spacing: 4) {
+                ReceiveFilesToggle(isOn: $server.allowWrites, enabled: server.isAnyRunning)
+                    .help("Let a device send a file here (a config backup) — into the folder, never over an existing file")
+                if server.allowWrites {
+                    Button { server.revealWriteFolder() } label: { Image(systemName: "folder") }
+                        .buttonStyle(ChromeIconButtonStyle(width: 22, height: 20))
+                        .help(server.writeFolder.path)
+                        .contextMenu { Button("Choose Folder…") { server.chooseWriteFolder() } }
+                }
+                Spacer(minLength: 8)
+                AddressButton(address: macAddress, chosen: $chosenInterface)
+                    .layoutPriority(-1)
+                Button {
+                    server.popoverShown = false
+                    model.showTransferLog = true
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .buttonStyle(ChromeIconButtonStyle(width: 22, height: 20))
+                .help("Transfer Log")
             }
-            .toggleStyle(.checkbox)
-            .disabled(!server.isAnyRunning)
-            .help("Let a device send a file here (a config backup) — into the folder, never over an existing file")
-            Spacer()
-            if server.allowWrites {
-                Button { server.revealWriteFolder() } label: { Image(systemName: "folder") }
-                    .buttonStyle(.borderless)
-                    .help(server.writeFolder.path)
-                    .contextMenu { Button("Choose Folder…") { server.chooseWriteFolder() } }
-            }
+            .font(.system(size: 12))
+            .padding(.top, 9)
         }
-        // In line with the rows above (their text sits 8 pt in).
-        .padding(.horizontal, 8)
+    }
+}
+
+/// Receive files (6.0 (14)): a checkbox that lights under the pointer — the
+/// box takes an accent edge, the label turns white (the system checkbox has
+/// no hover state). Read as a checkbox by VoiceOver.
+private struct ReceiveFilesToggle: View {
+    @Binding var isOn: Bool
+    let enabled: Bool
+    @State private var hover = false
+
+    private var lit: Bool { hover && enabled }
+
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            HStack(spacing: 7) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(isOn ? Theme.accent : lit ? Theme.accent.opacity(0.25) : Color.white.opacity(0.10))
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(isOn ? Color.white.opacity(lit ? 0.5 : 0) : lit ? Theme.accent.opacity(0.85) : Color.white.opacity(0.08),
+                                      lineWidth: 1)
+                    if isOn {
+                        Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 15, height: 15)
+                Text("Receive files")
+                    .foregroundStyle(lit ? Theme.tabText : Theme.dimText)
+            }
+            .frame(height: 20)
+            .padding(.leading, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+        .onHover { hover = $0 }
+        .accessibilityRepresentation { Toggle("Receive files", isOn: $isOn).disabled(!enabled) }
     }
 }
 
@@ -325,10 +381,11 @@ private struct ServerChip: View {
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(on ? Theme.ok : Theme.dimText)
-            // One line always; the address beside it gives way. (Every server
-            // binds its standard port only since 6.0 (13), so the port badge
-            // above shows only for a test/odd port.)
+            // One line always. (Every server binds its standard port only
+            // since 6.0 (13), so the port badge above shows only for a
+            // test/odd port.) The four share the top row in equal widths.
             .lineLimit(1)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 9)
             .padding(.vertical, 3)
             .background(Capsule().fill(shown ? Theme.ok.opacity(0.22) : on ? Theme.ok.opacity(0.08) : Color.primary.opacity(0.06)))
@@ -339,7 +396,7 @@ private struct ServerChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .fixedSize()
+        .fixedSize(horizontal: false, vertical: true)
         .opacity(server.starting.contains(kind) ? 0.5 : 1)
         .help(!on ? "Start \(proto.label) — turns itself off after 10 minutes without a transfer"
               : shown ? "Stop \(kind.label)" : "Show the \(proto.label) command")
@@ -349,20 +406,39 @@ private struct ServerChip: View {
 /// This Mac's address in the top row; a click pops the interfaces:
 /// Automatic (the route toward the device) + each interface up with an
 /// IPv4. The choice is remembered (`FileServerPlan.interfaceKey`).
+/// "192.168.1.34 · en0": the interface it goes out of after a middle dot,
+/// dim (6.0 (14), the console card's "device · kind"); the address alone
+/// when no listed interface holds it.
 private struct AddressButton: View {
-    let ip: String?
+    let address: FileServerPlan.ShownAddress?
     @Binding var chosen: String
     @State private var hover = false
     @State private var anchor = MenuAnchorBox()
 
     var body: some View {
         Button(action: pop) {
-            Text(ip ?? "—")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(hover ? Theme.tabText : Theme.dimText)
-                .lineLimit(1)
-                .truncationMode(.head)
-                .contentShape(Rectangle())
+            HStack(spacing: 0) {
+                Text(address?.ip ?? "—")
+                    .foregroundStyle(hover ? Theme.tabText : Theme.dimText)
+                    .truncationMode(.head)
+                if let interface = address?.interface {
+                    Text(verbatim: " · \(interface)")
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                // A menu (the family menu's / "Choose"'s chevron).
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Theme.dimText)
+                    .padding(.leading, 4)
+            }
+            .font(.system(size: 11, design: .monospaced))
+            .lineLimit(1)
+            // Under the pointer only: the chips' capsule shade.
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(Capsule().fill(Color.white.opacity(hover ? 0.08 : 0)))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .background(MenuAnchorView(box: anchor))
@@ -424,9 +500,11 @@ private struct CopyButton: View {
 /// One device command: the text (wrapping, so nothing hides in the middle),
 /// and icon buttons to type it into the tab (no Return — the user runs it)
 /// and to copy it.
-/// The device family for the copy command — a row like the command rows
-/// (same fill on the glass); a click pops the families as a plain NSMenu
-/// (a SwiftUI Menu's hit area is smaller than its label).
+/// The device family for the copy command — the first line of the command
+/// box (design B, 6.0 (14)): the family (or "Choose") in accent with the
+/// menu chevron, the chips' capsule shade under the pointer; a click pops
+/// the families as a plain NSMenu (a SwiftUI Menu's hit area is smaller than
+/// its label).
 struct FamilyPickerRow: View {
     let current: Vendor?
     let onPick: (Vendor) -> Void
@@ -435,30 +513,28 @@ struct FamilyPickerRow: View {
 
     var body: some View {
         Button(action: pop) {
-            // The command rows' own fill on the glass — no tint, no outline
-            // (the user, 6.0: the blue dashed box did not belong on glass).
-            HStack(spacing: 6) {
-                // Label always; the choice (or "Choose") on the right.
-                Text("Device Family").foregroundStyle(Theme.dimText)
-                Spacer(minLength: 8)
+            HStack(spacing: 4) {
                 Text(current?.localizedLabel ?? String(localized: "Choose"))
-                    .foregroundStyle(current == nil ? Theme.accent : Theme.tabText)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Theme.dimText)
+                    .font(.system(size: 8, weight: .semibold))
+                    .opacity(0.8)
             }
-            .font(.system(size: 12))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background { ControlFill(zone: .sidebar, cornerRadius: 8) }
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(hover ? 0.05 : 0)))
-            .contentShape(Rectangle())
+            .font(.system(size: 11.5))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 6)
+            .frame(height: 20)
+            .background(Capsule().fill(Color.white.opacity(hover ? 0.08 : 0)))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // The label sits in line with the command's arrow below it.
+        .padding(.leading, -6)
         .background(MenuAnchorView(box: anchor))
         .onHover { hover = $0 }
+        .accessibilityLabel(Text("Device Family"))
+        .accessibilityValue(Text(current?.localizedLabel ?? String(localized: "Choose")))
         .help("The device's copy command for this family")
     }
 
@@ -477,6 +553,8 @@ struct FamilyPickerRow: View {
 struct CommandRow: View {
     let command: FileServerPlan.Command
     let tabID: UUID?
+    /// Its own filled box (a lone row); false inside the command box.
+    var boxed = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
@@ -504,9 +582,10 @@ struct CommandRow: View {
                        secret: command.carriesPassword)
         }
         .font(.system(size: 12))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background { ControlFill(zone: .sidebar, cornerRadius: 8) }
+        .frame(minHeight: FileServerPopover.rowHeight)
+        .padding(.horizontal, boxed ? 8 : 0)
+        .padding(.vertical, boxed ? 5 : 0)
+        .background { if boxed { ControlFill(zone: .sidebar, cornerRadius: 8) } }
     }
 }
 

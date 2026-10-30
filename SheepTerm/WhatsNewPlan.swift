@@ -9,8 +9,8 @@ import Foundation
 /// numerically (`UpdateCore.compareDotted`); an older record ("6.0", what
 /// 6.0 (1)–(12) wrote) is older than any 6.0 build's.
 nonisolated enum WhatsNewPlan {
-    /// The release the window describes: 6.0 (13).
-    static let release = "6.0.13"
+    /// The release the window describes: 6.0 (14).
+    static let release = "6.0.14"
     static let seenKey = "whatsNewSeen"
     /// The DEBUG hook SHEEPTERM_DEBUG_WHATSNEW_PAGE: any number lands on a
     /// real page (an out-of-range index would trap in `pages[page]`).

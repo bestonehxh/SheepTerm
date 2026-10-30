@@ -46,7 +46,6 @@ struct TabStripView: View {
     private static let chipSpacing: CGFloat = 4
     /// How far the chips past a drop gap slide to make room for the ghost.
     static let ghostShift = TabChipMetrics.dragSize.width + chipSpacing
-    private static let serialShadowID = "serial-shadow"
 
     private static let space = "tabstrip"
     private static let dropSpace = "tabstrip-drop"
@@ -117,15 +116,6 @@ struct TabStripView: View {
                     .id(workspace.id)
                     }
                 }
-                // A USB serial cable just plugged in (5.0 (29)).
-                if let shadow = model.serialShadow {
-                    SerialShadowChip(name: shadow.name,
-                                     onOpen: { model.openSerialShadow() },
-                                     onDismiss: { model.dismissSerialShadow() })
-                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                        .offset(x: ghostGap == nil ? 0 : Self.ghostShift)
-                        .id(Self.serialShadowID)
-                }
             }
             // Pointer over the chips = the window is not movable, or the
             // window server turns a chip drag into a window drag (see
@@ -174,15 +164,6 @@ struct TabStripView: View {
         .onDrop(of: [.utf8PlainText], delegate: StripDropDelegate(frames: chipDropFrames, base: $dropBaseFrames,
                                                                    chipFrames: chipFrames, ghostBase: $ghostBaseFrames,
                                                                    spot: $dropSpot, concluded: $dropConcluded))
-        // Brought into view when it appears past a full strip (review 5.0 (29)).
-        .onChange(of: model.serialShadow?.path) { _, path in
-            guard path != nil else { return }
-            // A turn later, like `reveal`: the chip has no frame yet.
-            DispatchQueue.main.async {
-                guard dragID == nil, model.serialShadow != nil else { return }
-                withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(Self.serialShadowID) }
-            }
-        }
         .onChange(of: model.selectedID) { _, _ in reveal(scroller) }
         // The dragged tab closed under the pointer (its shell exited):
         // SwiftUI never sends onEnded for a gesture whose view is gone, and
@@ -544,8 +525,10 @@ struct TabItemView: View {
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 12, height: 12)
-            } else if isWeb || isFiles || isPing {
-                Image(systemName: isPing ? "waveform.path.ecg" : isFiles ? "folder" : "globe")
+            } else if isPing {
+                PingTabGlyph()
+            } else if isWeb || isFiles {
+                Image(systemName: isFiles ? "folder" : "globe")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(indicatorColor)
                     .frame(width: 9, height: 9)
@@ -564,9 +547,9 @@ struct TabItemView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .frame(width: 18, height: 18)
+                    .frame(width: ChipHover.closeDiscSize, height: ChipHover.closeDiscSize)
                     .background(
-                        Circle().fill(Color.primary.opacity(hovering ? 0.12 : 0))
+                        Circle().fill(Color.primary.opacity(hovering ? ChipHover.closeDiscOpacity : 0))
                     )
                     .contentShape(Rectangle())
             }
@@ -578,7 +561,7 @@ struct TabItemView: View {
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isDropTarget ? Theme.controlFill
-                      : isSelected ? Theme.tabActive : (hovering ? Theme.tabActive.opacity(0.5) : Color.clear))
+                      : isSelected ? Theme.tabActive : (hovering ? Theme.tabActive.opacity(ChipHover.tabChipOpacity) : Color.clear))
         )
         .foregroundStyle(isSelected ? Theme.tabText : Theme.dimText)
         .contentShape(Rectangle())
@@ -695,56 +678,23 @@ private struct StripDropGhostChip: View {
     }
 }
 
-/// The dashed "shadow" tab for a USB serial cable that was just plugged in
-/// (5.0 (29), the user's option 1): click = open that console; it goes on
-/// its own after 15 s, when the cable is pulled, or with its ×.
-private struct SerialShadowChip: View {
-    let name: String
-    let onOpen: () -> Void
-    let onDismiss: () -> Void
-    @State private var hovering = false
-    @State private var glowUp = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// The Ping tab's chip glyph (the owner, 6.0 (14)): three 7 pt circles — green,
+/// yellow, red — overlapping left → right, the colours of the tab's status dots.
+struct PingTabGlyph: View {
+    static let colors: [Color] = [Theme.ok, Theme.warn, Theme.destructive]
+    static let dot: CGFloat = 7
+    static let step: CGFloat = 4
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "cable.connector")
-                .font(.system(size: 10.5, weight: .semibold))
-            Text(name)
-                .font(.system(size: 12.5))
-                .lineLimit(1)
-                .frame(maxWidth: 190)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .frame(width: 18, height: 18)
-                    .contentShape(Rectangle())
+        ZStack(alignment: .leading) {
+            ForEach(Array(Self.colors.enumerated()), id: \.offset) { index, color in
+                Circle()
+                    .fill(color)
+                    .frame(width: Self.dot, height: Self.dot)
+                    .offset(x: CGFloat(index) * Self.step)
             }
-            .buttonStyle(.plain)
-            .opacity(hovering ? 1 : 0)
-            .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 3)
-        // Clear white like the sidebar's selected row, a hairline edge and a
-        // soft white glow that breathes so it is noticed (the user; still
-        // when Reduce Motion is on). Only while the shadow is up (≤ 15 s).
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hovering ? 0.2 : 0.14)))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
-        .shadow(color: Color.white.opacity(reduceMotion ? 0.6 : (glowUp ? 0.7 : 0.2)), radius: 6)
-        .foregroundStyle(Color.white)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { glowUp = true }
-        }
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture { onOpen() }
-        .help("Open \(name)")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Open serial console \(name)")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { onOpen() }
-        .accessibilityAction(named: "Dismiss") { onDismiss() }
+        .frame(width: Self.dot + CGFloat(Self.colors.count - 1) * Self.step, height: Self.dot, alignment: .leading)
+        .accessibilityHidden(true)
     }
 }

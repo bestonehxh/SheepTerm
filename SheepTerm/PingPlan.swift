@@ -40,8 +40,7 @@ nonisolated enum PingPlan {
         var result = Expansion()
         var seen = Set(existing.map { $0.lowercased() })
         var room = max(0, maxTargets - existing.count)
-        let words = text.split(whereSeparator: { $0 == "," || $0 == ";" || $0.isWhitespace }).map(String.init)
-        for word in words {
+        for word in words(text) {
             guard let addresses = addresses(for: word) else {
                 result.refused.append(word)
                 continue
@@ -54,6 +53,60 @@ nonisolated enum PingPlan {
             }
         }
         return result
+    }
+
+    /// A typed line's words: commas, semicolons and spaces separate.
+    static func words(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0 == "," || $0 == ";" || $0.isWhitespace }).map(String.init)
+    }
+
+    /// Every address a line names, in the order typed, once each
+    /// (case-insensitive) — existing targets included, refused words and
+    /// the cap ignored. `arrange` lays the rows out by it.
+    static func typedOrder(_ text: String) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for word in words(text) {
+            for address in addresses(for: word) ?? [] where seen.insert(address.lowercased()).inserted {
+                out.append(address)
+            }
+        }
+        return out
+    }
+
+    /// The rows after a line is submitted (6.0 (14)): the targets the line
+    /// names — rows already in the tab and new ones — sit in the order typed,
+    /// as one block starting where the first named existing row was; rows the
+    /// line does not name keep their order around it. A line naming no
+    /// existing row appends its new targets at the end (as before).
+    /// Case-insensitive like `expand`; an existing row keeps its own spelling;
+    /// a target typed twice counts once (its first place).
+    static func arrange(current: [String], typed: [String]) -> [String] {
+        var spelling: [String: String] = [:]
+        for address in current where spelling[address.lowercased()] == nil { spelling[address.lowercased()] = address }
+        var seen = Set<String>()
+        let block = typed.compactMap { address -> String? in
+            let key = address.lowercased()
+            guard seen.insert(key).inserted else { return nil }
+            return spelling[key] ?? address
+        }
+        guard let start = current.firstIndex(where: { seen.contains($0.lowercased()) }) else { return current + block }
+        let before = current[..<start].filter { !seen.contains($0.lowercased()) }
+        let after = current[start...].filter { !seen.contains($0.lowercased()) }
+        return before + block + after
+    }
+
+    /// Drag to reorder (6.0 (14)): `moving` leaves `ids` (keeping its
+    /// order) and lands before the item that was at `index` in `ids`
+    /// (`ids.count` = the end). Ids not in `ids` are ignored.
+    static func move<ID: Hashable>(_ ids: [ID], moving: Set<ID>, to index: Int) -> [ID] {
+        let at = min(max(0, index), ids.count)
+        let moved = ids.filter { moving.contains($0) }
+        guard !moved.isEmpty else { return ids }
+        var rest = ids.filter { !moving.contains($0) }
+        let shift = ids[..<at].filter { moving.contains($0) }.count
+        rest.insert(contentsOf: moved, at: at - shift)
+        return rest
     }
 
     /// One word → its addresses; nil = not a target.
@@ -131,6 +184,27 @@ nonisolated enum PingPlan {
         let expansion = expand(String(trimmed.dropFirst(5)))
         guard expansion.refused.isEmpty, !expansion.targets.isEmpty else { return nil }
         return expansion.targets
+    }
+
+    /// Rename… (6.0 (14)): only a row whose target is an address literal
+    /// (IPv4 / IPv6) takes a name — a row typed as a name already has one.
+    static func canRename(_ address: String) -> Bool {
+        // A link-local IPv6 with its zone (`fe80::1%en0`) is an address too.
+        let parts = address.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let ip = parts.first, isAddressLiteral(String(ip)) else { return false }
+        return parts.count == 1 || (!parts[1].isEmpty && parts[1].allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) })
+    }
+
+    /// Longest name Rename… keeps.
+    static let maxRowName = 64
+
+    /// What Rename… stores: trimmed, at most `maxRowName` characters; nil
+    /// (empty) = no name of its own — the row shows the saved host's name or
+    /// the address again (`hostCells`).
+    static func rowName(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .filter { !$0.isNewline && !($0.unicodeScalars.first.map(CharacterSet.controlCharacters.contains) ?? false) }
+        return trimmed.isEmpty ? nil : String(trimmed.prefix(maxRowName))
     }
 
     /// The saved host's name for an address (case-insensitive), else nil.
@@ -332,6 +406,35 @@ nonisolated enum PingPlan {
             if best == nil || shown.subtracting([.graph]).count > best!.shown.subtracting([.graph]).count { best = (shown, gap) }
         }
         return best!
+    }
+
+    // MARK: Empty state
+
+    /// The empty tab's only content (6.0 (14), the owner's design "E · chase
+    /// across"): three dots running left → right across a track, each pass
+    /// eased in and out, each dot a little behind the one before, faint at
+    /// the ends (`chaseFloor`) and at most `chasePeak` in the middle.
+    static let chaseTrack = 110.0
+    static let chaseDot = 9.0
+    static let chasePeriod = 2.1
+    static let chaseStagger = 0.25
+    static let chasePeak = 0.5
+    /// Opacity at the track's ends (the owner, 6.0 (14): a dot leaving the
+    /// track must still be seen — 0.15, not 0).
+    static let chaseFloor = 0.15
+    static let chaseDots = 3
+
+    /// Dot `index` at `time` (s): its centre's distance along the track and
+    /// its opacity. nil time = Reduce Motion: still dots, faint, near the middle.
+    static func chase(index: Int, time: Double?) -> (x: Double, opacity: Double) {
+        guard let time else {
+            let e = 0.5 + Double(index - (chaseDots - 1) / 2) * 0.16
+            return (e * chaseTrack, chasePeak * 0.7)
+        }
+        var p = (time - Double(index) * chaseStagger).truncatingRemainder(dividingBy: chasePeriod) / chasePeriod
+        if p < 0 { p += 1 }
+        let e = p < 0.5 ? 4 * p * p * p : 1 - pow(-2 * p + 2, 3) / 2
+        return (e * chaseTrack, chaseFloor + (chasePeak - chaseFloor) * sin(Double.pi * e))
     }
 
     // MARK: Text

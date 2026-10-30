@@ -106,6 +106,35 @@ nonisolated final class SerialWorker: Sendable {
             + "Edit the host and pick a baud rate."
     }
 
+    /// `IOSSIOSPEED` = `_IOW('T', 2, speed_t)` (IOKit/serial/ioss.h; the
+    /// macro does not import into Swift).
+    nonisolated static let iossioSpeed: UInt = 0x8000_0000 | (UInt(MemoryLayout<speed_t>.size & 0x1FFF) << 16) | (UInt(UInt8(ascii: "T")) << 8) | 2
+
+    /// The port's speed through `SerialSpeed`: termios (cfsetspeed +
+    /// tcsetattr), else — a rate termios does not list — the termios at
+    /// 9600 with the real rate set by IOSSIOSPEED (Apple's way for a
+    /// non-standard rate; it must come after tcsetattr, which resets it).
+    nonisolated static func setSpeed(_ fd: Int32, _ tty: inout termios, _ baud: Int) -> SerialSpeed.Outcome {
+        var lastError = ""
+        let outcome = SerialSpeed.apply(baud, termios: { rate in
+            var t = tty
+            guard cfsetspeed(&t, speed_t(rate)) == 0, tcsetattr(fd, TCSANOW, &t) == 0 else {
+                lastError = String(cString: strerror(errno)); return false
+            }
+            tty = t
+            return true
+        }, ioss: { rate in
+            var t = tty
+            guard cfsetspeed(&t, speed_t(9600)) == 0, tcsetattr(fd, TCSANOW, &t) == 0 else { return false }
+            var speed = speed_t(rate)
+            guard ioctl(fd, iossioSpeed, &speed) == 0 else { lastError = String(cString: strerror(errno)); return false }
+            tty = t
+            return true
+        })
+        if case .refused(let why) = outcome { return .refused(lastError.isEmpty ? why : "\(why) (\(lastError))") }
+        return outcome
+    }
+
     func start(devicePath: String, baudRate: Int) {
         // Before the run is claimed, so a refused baud leaves the worker free
         // for the corrected host instead of parked in `runActive`.
@@ -436,9 +465,10 @@ nonisolated final class SerialWorker: Sendable {
         // No flow control
         tty.c_cflag &= ~tcflag_t(CRTSCTS)
         tty.c_iflag &= ~tcflag_t(IXON | IXOFF | IXANY)
-        guard cfsetspeed(&tty, speed_t(baudRate)) == 0,
-              tcsetattr(fd, TCSANOW, &tty) == 0 else {
-            onClosed?("cannot configure \(baudRate) baud: \(String(cString: strerror(errno)))")
+        // A rate termios does not list (the console card's "Other…", 6.0 (14))
+        // falls back to IOSSIOSPEED; a driver that takes neither is refused.
+        if case .refused(let why) = Self.setSpeed(fd, &tty, baudRate) {
+            onClosed?("cannot configure \(baudRate) baud: \(why)")
             return
         }
 
@@ -454,10 +484,12 @@ nonisolated final class SerialWorker: Sendable {
         func applyBaudIfPending() {
             guard let baud = takeBaud() else { return }
             var current = termios()
-            guard tcgetattr(fd, &current) == 0,
-                  cfsetspeed(&current, speed_t(baud)) == 0,
-                  tcsetattr(fd, TCSANOW, &current) == 0 else {
+            guard tcgetattr(fd, &current) == 0 else {
                 onNotice?("cannot set \(baud) baud: \(String(cString: strerror(errno)))")
+                return
+            }
+            if case .refused(let why) = Self.setSpeed(fd, &current, baud) {
+                onNotice?("cannot set \(baud) baud: \(why)")
                 return
             }
             // The new speed first, then the status line: both hop to main in

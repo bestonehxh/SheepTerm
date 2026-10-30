@@ -107,6 +107,7 @@ final class LiveSSHD {
             "PubkeyAuthentication yes",
             "PermitRootLogin yes",
             "UsePAM no",
+            "PerSourcePenalties no",
             "StrictModes no",
             "LogLevel DEBUG1",
         ]

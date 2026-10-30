@@ -207,6 +207,38 @@ final class PaneTreeView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { DispatchQueue.main.async { [weak self] in self?.focusFocusedPane() } }
+        watchClicks(window != nil)
+    }
+
+    private var clickMonitor: Any?
+
+    /// Left presses in this tree's window, while it is in one: a press
+    /// outside a terminal drops its selection (`SelectionDrop`, 6.0 (14)).
+    private func watchClicks(_ on: Bool) {
+        if on, clickMonitor == nil {
+            clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                self?.dropSelections(for: event)
+                return event
+            }
+        } else if !on, let monitor = clickMonitor {
+            NSEvent.removeMonitor(monitor)
+            clickMonitor = nil
+        }
+    }
+
+    /// Every terminal on screen in this tree with a selection: dropped when
+    /// the press is elsewhere in the window (another pane, a header, the tab
+    /// strip, the sidebar, the status bar, the backdrop).
+    private func dropSelections(for event: NSEvent) {
+        guard let window else { return }
+        for leaf in leaves.values where leaf.window === window && !leaf.isHiddenOrHasHiddenAncestor {
+            guard let terminal = leaf.terminalView as? TerminalView, terminal.hasSelection else { continue }
+            if SelectionDrop.clears(click: event.locationInWindow, terminal: terminal.convert(terminal.bounds, to: nil),
+                                    sameWindow: event.window === window) {
+                terminal.selection.clear()
+                terminal.setNeedsFrame()
+            }
+        }
     }
 
     /// Show `workspace`: containers for new sessions, departed ones detached,
@@ -761,7 +793,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     static let chipLeading: CGFloat = 6
     static let chipPadding: CGFloat = 9
     static let dotGap: CGFloat = 6
-    static let chipFill = NSColor.white.withAlphaComponent(0.06)
+    static let chipFill = NSColor.white.withAlphaComponent(ChipHover.headerRestingOpacity)
+    /// Under the pointer (6.0 (14)): the chip lights up, the × gets the tab
+    /// chip's round disc (`ChipHover`, shared with the tab strip).
+    static let hoverChipFill = NSColor.white.withAlphaComponent(ChipHover.headerChipOpacity)
+    static let closeDiscFill = NSColor.labelColor.withAlphaComponent(ChipHover.closeDiscOpacity)
     static var focusedChipFill: NSColor { NSColor(Theme.accent).withAlphaComponent(0.2) }
     /// The session whose header is being dragged right now (the tab strip
     /// uses it to leave the pane's own chip unhighlighted).
@@ -780,6 +816,9 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     private let closeButton = NSButton(title: "×", target: nil, action: nil)
     private var mouseDownPoint: CGPoint?
     private var dragging = false
+    /// The pointer is over the header / over its × (redrawn on change).
+    private var hovering = false
+    private var overClose = false
     private var title = ""
     private var detail: String?
     /// The status dot's colour (see `dotColor`).
@@ -900,11 +939,51 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         needsDisplay = true
     }
 
+    // MARK: hover
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { pointerMoved(event) }
+    override func mouseMoved(with event: NSEvent) { pointerMoved(event) }
+    override func mouseExited(with event: NSEvent) { setHover(false, overClose: false) }
+
+    private func pointerMoved(_ event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        setHover(bounds.contains(point), overClose: closeButton.frame.contains(point))
+    }
+
+    private func setHover(_ hovering: Bool, overClose: Bool) {
+        guard hovering != self.hovering || overClose != self.overClose else { return }
+        self.hovering = hovering
+        self.overClose = overClose
+        needsDisplay = true
+    }
+
+    /// The chip's fill: the focused pane's accent, else lit under the pointer.
+    static func chipFill(focused: Bool, hovering: Bool) -> NSColor {
+        focused ? focusedChipFill : hovering ? hoverChipFill : chipFill
+    }
+
+    /// The ×'s disc: centred on the button, the tab chip's size.
+    static func closeDisc(around button: CGRect) -> CGRect {
+        let side = ChipHover.closeDiscSize
+        return CGRect(x: button.midX - side / 2, y: button.midY - side / 2, width: side, height: side)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         // Transparent row: only the chip is filled (the card shows round it).
         let chip = chipRect
-        (isFocused ? Self.focusedChipFill : Self.chipFill).setFill()
+        Self.chipFill(focused: isFocused, hovering: hovering).setFill()
         NSBezierPath(roundedRect: chip, xRadius: chip.height / 2, yRadius: chip.height / 2).fill()
+        if overClose {
+            Self.closeDiscFill.setFill()
+            NSBezierPath(ovalIn: Self.closeDisc(around: closeButton.frame)).fill()
+        }
         let markX = self.markX
         if isWeb, let favicon {
             let side: CGFloat = 12

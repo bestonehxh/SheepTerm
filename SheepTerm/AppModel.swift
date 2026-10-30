@@ -151,8 +151,8 @@ final class AppModel: ObservableObject {
 
     @Published var tabs: [SessionTab] = [] {
         // A tab opening that cable's port another way (sidebar, Quick
-        // Connect) takes the shadow away at once (review 5.0 (29)).
-        didSet { if serialShadow != nil { serialEvent(arrived: nil, gone: nil) } }
+        // Connect) takes the console card away at once (review 5.0 (29)).
+        didSet { if serialCard.card != nil { serialCardEvent(.tabsChanged(openPaths: openSerialPaths)) } }
     }
     /// The session that has the keyboard. Its workspace is the selected tab.
     @Published var selectedID: UUID? {
@@ -278,7 +278,9 @@ final class AppModel: ObservableObject {
     /// View → Auto-page: answer a device's `--More--` with a space so a long
     /// `show` runs to the end by itself. Read by the SSH/serial controllers on
     /// every drained chunk (`PagerDetector`). OFF by default (the user's
-    /// call, 4.2 (6)): the app sends nothing on its own unless asked to.
+    /// call, 4.2 (6)): the app sends nothing on its own unless asked to. A
+    /// paced Safe Paste run the user started answers the pager regardless
+    /// (6.0 (14)), only while it runs.
     @Published var autoPage = false {
         didSet { UserDefaults.standard.set(autoPage, forKey: "autoPage") }
     }
@@ -2590,30 +2592,70 @@ final class AppModel: ObservableObject {
 
     @Published var showQuickSearch = false
 
-    // MARK: - USB serial shadow tab (5.0 (29))
+    // MARK: - USB serial console card (5.0 (29) shadow tab → 6.0 (14) card)
 
-    /// A cable just plugged in: the dashed tab at the end of the strip.
-    @Published private(set) var serialShadow: SerialArrival.Shadow?
+    /// A cable just plugged in: the "Console cable" card at the bottom right
+    /// of the window. Every change goes through `SerialArrivalCard.reduce`
+    /// (pure, harness-tested); this side only feeds events and runs effects.
+    @Published private(set) var serialCard = SerialArrivalCard.State()
     private let serialWatcher = SerialWatcher()
     private var serialQuietUntil = Date.distantPast
+    /// ONE timer, for the card's current deadline; replaced on every change.
+    private var serialCardTimer: DispatchWorkItem?
 
     private func startSerialWatch() {
         serialWatcher.onArrived = { [weak self] path in
             // A port re-enumerating on wake is not a cable just plugged in.
             guard let self, Date() >= self.serialQuietUntil else { return }
-            self.serialEvent(arrived: path, gone: nil)
+            self.serialArrived(path)
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.serialQuietUntil = Date().addingTimeInterval(SerialArrival.wakeQuiet) }
         }
-        serialWatcher.onGone = { [weak self] path in self?.serialEvent(arrived: nil, gone: path) }
+        serialWatcher.onGone = { [weak self] path in self?.serialCardEvent(.gone(path: path)) }
+        let center = NotificationCenter.default
+        // The card's window closing takes the card with it.
+        center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] note in
+            // Posted on main (queue: .main); the object only crosses into the main-actor closure.
+            nonisolated(unsafe) let object = note.object
+            MainActor.assumeIsolated {
+                guard let window = object as? NSWindow else { return }
+                _ = self?.serialCardEvent(.windowClosed(window.windowNumber))
+            }
+        }
+        // Hidden app: nobody sees the card, its time stands still.
+        center.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.serialCardEvent(.pause(.hidden)) }
+        }
+        center.addObserver(forName: NSApplication.didUnhideNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.serialCardEvent(.resume(.hidden)) }
+        }
+        // The card's window in the Dock: the same (Windows: a minimised window is its hidden app).
+        for (name, event) in [(NSWindow.didMiniaturizeNotification, SerialArrivalCard.Event.pause(.hidden)),
+                              (NSWindow.didDeminiaturizeNotification, SerialArrivalCard.Event.resume(.hidden))] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                nonisolated(unsafe) let object = note.object
+                MainActor.assumeIsolated {
+                    guard let self, let window = object as? NSWindow, self.serialCard.card?.window == window.windowNumber else { return }
+                    _ = self.serialCardEvent(event)
+                }
+            }
+        }
+        // A menu open (the card's speed menu — or any menu while it is up):
+        // the time stands still until it closes.
+        center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.serialCardEvent(.pause(.menu)) }
+        }
+        center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.serialCardEvent(.resume(.menu)) }
+        }
         serialWatcher.start()
         #if DEBUG
         // Screenshot runs only: SHEEPTERM_DEBUG_SERIAL_ARRIVE=/dev/cu.x plays a cable plugged in after 2 s.
         if let path = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SERIAL_ARRIVE"] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.serialEvent(arrived: path, gone: nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.serialArrived(path) }
         }
-        // SHEEPTERM_DEBUG_SERIAL_OPEN=<path> opens that console after 2 s, as the shadow would (a pty for the baud menu shots).
+        // SHEEPTERM_DEBUG_SERIAL_OPEN=<path> opens that console after 2 s, as the card would (a pty for the baud menu shots).
         if let path = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_SERIAL_OPEN"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                 self?.open(host: SerialArrival.host(for: path, saved: [], usb: SerialWatcher.usbDevice(at: path)))
@@ -2635,43 +2677,72 @@ final class AppModel: ObservableObject {
         })
     }
 
-    /// Re-checks the shadow (also when its time is up: `arrived`/`gone` nil).
-    private func serialEvent(arrived: String?, gone: String?) {
-        let next = SerialArrival.next(current: serialShadow, arrived: arrived, gone: gone,
-                                      openPaths: openSerialPaths, now: Date())
-        guard next != serialShadow else { return }
-        withAnimation(.easeOut(duration: 0.2)) { serialShadow = next }
-        if let next {
-            DispatchQueue.main.asyncAfter(deadline: .now() + SerialArrival.lifetime + 0.05) { [weak self] in
-                guard let self, self.serialShadow == next else { return }
-                self.serialEvent(arrived: nil, gone: nil)
+    /// The front main terminal window (the key one, else the frontmost
+    /// visible one): where a new card goes. nil = none on screen.
+    private var frontMainWindowNumber: Int? {
+        let windows = NSApp.orderedWindows.filter { isMainTerminalWindow($0) && $0.isVisible && !$0.isMiniaturized }
+        return (windows.first { $0.isKeyWindow } ?? windows.first)?.windowNumber
+    }
+
+    /// A cable plugged in: its default speed is today's rule (the saved
+    /// serial host on that device, else `ConsoleBaud.baud(for:)`).
+    private func serialArrived(_ path: String) {
+        let usb = SerialWatcher.usbDevice(at: path)
+        let baud = SerialArrival.host(for: path, saved: store.groups.flatMap(\.hosts), usb: usb).port
+        serialCardEvent(.arrived(path: path, detail: SerialArrivalCard.detail(path: path, usb: usb), baud: baud,
+                                 window: frontMainWindowNumber, openPaths: openSerialPaths))
+    }
+
+    /// The one way the card changes. Returns the effect for Connect.
+    @discardableResult
+    func serialCardEvent(_ event: SerialArrivalCard.Event) -> SerialArrivalCard.Effect {
+        var next = serialCard
+        let effect = SerialArrivalCard.reduce(&next, event, now: Date())
+        if next != serialCard {
+            // Fade only when a card comes, goes or is replaced.
+            if next.card?.generation != serialCard.card?.generation {
+                withAnimation(.easeOut(duration: 0.2)) { serialCard = next }
+            } else {
+                serialCard = next
             }
         }
+        scheduleSerialCardTimer()
+        return effect
     }
 
-    /// The shadow clicked: that console, opened like any serial host.
-    func openSerialShadow() {
-        guard let shadow = serialShadow else { return }
-        serialShadow = nil
-        // Already open in a tab: go there (a second open would find the port busy).
-        let port = SerialArrival.calloutPath(shadow.path)
-        if let tab = tabs.first(where: {
-            if case .serial(let controller) = $0.content { return SerialArrival.calloutPath(controller.host.address) == port }
-            return false
-        }) {
-            // That pane itself, not its workspace's last focus: in a split the
-            // keyboard must land on the console (selecting it also un-zooms).
-            selectedID = tab.id
-            DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
-        } else {
-            open(host: SerialArrival.host(for: shadow.path, saved: store.groups.flatMap(\.hosts),
-                                          usb: SerialWatcher.usbDevice(at: shadow.path)))
+    private func scheduleSerialCardTimer() {
+        serialCardTimer?.cancel()
+        serialCardTimer = nil
+        guard let deadline = serialCard.card?.deadline else { return }
+        let item = DispatchWorkItem { [weak self] in self?.serialCardEvent(.tick) }
+        serialCardTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow) + 0.05, execute: item)
+    }
+
+    /// Connect: that console at the card's speed — a speed picked on the
+    /// card opens a copy, the saved host is never changed — or, when a tab
+    /// already holds the port, that tab.
+    func connectSerialCard() {
+        switch serialCardEvent(.connect(openPaths: openSerialPaths)) {
+        case .none:
+            return
+        case .select(let path):
+            let port = SerialArrival.calloutPath(path)
+            if let tab = tabs.first(where: {
+                if case .serial(let controller) = $0.content { return SerialArrival.calloutPath(controller.host.address) == port }
+                return false
+            }) {
+                // That pane itself, not its workspace's last focus: in a split the
+                // keyboard must land on the console (selecting it also un-zooms).
+                selectedID = tab.id
+                DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
+            }
+        case .open(let path, let baud):
+            var host = SerialArrival.host(for: path, saved: store.groups.flatMap(\.hosts), usb: SerialWatcher.usbDevice(at: path))
+            host.port = baud
+            open(host: host)
         }
         collapseSidebar()
-    }
-
-    func dismissSerialShadow() {
-        withAnimation(.easeOut(duration: 0.2)) { serialShadow = nil }
     }
 
     /// Sidebar auto-collapses once a session is opened from it,
