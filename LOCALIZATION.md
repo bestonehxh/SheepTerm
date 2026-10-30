@@ -44,8 +44,8 @@ Export Localizations workflow collects new localizable strings and produces
 translator bundles without maintaining duplicate hand-written `.strings` files.
 
 Users choose a language in **Settings → General → Language → App Language**,
-then quit and reopen SheepTerm. The choices are System Default, English and
-Simplified Chinese. Adding a translation for another language also requires
+then quit and reopen SheepTerm. The choices are System Default and the nine
+languages above. Adding a translation for another language also requires
 adding its option to the in-app picker. Keyboard input is independent of the
 interface language; Chinese input uses the macOS input source, and Chinese
 terminal output must be UTF-8.

@@ -7,7 +7,7 @@
 <p align="center"><b>The terminal built for network engineers.</b><br>
 SSH, Telnet, serial and local shell with highlighting that knows your vendor — plus file transfer (SFTP, SCP, FTP, TFTP), SSH port forwarding, Ping, device web UIs and an AI that reads the output with you.</p>
 
-<p align="center">本应用支持 <b>简体中文（zh-Hans）</b>，界面跟随系统语言。</p>
+<p align="center">English · 简体中文 · 日本語 · 한국어 · Español · Português (Brasil) · Français · Deutsch · Русский</p>
 
 <p align="center">
   <a href="https://github.com/bestonehxh/SheepTerm/releases/latest/download/SheepTerm-6.0-16.dmg"><img src="https://img.shields.io/badge/Download-SheepTerm_6.0_%2816%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download SheepTerm for macOS"></a>
@@ -15,50 +15,107 @@ SSH, Telnet, serial and local shell with highlighting that knows your vendor —
   <a href="https://github.com/bestonehxh/SheepTerm-Linux/releases/latest"><img src="https://img.shields.io/badge/Download-SheepTerm_for_Linux-E95420?style=for-the-badge&logo=linux&logoColor=white" alt="Download SheepTerm for Linux"></a>
 </p>
 
-<p align="center"><a href="https://sheepterm.com/">Website</a> · <a href="https://github.com/sponsors/bestonehxh">♥ Support SheepTerm</a> · <a href="https://github.com/bestonehxh/SheepTerm/releases">Release notes</a> · <a href="https://github.com/bestonehxh/SheepTerm-Windows">SheepTerm for Windows</a> · <a href="https://github.com/bestonehxh/SheepTerm-Linux">SheepTerm for Linux</a></p>
+<p align="center"><a href="https://sheepterm.com/">Website</a> · <a href="https://sheepterm.com/features/">All features</a> · <a href="https://github.com/sponsors/bestonehxh">♥ Support SheepTerm</a> · <a href="https://github.com/bestonehxh/SheepTerm/releases">Release notes</a> · <a href="https://github.com/bestonehxh/SheepTerm-Windows">SheepTerm for Windows</a> · <a href="https://github.com/bestonehxh/SheepTerm-Linux">SheepTerm for Linux</a></p>
 
-<p align="center"><img src="docs/images/hero.webp" width="900" alt="SheepTerm with three panes: Cisco, Aruba CX and FortiGate output highlighted per vendor, beside a sidebar of saved hosts"></p>
-
-## ✨ New in 6.0
-
-- **Open File** — browse and copy files on a device over SFTP, SCP, FTP or TFTP. From an SSH tab it rides the same connection: no second login, through a jump host too.
-- **Serve File** — a TFTP / SFTP / SCP / FTP server in the bottom bar: pick the file, copy the command for your device family. Off until you start it; stops itself after 10 idle minutes; uploads never overwrite.
-- **Transfer progress & Transfer Log** — percent and size in the bottom bar, Success or Failed (with the reason) after, every past transfer in one log.
-- **Ping** — ping many devices at once: latency, OK / Failed, rate and a live graph per device, a packet log to copy or save as CSV; split it beside an SSH tab to watch a reload.
-- **Telnet** — sessions, and `telnet://` links from GNS3 / EVE-NG.
-- **Port forwarding** — local, remote and SOCKS forwards over SSH.
-- **Connection status** — Wool, Packet or Sheep in the bottom bar.
+<p align="center"><img src=".github/images/hero.webp" width="900" alt="SheepTerm with three panes: Cisco, Aruba CX and FortiGate output highlighted per vendor, beside a sidebar of saved hosts in nested groups"></p>
 
 ## Features
 
+The short version, by area. Every feature is on [sheepterm.com/features](https://sheepterm.com/features/).
+
+### Connections
+
+SSH, serial, Telnet and a local shell, each in its own tab. One box takes `user@host`, a URL, `ping 10.0.0.1` or `sftp://…`, and `ssh://` / `telnet://` links from GNS3 or EVE-NG open a tab. Sign-in happens on a card inside the tab; jump host, local / remote / SOCKS port forwards, auto-reconnect and legacy ciphers for old gear are built in.
+
+### Sidebar & groups
+
+Groups inside groups (a site, a building, a floor) in one searchable sidebar. Drag to reorder. Each host keeps its own device family, credential, logging and paging choice.
+
+### Tabs & split panes
+
+Up to nine panes in one tab, in a tidy grid, every pane a full session. Drag a pane header or a tab chip to move or merge; zoom a pane, even them out, or unsplit it back to a tab.
+
 <table>
 <tr>
-<td width="50%"><img src="docs/images/highlight.webp" alt="Cisco and Aruba CX output highlighted per vendor"><br><b>Vendor-aware highlighting</b> — Cisco, Aruba, Fortinet, Huawei, Juniper, Palo Alto and more.</td>
-<td width="50%"><img src="docs/images/web.webp" alt="A console beside its device web UI, with the certificate trust card"><br><b>Device web UIs in a tab</b> — beside the console, certificates trusted like host keys.</td>
-</tr>
-<tr>
-<td><img src="docs/images/files-open.webp" alt="The plus menu with Open File, and the Open File form"><br><b>Open File</b> — SFTP, SCP, FTP or TFTP; rides an open SSH tab.</td>
-<td><img src="docs/images/files-serve.webp" alt="The Serve File panel with an Aruba CX copy command, beside the Transfer Log"><br><b>Serve File &amp; Transfer Log</b> — a file server in the bottom bar, every transfer logged.</td>
-</tr>
-<tr>
-<td colspan="2"><img src="docs/images/ping-split.webp" alt="A Ping tab beside a terminal while a core switch reloads: the switch shows Fail"><br><b>Ping, beside the console</b> — many hosts at once with latency, OK / Failed, rate and a last-minute graph; split it next to an SSH tab to watch a reload.</td>
-</tr>
-<tr>
-<td><img src="docs/images/ai.webp" alt="AI panel explaining an err-disabled port with secrets removed"><br><b>AI panel</b> — Claude or ChatGPT, your own login; secrets removed first.</td>
-<td><img src="docs/images/sync.webp" alt="Encrypted sync between Mac and Windows through your own Google Drive"><br><b>Google Drive sync</b> — end-to-end encrypted, in your own Drive.</td>
-</tr>
-<tr>
-<td><img src="docs/images/netinfo.webp" alt="Network Info window with interfaces and ARP table"><br><b>Network Info</b> — real MAC addresses and ARP table on macOS 27.</td>
-<td><img src="docs/images/themes.webp" alt="The same output in four terminal themes"><br><b>Themes &amp; fonts</b> — six themes, bundled monospace fonts.</td>
+<td width="50%"><img src=".github/images/panes.webp" alt="Four panes: Aruba CX, Cisco, FortiGate and Juniper sessions"></td>
+<td width="50%"><img src=".github/images/grid.webp" alt="Nine panes in a 3 by 3 grid, each a different device"></td>
 </tr>
 </table>
 
-**Also:** split panes · jump host · serial with Send Break · session logs + Search Logs · Snippets & Broadcast · safe multi-line paste · Share Link · Add Hosts from CSV · per-host command history · legacy ciphers for old gear · signed in-app updates.
+### Terminal
+
+Our own emulator with one highlight pack per device family: Cisco, Aruba, Huawei, H3C / HPE, Juniper, Palo Alto, Fortinet, Check Point and Linux. The family is detected from the stream or set per host, and a device's own colours are never overridden.
+
+<p align="center"><img src=".github/images/packs.webp" width="800" alt="Huawei, Cisco NX-OS, Palo Alto and Juniper output, each with its own highlight pack"></p>
+
+**Safe Multi-line Paste** previews a paste and sends it line by line, waiting for the device's prompt. **Danger Command Guard** holds `reload`, `write erase` and the like until you press Send. Also: session logs with Search Logs, Auto-page, six themes, bundled monospace fonts and Network Info with the ARP table.
+
+<p align="center"><img src=".github/images/safe-paste.webp" width="460" alt="Safe Multi-line Paste listing six lines, with reload in red"></p>
+
+### Ping tab
+
+Many hosts at once, in a tab or split beside the console while a device reloads: Status, latency, OK / Failed, rate, a last-minute graph and a packet log to save as CSV. Nothing pings until you add a target.
+
+<p align="center"><img src=".github/images/ping-split.webp" width="800" alt="A terminal rebooting a switch beside a Ping tab where that switch shows Fail"></p>
+
+### File Server & Files tab
+
+TFTP, SFTP, SCP and FTP servers in the bottom bar, off until you start them: pick a file and copy the command for your device family. The Files tab browses a device over SFTP, SCP, FTP or TFTP and rides an open SSH tab: no second login, through a jump host too.
+
+<p align="center"><img src=".github/images/file-server.webp" width="800" alt="The File Server card with TFTP on and an Aruba CX copy command for the chosen firmware file"></p>
+
+### Web tabs & login key
+
+A device's web page in a tab or pane, next to its console. Self-signed certificates are confirmed like host keys. A key inside the login field fills a saved credential; nothing is submitted for you.
+
+<p align="center"><img src=".github/images/web.webp" width="800" alt="A console beside its device web page, with the key inside the Username field"></p>
+
+### Snippets, Broadcast, Command History
+
+Saved commands with `{{variables}}`, one line typed into every tab you tick, and each host's own history of up to 500 commands with secrets filtered out.
+
+### Sync & security
+
+Passwords stay in the macOS Keychain. Sign in with Google to sync hosts, groups, credentials, snippets and settings between Mac and Windows, end-to-end encrypted with your passphrase, in your own Drive. Off until you sign in.
+
+### AI panel
+
+Ask about the output in front of you with the Claude, ChatGPT or Gemini subscription you already have, through the vendors' own CLIs. Secrets are removed first, you can see exactly what is sent, and it never runs a command.
+
+### Console cable
+
+Plug in a USB console cable and a card offers Connect at the right speed. The speed is a menu on the open port, wrong-speed text gets a *Garbled? Try 115200* hint, and Send Break and XMODEM / YMODEM are there for a recovery.
+
+<p align="center"><img src=".github/images/console-card.webp" width="800" alt="The Console cable card at the bottom right of the terminal, with a 9600 baud menu and Connect"></p>
+
+### Backup, import & export
+
+Add Hosts from a spreadsheet or CSV, one Backup file (never with passwords), `.sheepterm` group files, and Share Link: a group sealed with a passphrase, kept in your own Drive.
+
+### What's New & updates
+
+Updates are checked against an Ed25519 signature and install only when you press the button. What's New opens once per release, and any time from the menu.
+
+## Shortcuts
+
+| Action | Keys |
+|---|---|
+| Quick Connect | ⌘K |
+| New Terminal Tab | ⌘T |
+| New SSH Connection | ⇧⌘N |
+| Split Right / Split Down | ⌘D / ⇧⌘D |
+| Close Pane / Close Tab | ⌘W / ⇧⌘W |
+| Next / Previous Tab | ⇧⌘] / ⇧⌘[ |
+| Tab 1 to Tab 9 | ⌘1 to ⌘9 |
+| Find | ⌘F |
+| Toggle Sidebar | ⌘0 |
+| Command History | ⌘Y |
+
+No bare ⌃ letter belongs to the app: ⌃A, ⌃R, ⌃W and the rest reach the shell or the device CLI, and ⌥ works as Meta. [Every shortcut, Mac and Windows](https://sheepterm.com/features/#shortcuts).
 
 ## Languages
 
-- **English** (`en`) — the source language.
-- **简体中文 (Simplified Chinese, `zh-Hans`)** — the interface, menus included.
+Nine languages on both Mac and Windows: English, 简体中文, 日本語, 한국어, Español, Português (Brasil), Français, Deutsch and Русский.
 
 The interface follows your Mac's system language. If the system language is not supported, SheepTerm falls back to English. To switch manually, open **Settings → General → Language → App Language**, choose a language, then quit and reopen SheepTerm.
 
