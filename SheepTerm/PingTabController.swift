@@ -304,7 +304,7 @@ final class PingTabController: ObservableObject {
         if result.isSuccess, !result.resolvedIP.isEmpty, result.resolvedIP != row.resolvedIP {
             row.resolvedIP = result.resolvedIP
         }
-        guard row.stats.record(result.isSuccess ? result.latency ?? 0 : nil) != nil else { return }
+        guard row.stats.record(result.isSuccess ? result.latency ?? 0 : nil).status != nil else { return }
         statusTick &+= 1
         onStatus?(summary)
     }
@@ -338,7 +338,8 @@ final class PingTabController: ObservableObject {
         }
         // The story the promo tells: core-sw1 is rebooting onto a new image.
         row("core-sw1", "10.10.1.1", wave(1.1, 0.6, seed: 1).enumerated().map { $0.offset >= 44 ? nil : $0.element })
-        row("dist-sw3", "10.10.1.3", wave(38, 30, seed: 4).enumerated().map { $0.offset % 13 == 5 ? nil : $0.element })
+        // The last reply decides the badge: this row is the Slow one.
+        row("dist-sw3", "10.10.1.3", wave(38, 30, seed: 4).enumerated().map { $0.offset % 13 == 5 ? nil : $0.offset >= 58 ? 110 : $0.element })
         row("edge-fw", "10.10.1.6", wave(2.4, 1.0, seed: 2))
         row("Google DNS", "8.8.8.8", wave(13, 4, seed: 7))
         changed()

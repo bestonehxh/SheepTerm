@@ -1,16 +1,18 @@
 import Foundation
 
 /// The Ping tab's rules (6.0 (2)): what a typed line expands to, how a row's
-/// last 60 packets read as up / slow / down, and the up/down log lines.
+/// latest packet reads as up / slow / down, and the up/down log lines.
 /// Pure and Foundation-only — the harness compiles it (`PingTests`).
 nonisolated enum PingPlan {
     /// Targets one tab pings at most (one /sbin/ping process each).
     static let maxTargets = 64
     /// Packets a row remembers (stats + sparkline).
     static let window = 60
-    /// A reply slower than this (ms) makes the row amber.
+    /// A reply slower than this (ms) makes the row amber: a LAN / domestic
+    /// rule of thumb, ping has no standard (ARCHITECTURE.md §33).
     static let slowMilliseconds = 100.0
-    /// Consecutive lost packets that make a row red.
+    /// Consecutive lost packets that count as down for the up/down log
+    /// (the badge turns red on the first).
     static let downAfter = 2
     /// Send intervals offered (s); the first launch uses `defaultInterval`.
     static let intervals: [Double] = [0.5, 1, 2, 5]
@@ -215,12 +217,22 @@ nonisolated enum PingPlan {
 
     // MARK: Status
 
+    /// The badge: the latest packet alone, never the window (6.0 (15), the
+    /// owner: one loss a minute ago kept the row Slow for a minute).
     enum Status: Equatable {
         /// No packet settled yet (or the row was restarted).
         case waiting
+        /// Latest reply within `slowMilliseconds` / slower / latest packet lost.
         case up, slow, down
         /// Stopped by the user.
         case stopped
+    }
+
+    /// The up/down log's view of a row (6.0 (15)), apart from the badge so
+    /// a single lost packet writes nothing: down after `downAfter`
+    /// consecutive losses, up on the first reply.
+    enum Reach: Equatable {
+        case unknown, up, down
     }
 
     /// One row's last `window` packets: latency in ms, nil = lost.
@@ -228,6 +240,13 @@ nonisolated enum PingPlan {
         private(set) var samples: [Double?] = []
         private(set) var consecutiveLosses = 0
         private(set) var status: Status = .waiting
+        private(set) var reach: Reach = .unknown
+
+        /// What one packet changed; nil = stayed the same.
+        struct Change: Equatable {
+            var status: Status?
+            var reach: Reach?
+        }
 
         var lastLatency: Double? { samples.last ?? nil }
         var lossPercent: Double? {
@@ -235,31 +254,28 @@ nonisolated enum PingPlan {
             return Double(samples.filter { $0 == nil }.count) / Double(samples.count) * 100
         }
 
-        /// Records one packet; returns the new status when it changed.
+        /// Records one packet; returns what it changed.
         @discardableResult
-        mutating func record(_ latency: Double?) -> Status? {
+        mutating func record(_ latency: Double?) -> Change {
             samples.append(latency)
             if samples.count > PingPlan.window { samples.removeFirst(samples.count - PingPlan.window) }
             consecutiveLosses = latency == nil ? consecutiveLosses + 1 : 0
-            let next: Status
-            if consecutiveLosses >= PingPlan.downAfter {
-                next = .down
-            } else if latency == nil && status == .down {
-                next = .down       // one more loss while down is still down
-            } else if latency == nil && status == .waiting {
-                next = .waiting    // a first lost packet says nothing yet
-            } else if (latency ?? 0) > PingPlan.slowMilliseconds || samples.contains(where: { $0 == nil }) {
-                next = .slow
+            let nextStatus: Status
+            let nextReach: Reach
+            if let latency {
+                nextStatus = latency > PingPlan.slowMilliseconds ? .slow : .up
+                nextReach = .up
             } else {
-                next = .up
+                nextStatus = .down
+                nextReach = consecutiveLosses >= PingPlan.downAfter ? .down : reach
             }
-            defer { status = next }
-            return next == status ? nil : next
+            defer { status = nextStatus; reach = nextReach }
+            return Change(status: nextStatus == status ? nil : nextStatus, reach: nextReach == reach ? nil : nextReach)
         }
 
-        mutating func stop() { status = .stopped; consecutiveLosses = 0 }
+        mutating func stop() { status = .stopped; reach = .unknown; consecutiveLosses = 0 }
         /// Resume keeps the samples; the status is re-earned by the next packet.
-        mutating func resume() { status = .waiting; consecutiveLosses = 0 }
+        mutating func resume() { status = .waiting; reach = .unknown; consecutiveLosses = 0 }
         mutating func reset() { self = Stats() }
     }
 
@@ -286,14 +302,14 @@ nonisolated enum PingPlan {
         }
     }
 
-    /// The event a status change makes, if any: the first answer, entering
-    /// down, and leaving it for up/slow. Up ↔ slow is not logged.
-    static func event(from old: Status, to new: Status, latency: Double? = nil, downSince: Date?, now: Date) -> Event? {
+    /// The event a reach change makes, if any: the first answer, entering
+    /// down, and leaving it.
+    static func event(from old: Reach, to new: Reach, latency: Double? = nil, downSince: Date?, now: Date) -> Event? {
         if new == .down && old != .down { return .down }
-        if old == .down && (new == .up || new == .slow) {
+        if old == .down && new == .up {
             return .up(downFor: downSince.map { now.timeIntervalSince($0) })
         }
-        if old == .waiting && (new == .up || new == .slow) { return .first(latency: latency) }
+        if old == .unknown && new == .up { return .first(latency: latency) }
         return nil
     }
 
