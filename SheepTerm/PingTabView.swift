@@ -549,8 +549,7 @@ struct PingSparkline: View {
                     i = j
                 }
             }
-            let slow = (samples.last ?? nil).map { $0 > PingPlan.slowMilliseconds } ?? false
-            let tint = slow ? Theme.warn : Theme.ok
+            let tint = PingPlan.graphIsSlow(samples) ? Theme.warn : Theme.ok
             // A soft area under the line (each answered run down to the base).
             var area = Path()
             var run: [CGPoint] = []

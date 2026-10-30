@@ -279,6 +279,13 @@ nonisolated enum PingPlan {
         mutating func reset() { self = Stats() }
     }
 
+    /// The sparkline's colour: amber when the latest REPLY was slow. A lost
+    /// packet has no latency, so it keeps that reply's colour (6.0 (16), the
+    /// owner: a slow host's graph turned green during a loss).
+    static func graphIsSlow(_ samples: [Double?]) -> Bool {
+        (samples.last { $0 != nil } ?? nil).map { $0 > slowMilliseconds } ?? false
+    }
+
     // MARK: Log
 
     /// What the log records: the first reply, going down, coming back
