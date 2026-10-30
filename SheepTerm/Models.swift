@@ -520,7 +520,7 @@ enum GroupTree {
     /// build, a sync or a backup with four levels loads as it is — never
     /// flattened.
     static let maxDepth = 4
-    /// What the USER may make (6.0 (12), design G): New Group…, a move, an
+    /// What the USER may make (6.0 (12), design G): Add Subgroup…, a move, an
     /// Add Hosts path, a `.sheepterm` / Share Link import build at most three
     /// levels — one bar colour each (`levelColor`). A fourth level that
     /// already exists stays, may move UP, and is never pushed deeper

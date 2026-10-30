@@ -22,7 +22,8 @@ struct NamePromptSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.headline)
+            // Two lines: a title can carry a group's name, however long.
+            Text(title).font(.headline).lineLimit(2)
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(commit)

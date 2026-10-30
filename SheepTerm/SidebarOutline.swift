@@ -86,7 +86,7 @@ struct SidebarOutline: NSViewRepresentable {
     /// for all of them, and one call is one write. `onDeleteGroup` keeps its
     /// own confirmation for the single-group case.
     let onDeleteGroups: (Set<UUID>) -> Void
-    /// A group's menu → New Group…: a subgroup of it, named in a prompt only
+    /// A group's menu → Add Subgroup…: a subgroup of it, named in a prompt only
     /// SwiftUI can put on screen.
     let onNewSubgroup: (HostGroup) -> Void
     /// View → Group Colors (`GroupTree.groupColorsKey`): the level bars drawn or not.
@@ -1589,7 +1589,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // either: greyed, so the menu does not change shape.
             if parent.searchText.isEmpty {
                 menu.autoenablesItems = false
-                add(menu, String(localized: "New Group…")) { [weak self] in self?.parent.onNewSubgroup(group) }
+                add(menu, String(localized: "Add Subgroup…")) { [weak self] in self?.parent.onNewSubgroup(group) }
                 menu.items.last?.isEnabled = GroupTree.canAddChild(to: group.id, in: parent.store.groups)
             }
             add(menu, String(localized: "Set Credential for Group…")) { [weak self] in self?.parent.onSetGroupCredential(group) }

@@ -24,7 +24,7 @@ struct SidebarView: View {
     @State private var collapsedGroups: Set<UUID> = Self.loadCollapsedGroups()
     /// Subgroups that are OPEN (they start shut, each opens on its own).
     @State private var openSubgroups: Set<UUID> = Self.loadOpenSubgroups()
-    /// The group a "New Group…" from a group's menu makes a subgroup in.
+    /// The group an "Add Subgroup…" from a group's menu makes a subgroup in.
     @State private var newSubgroupParent: HostGroup?
     @AppStorage("showRecents") private var showRecents = true
     @AppStorage("recentsShown") private var recentsShown = 5
@@ -300,7 +300,9 @@ struct SidebarView: View {
             }
         }
         .sheet(item: $newSubgroupParent) { parent in
-            NamePromptSheet(title: "New Group", confirmLabel: "Create") { rawName in
+            // Names the parent, and its words differ from New Group's: the
+            // two prompts must not read alike (the user: they confused people).
+            NamePromptSheet(title: "Add Subgroup to “\(parent.name)”", confirmLabel: "Add") { rawName in
                 createGroup(named: rawName, in: parent)
             }
         }
