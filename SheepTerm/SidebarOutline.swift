@@ -830,6 +830,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
 
     private var isDragging = false
+    private typealias GroupDrop = (parent: UUID?, slot: Int, dropItem: SidebarItem?, dropChildIndex: Int)
+    /// The landing `validateDrop` last drew the line for (`acceptDrop`).
+    private var validatedGroupDrop: (ids: Set<UUID>, drop: GroupDrop)?
     private var pendingRebuild = false
 
     init(_ parent: SidebarOutline) {
@@ -1029,15 +1032,22 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         // session finishing mid-drag (which appends to Recent, so the stamp
         // really does change) was enough to reload the outline out from under
         // the drop. Owe the rebuild instead and pay it in draggingSession
-        // ended, which AppKit always calls, cancelled drags included.
+        // ended — or here, the moment the button is up: seen on macOS 27,
+        // that callback did not come, and a drag that never ended held every
+        // later rebuild, so a drop moved the data and the list stayed as it was.
         if isDragging {
-            pendingRebuild = true
-            return
+            guard !SidebarLayout.dragHoldsRebuild(mouseButtons: NSEvent.pressedMouseButtons) else {
+                pendingRebuild = true
+                return
+            }
+            endDrag()
         }
         // Cheap gate first. buildRoots() allocates a SidebarItem per node and
         // currentSignature() joins a String from every row — at 2,000 hosts
         // that is ~2.3 ms and ~75 KB of garbage, and updateNSView runs on
         // EVERY AppModel publish, so a divider drag paid it per frame.
+        let force = force || pendingRebuild
+        pendingRebuild = false
         let stamp = InputStamp(revision: parent.store.revision,
                                search: parent.searchText,
                                showRecents: parent.showRecents,
@@ -1818,6 +1828,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                       let id = header.group?.id else { return nil }
                 let landing = SidebarLayout.hostLanding(rows: flatRows(header), at: at, header: id, groups: all)
                 return (landing.group, landing.index, header, at)
+            case .section:
+                // The line above the first group, offered as this section's
+                // last child: the root gap there.
+                guard index == node.children.count, sectionEndsAboveGroups(node), let gap = rootGap(0) else { return nil }
+                return (gap.groupID, 0, gap.node, 0)
             default:
                 return nil
             }
@@ -1846,19 +1861,44 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         return (groupID, groupNodes[gap.groupOrdinal], gap.aboveEveryGroup)
     }
 
+    private func sectionEndsAboveGroups(_ node: SidebarItem) -> Bool {
+        guard let at = roots.firstIndex(where: { $0 === node }) else { return false }
+        return SidebarLayout.sectionEndsAboveGroups(rootIsGroup: roots.map { $0.kind == .group }, section: at)
+    }
+
     /// Where dragged GROUPS land: under `parent` (nil = top level) at `slot`
-    /// among its subgroups, and where AppKit draws it. `validateDrop` and
-    /// `acceptDrop` both come through here with the same inputs. nil = no
-    /// drop here (into itself, or past the depth cap).
+    /// among its subgroups, and where AppKit draws it. nil = no drop here
+    /// (into itself, or past the depth cap).
     ///
     /// - ON a header or a folder row: into it, as its last subgroup.
     /// - Between a header's rows: `SidebarLayout.groupLanding` (pure, tested).
     /// - ON a host row: as if between rows, just above it.
-    /// - A root gap: the top level, between the headers there.
-    private func groupDrop(_ ids: Set<UUID>, item: Any?, childIndex index: Int)
-        -> (parent: UUID?, slot: Int, dropItem: SidebarItem?, dropChildIndex: Int)? {
+    /// - A root gap, or the line closing the section above the first group:
+    ///   the top level, between the headers there.
+    private func groupDrop(_ ids: Set<UUID>, item: Any?, childIndex index: Int, pointerRow: Int? = nil) -> GroupDrop? {
         let all = parent.store.groups
-        var target: (parent: UUID?, slot: Int, dropItem: SidebarItem?, dropChildIndex: Int)
+        let rootIsGroup = roots.map { $0.kind == .group }
+        let groupRows = rootIsGroup.indices.filter { rootIsGroup[$0] }
+        // The line is drawn ABOVE the slot-th group row (or after the last
+        // row), never among the fixed rows above the groups.
+        func topLevel(_ slot: Int) -> GroupDrop {
+            (nil, slot, nil, slot < groupRows.count ? groupRows[slot] : roots.count)
+        }
+        func line(in header: SidebarItem, at row: Int) -> GroupDrop? {
+            guard let id = header.group?.id, let ordinal = groupRows.firstIndex(where: { roots[$0] === header }) else { return nil }
+            // Below the header's last row, or below every row (-1).
+            let past = pointerRow.map { pointer in
+                guard let outline, let last = header.children.last else { return false }
+                return pointer == -1 || pointer > outline.row(forItem: last)
+            } ?? false
+            switch SidebarLayout.groupLanding(rows: flatRows(header), at: row, header: id, groups: all,
+                                              dragging: ids, pastLastRow: past) {
+            case .aboveHeader: return topLevel(ordinal)
+            case .belowHeader: return topLevel(ordinal + 1)
+            case .inside(let into, let slot, let line): return (into, slot, header, min(line, header.children.count))
+            }
+        }
+        var target: GroupDrop?
         if let node = item as? SidebarItem {
             switch node.kind {
             case .subgroup:
@@ -1868,28 +1908,22 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 guard let id = node.group?.id else { return nil }
                 target = (id, GroupTree.children(of: id, in: all).count, node, NSOutlineViewDropOnItemIndex)
             case .group:
-                guard let id = node.group?.id else { return nil }
-                let landing = SidebarLayout.groupLanding(rows: flatRows(node), at: index, header: id, groups: all)
-                target = (landing.parent, landing.slot, node, min(max(index, 0), node.children.count))
+                target = line(in: node, at: max(index, 0))
             case .host:
-                guard let header = header(of: node), let at = header.children.firstIndex(where: { $0 === node }),
-                      let id = header.group?.id else { return nil }
-                let landing = SidebarLayout.groupLanding(rows: flatRows(header), at: at, header: id, groups: all)
-                target = (landing.parent, landing.slot, header, at)
+                guard let header = header(of: node), let at = header.children.firstIndex(where: { $0 === node }) else { return nil }
+                target = line(in: header, at: at)
+            case .section:
+                guard index == node.children.count, sectionEndsAboveGroups(node) else { return nil }
+                target = topLevel(0)
             default:
                 return nil
             }
         } else {
             guard item == nil else { return nil }
-            let rootIsGroup = roots.map { $0.kind == .group }
-            let groupRows = rootIsGroup.indices.filter { rootIsGroup[$0] }
             let stop = index == NSOutlineViewDropOnItemIndex ? roots.count : min(max(index, 0), roots.count)
-            let slot = SidebarLayout.rootGroupSlot(rootIsGroup: rootIsGroup, index: stop)
-            // The line is drawn ABOVE the slot-th group row (or after the last
-            // row), never among the fixed rows above the groups.
-            target = (nil, slot, nil, slot < groupRows.count ? groupRows[slot] : roots.count)
+            target = topLevel(SidebarLayout.rootGroupSlot(rootIsGroup: rootIsGroup, index: stop))
         }
-        guard GroupTree.canMove(ids, under: target.parent, in: all) else { return nil }
+        guard let target, GroupTree.canMove(ids, under: target.parent, in: all) else { return nil }
         return target
     }
 
@@ -1912,8 +1946,12 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // is in flight; lighting up an insertion line for a move that
             // cannot happen is worse than refusing the drop.
             let live = Set(ids.filter { parent.store.location(ofGroup: $0) != nil })
-            guard !live.isEmpty, let drop = groupDrop(live, item: item, childIndex: index) else { return [] }
+            validatedGroupDrop = nil
+            let pointerRow = outlineView.row(at: outlineView.convert(info.draggingLocation, from: nil))
+            guard !live.isEmpty, let drop = groupDrop(live, item: item, childIndex: index, pointerRow: pointerRow)
+            else { return [] }
             outlineView.setDropItem(drop.dropItem, dropChildIndex: drop.dropChildIndex)
+            validatedGroupDrop = (live, drop)
             return .move
         case .hosts(let ids):
             guard ids.contains(where: { parent.store.location(ofHost: $0) != nil }) else { return [] }
@@ -1935,9 +1973,15 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         switch payload {
         case .groups(let ids):
             let live = Set(ids.filter { parent.store.location(ofGroup: $0) != nil })
-            // AppKit hands back the item and index `validateDrop` set, so this
-            // resolves to the same landing.
-            guard !live.isEmpty, let drop = groupDrop(live, item: item, childIndex: index) else { return false }
+            // AppKit hands back the item and index `validateDrop` SET, not the
+            // ones it proposed, so the landing is the one the line was drawn
+            // for: asking again from where the line was redrawn can answer
+            // differently (the line under a header's hosts is the gap below
+            // the header when proposed there).
+            let shown = validatedGroupDrop.flatMap { held -> GroupDrop? in
+                held.ids == live && held.drop.dropItem === item as? SidebarItem && held.drop.dropChildIndex == index ? held.drop : nil
+            }
+            guard !live.isEmpty, let drop = shown ?? groupDrop(live, item: item, childIndex: index) else { return false }
             // A subgroup dropped INTO a group is put where it can be seen.
             if let into = drop.parent {
                 parent.collapsedGroups.remove(into)
@@ -1962,10 +2006,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // refused them.
             parent.store.moveHosts(withIDs: live, toGroupID: drop.group, atIndex: drop.index)
         }
-        // The drag is still open here — AppKit ends the session only after the
-        // destination is done — so this normally just books the rebuild and
-        // draggingSession/endedAt pays it a moment later. Asking for it here
-        // anyway keeps the call correct whichever way that order goes.
+        // The button is up by now, so this pays at once (`rebuild`).
         rebuild(force: true)
         return true
     }
@@ -2069,12 +2110,16 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// outside the window — so the deferred rebuild can never be stranded.
     func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession,
                      endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        endDrag()
+        guard pendingRebuild else { return }
+        rebuild(force: true)
+    }
+
+    private func endDrag() {
         isDragging = false
+        validatedGroupDrop = nil
         InternalDrag.hosts = []
         stopAutoscroll()
-        guard pendingRebuild else { return }
-        pendingRebuild = false
-        rebuild(force: true)
     }
 }
 

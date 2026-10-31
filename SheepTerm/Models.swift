@@ -4860,38 +4860,97 @@ enum SidebarLayout {
     /// A HOST dropped on the line above row `index` of a header's rows
     /// (`index == rows.count` = under the last one):
     /// - above a host → just before it, in that host's group;
-    /// - above a folder → the END of the hosts of the group the folder sits
-    ///   in (a group's hosts come before its folders);
-    /// - under the last row → the end of the header group's own hosts.
+    /// - right under a host (the line above a folder, or under the last row)
+    ///   → just after that host, in ITS group: the line ending an open folder
+    ///   puts a host last in that folder, not back at the top of the header;
+    /// - above a folder with no host over it → the END of the hosts of the
+    ///   group the folder sits in (a group's hosts come before its folders);
+    /// - under a last row that is a folder → the end of the header's hosts.
     static func hostLanding(rows: [FlatRow], at index: Int, header: UUID,
                             groups: [HostGroup]) -> (group: UUID, index: Int) {
         func hostCount(_ id: UUID) -> Int { groups.first { $0.id == id }?.hosts.count ?? 0 }
-        guard index >= 0, index < rows.count else { return (header, hostCount(header)) }
-        switch rows[index] {
-        case .host(let id, let group):
-            return (group, groups.first { $0.id == group }?.hosts.firstIndex { $0.id == id } ?? hostCount(group))
-        case .folder(_, let parent):
-            return (parent, hostCount(parent))
+        func position(of id: UUID, in group: UUID) -> Int? { groups.first { $0.id == group }?.hosts.firstIndex { $0.id == id } }
+        guard index >= 0 else { return (header, hostCount(header)) }
+        if index < rows.count, case .host(let id, let group) = rows[index] {
+            return (group, position(of: id, in: group) ?? hostCount(group))
         }
+        if index > 0, index <= rows.count, case .host(let id, let group) = rows[index - 1] {
+            return (group, position(of: id, in: group).map { $0 + 1 } ?? hostCount(group))
+        }
+        if index < rows.count, case .folder(_, let parent) = rows[index] { return (parent, hostCount(parent)) }
+        return (header, hostCount(header))
     }
 
-    /// A GROUP dropped on the line above row `index`:
+    /// Where a line among a header's rows puts dragged GROUPS.
+    enum GroupLanding: Equatable {
+        /// The top level, in the gap above / below this header.
+        case aboveHeader, belowHeader
+        /// Under `parent` at `slot` among its subgroups, the line at row `line`.
+        case inside(parent: UUID, slot: Int, line: Int)
+    }
+
+    /// GROUPS dropped on the line above row `index`. The pointer's distance
+    /// from the edge plays no part: the user aims at a row, and a rule that
+    /// read it made every line between two open groups nest the group.
     /// - above a folder → beside it, just before it, in the same parent;
-    /// - above a host → the FIRST subgroup of that host's group (groups
-    ///   come after hosts, so this is the nearest place to the line);
-    /// - under the last row → the last subgroup of the header group.
-    static func groupLanding(rows: [FlatRow], at index: Int, header: UUID,
-                             groups: [HostGroup]) -> (parent: UUID, slot: Int) {
+    /// - above a host, top-level groups → the top level, in the gap nearest
+    ///   the line (a host row is no place for a group, and the user is
+    ///   reordering: going INTO a group is a drop ON its row);
+    /// - above a host, subgroups → the FIRST subgroup of that host's group
+    ///   (groups come after hosts, so this is the nearest place to the line);
+    /// - under the last row → the gap below the header, so a subgroup comes
+    ///   out to the top level there; but while the pointer is still ON that
+    ///   last row (`pastLastRow` false), subgroups whose own parent ends at
+    ///   this line stay in it, last: dragging a subgroup under its last
+    ///   sibling is a reorder, and one row further down is the way out.
+    static func groupLanding(rows: [FlatRow], at index: Int, header: UUID, groups: [HostGroup],
+                             dragging: Set<UUID>, pastLastRow: Bool = false) -> GroupLanding {
+        let parents = Set(groups.filter { dragging.contains($0.id) }.map(\.parentID))
         guard index >= 0, index < rows.count else {
-            return (header, GroupTree.children(of: header, in: groups).count)
+            let last = rows.last.map(owner(of:)) ?? header
+            let ending = GroupTree.ancestors(of: last, in: groups).map(\.id) + [last]
+            if !pastLastRow, parents.count == 1, let home = parents.first ?? nil, ending.contains(home) {
+                return .inside(parent: home, slot: GroupTree.children(of: home, in: groups).count, line: rows.count)
+            }
+            return .belowHeader
         }
         switch rows[index] {
         case .folder(let id, let parent):
-            return (parent, GroupTree.children(of: parent, in: groups).firstIndex { $0.id == id } ?? 0)
+            let slot = GroupTree.children(of: parent, in: groups).firstIndex { $0.id == id } ?? 0
+            return .inside(parent: parent, slot: slot, line: index)
         case .host(_, let group):
-            return (group, 0)
+            if parents == [nil] { return index * 2 < rows.count ? .aboveHeader : .belowHeader }
+            let line = rows.firstIndex { $0 == .folder(id(of: $0), parent: group) }
+                ?? rows.lastIndex { owner(of: $0) == group }.map { $0 + 1 } ?? index
+            return .inside(parent: group, slot: 0, line: line)
         }
     }
+
+    /// The group a row belongs to: a host's own, a folder's parent.
+    private static func owner(of row: FlatRow) -> UUID {
+        switch row {
+        case .host(_, let group): group
+        case .folder(_, let parent): parent
+        }
+    }
+
+    private static func id(of row: FlatRow) -> UUID {
+        switch row {
+        case .host(let id, _), .folder(let id, _): id
+        }
+    }
+
+    /// Whether the line under the section at root row `section` is the gap
+    /// above the first group: the same line as the root gap there, which
+    /// AppKit offers as the section's last child unless the pointer is at
+    /// the very edge.
+    static func sectionEndsAboveGroups(rootIsGroup: [Bool], section: Int) -> Bool {
+        rootIsGroup.indices.contains(section + 1) && rootIsGroup[section + 1]
+    }
+
+    /// Whether a drag the outline thinks is running can still hold a rebuild
+    /// back: AppKit tracks a drag only while a button is down.
+    static func dragHoldsRebuild(mouseButtons: Int) -> Bool { mouseButtons != 0 }
 
     /// The open subgroups after a click on `id`: subgroups start SHUT, and
     /// each one opens and shuts on its own (the user tried "one open per
