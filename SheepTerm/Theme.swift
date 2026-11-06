@@ -209,17 +209,6 @@ enum Theme {
     /// tone family, not SwiftUI's saturated `.red`).
     static let destructive = SwiftUI.Color(nsColor: SheepAlert.destructiveRed)
 
-    /// The colour a host's kind badge wears (sidebar, Quick Search, recents).
-    static func kindColor(_ kind: ConnectionKind) -> SwiftUI.Color {
-        switch kind {
-        case .ssh, .telnet: return accent
-        case .serial: return warn
-        case .local: return ok
-        case .web: return web
-        case .unsupported: return dimText
-        }
-    }
-
     private static func nsColorValue(_ hex: UInt32) -> SwiftUI.Color {
         SwiftUI.Color(nsColor: nsColor(hex))
     }
@@ -278,7 +267,7 @@ enum Theme {
         terminalView.menu = menu
     }
 
-    private static func nsColor(_ hex: UInt32) -> NSColor {
+    static func nsColor(_ hex: UInt32) -> NSColor {
         NSColor(
             srgbRed: CGFloat((hex >> 16) & 0xFF) / 255.0,
             green: CGFloat((hex >> 8) & 0xFF) / 255.0,

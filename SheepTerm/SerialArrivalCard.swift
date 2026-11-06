@@ -7,9 +7,14 @@ import Foundation
 /// window — the cable icon, "Console cable", ×; the device name and kind; a
 /// speed menu and Connect. The rules of when it is up are §29's, unchanged
 /// (`SerialArrival.isCable`, USB ancestry and the 5 s after wake in
-/// `SerialWatcher`/`AppModel`): the newest cable REPLACES the card, it goes
-/// after 15 s, when the cable is pulled, when a tab holds that device, or
-/// with ×.
+/// `SerialWatcher`/`AppModel`).
+///
+/// Several cables (6.1 (3), the owner: "เผื่อเสียบ 5 สายพร้อมกัน"): still ONE
+/// card, a row per cable in the order they came, each with its own speed and
+/// Connect, plus Connect All / Open All in Split. A cable plugged in while
+/// the card is up ADDS a row and gives the card its 15 s again; a row goes
+/// when its cable is pulled, a tab holds its device or its Connect is used;
+/// the card goes with its last row, after 15 s, or with ×.
 ///
 /// The card's whole lifecycle is this pure state machine (`reduce`), so no
 /// path can leave a card stuck, stacked or behind another: AppModel only
@@ -24,6 +29,11 @@ nonisolated enum SerialArrivalCard {
     static let menuRates = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
     /// What "Other…" accepts (= `Host.serialBaudRange`, what SerialWorker opens).
     static let customRange = 50...4_000_000
+    /// Rows the card holds; a cable past them is not listed (a hub of
+    /// adapters re-enumerating must not grow it without end).
+    static let maxRows = 16
+    /// Rows shown before the list scrolls inside the card.
+    static let visibleRows = 6
 
     /// Why the 15 s stand still.
     enum Pause: Hashable {
@@ -44,31 +54,55 @@ nonisolated enum SerialArrivalCard {
         case outOfRange
     }
 
+    /// One cable on the card.
+    struct Row: Equatable {
+        let path: String
+        /// "usbserial-1410 · FTDI" (`detail(path:usb:)`).
+        let detail: String
+        var baud: Int
+
+        var name: String { SerialArrival.shortName(path) }
+    }
+
+    /// The "Other…" field — one at a time, on one row.
+    struct Custom: Equatable {
+        let path: String
+        var text: String
+        var error: CustomError?
+    }
+
+    /// Open this console at this speed.
+    struct Opening: Equatable {
+        let path: String
+        let baud: Int
+    }
+
     struct Card: Equatable {
         /// Bumped on every new card: a timer or a click meant for the card it
-        /// replaced never touches this one.
+        /// replaced never touches this one. A row added to a card keeps it.
         let generation: Int
-        let path: String
-        /// Row 2: "usbserial-1410 · FTDI" (`detail(path:usb:)`).
-        let detail: String
+        /// The cables, in the order they came; never empty.
+        var rows: [Row]
         /// The window (number) it lives in — the front main window when the
-        /// cable arrived. It stays there; one card in the whole app.
-        let window: Int
-        var baud: Int
+        /// latest cable arrived. One card in the whole app.
+        var window: Int
         /// Seconds left, as of `runningSince` (or for good while paused).
         var remaining: TimeInterval
         /// nil = paused.
         var runningSince: Date?
         var pauses: Set<Pause> = []
-        /// The "Other…" field: nil = closed, else its text.
-        var customText: String?
-        var customError: CustomError?
+        var custom: Custom?
 
-        var name: String { SerialArrival.shortName(path) }
         /// Drawn (`yield` hides it, the app being hidden hides everything).
         var isVisible: Bool { !pauses.contains(.yield) && !pauses.contains(.hidden) }
         /// When the 15 s run out, nil while paused.
         var deadline: Date? { runningSince.map { $0.addingTimeInterval(remaining) } }
+        /// Several cables: the list and its Connect All / Open All in Split.
+        var isList: Bool { rows.count > 1 }
+
+        func row(_ path: String) -> Row? {
+            rows.first { SerialArrival.calloutPath($0.path) == SerialArrival.calloutPath(path) }
+        }
     }
 
     struct State: Equatable {
@@ -78,33 +112,37 @@ nonisolated enum SerialArrivalCard {
 
     enum Event: Equatable {
         /// A USB serial cable appeared. `window`: the front main window (nil =
-        /// none on screen → no card); `openPaths`: devices tabs hold.
+        /// none on screen → no new card); `openPaths`: devices tabs hold.
         case arrived(path: String, detail: String, baud: Int, window: Int?, openPaths: Set<String>)
         /// A device went away.
         case gone(path: String)
-        /// The tabs changed: one may hold the card's device now.
+        /// The tabs changed: one may hold a row's device now.
         case tabsChanged(openPaths: Set<String>)
         /// The timer fired (any timer, any time).
         case tick
         case pause(Pause)
         case resume(Pause)
-        case pickBaud(Int)
-        case openCustom
+        case pickBaud(path: String, Int)
+        case openCustom(path: String)
         case editCustom(String)
         case submitCustom
         case cancelCustom
         case dismiss
-        /// Connect; `openPaths` decides open vs select.
-        case connect(openPaths: Set<String>)
+        /// That row's Connect; `openPaths` decides open vs select.
+        case connect(path: String, openPaths: Set<String>)
+        /// Connect All (`split` false) / Open All in Split (`split` true).
+        case connectAll(split: Bool, openPaths: Set<String>)
         case windowClosed(Int)
     }
 
     enum Effect: Equatable {
         case none
         /// Open that console at that speed.
-        case open(path: String, baud: Int)
+        case open(Opening)
         /// A tab already holds the port: select it.
         case select(path: String)
+        /// Every row's console, in their order; `split` = one tab, as a grid.
+        case openAll([Opening], split: Bool)
     }
 
     /// "Other…": a positive whole number of baud within `customRange`.
@@ -118,22 +156,61 @@ nonisolated enum SerialArrivalCard {
         Set(open.map(SerialArrival.calloutPath)).contains(SerialArrival.calloutPath(path))
     }
 
+    private static func same(_ a: String, _ b: String) -> Bool {
+        SerialArrival.calloutPath(a) == SerialArrival.calloutPath(b)
+    }
+
+    /// Takes the rows `drop` picks off the card; its field goes with its row;
+    /// the card goes with its last row.
+    private static func removeRows(_ state: inout State, now: Date, where drop: (Row) -> Bool) {
+        guard var card = state.card else { return }
+        card.rows.removeAll(where: drop)
+        guard !card.rows.isEmpty else { state.card = nil; return }
+        let fieldGone = card.custom.map { custom in !card.rows.contains { same($0.path, custom.path) } } ?? false
+        state.card = card
+        if fieldGone {
+            state.card?.custom = nil
+            reduce(&state, .resume(.field), now: now)
+        }
+    }
+
+    /// An open "Other…" field is taken before any Connect: its value, or —
+    /// junk in it — false (the error shows, nothing opens).
+    private static func settleField(_ state: inout State, now: Date) -> Bool {
+        guard state.card?.custom != nil else { return true }
+        reduce(&state, .submitCustom, now: now)
+        return state.card?.custom == nil
+    }
+
     /// Applies one event; returns what AppModel must do.
     @discardableResult
     static func reduce(_ state: inout State, _ event: Event, now: Date) -> Effect {
         switch event {
         case .arrived(let path, let detail, let baud, let window, let open):
-            guard SerialArrival.isCable(path), let window, !holds(open, path) else { return .none }
+            guard SerialArrival.isCable(path), !holds(open, path) else { return .none }
+            if var card = state.card {
+                // On the card already (re-enumerated, replugged): its row stays as it is.
+                if card.row(path) == nil {
+                    guard card.rows.count < maxRows else { return .none }
+                    card.rows.append(Row(path: path, detail: detail, baud: baud))
+                }
+                // The ONE card follows the front window, and has its 15 s again.
+                if let window { card.window = window }
+                card.remaining = lifetime
+                card.runningSince = card.pauses.isEmpty ? now : nil
+                state.card = card
+                return .none
+            }
+            guard let window else { return .none }
             state.generation += 1
-            // The newest cable REPLACES the card — never a second one.
-            state.card = Card(generation: state.generation, path: path, detail: detail, window: window, baud: baud,
-                              remaining: lifetime, runningSince: now)
+            state.card = Card(generation: state.generation, rows: [Row(path: path, detail: detail, baud: baud)],
+                              window: window, remaining: lifetime, runningSince: now)
             return .none
         case .gone(let path):
-            if let card = state.card, SerialArrival.calloutPath(card.path) == SerialArrival.calloutPath(path) { state.card = nil }
+            removeRows(&state, now: now) { same($0.path, path) }
             return .none
         case .tabsChanged(let open):
-            if let card = state.card, holds(open, card.path) { state.card = nil }
+            removeRows(&state, now: now) { holds(open, $0.path) }
             return .none
         case .tick:
             if let deadline = state.card?.deadline, now >= deadline { state.card = nil }
@@ -156,51 +233,49 @@ nonisolated enum SerialArrivalCard {
             }
             state.card = card
             return .none
-        case .pickBaud(let baud):
-            guard customRange.contains(baud) else { return .none }
-            state.card?.baud = baud
+        case .pickBaud(let path, let baud):
+            guard customRange.contains(baud), let i = state.card?.rows.firstIndex(where: { same($0.path, path) }) else { return .none }
+            state.card?.rows[i].baud = baud
             return .none
-        case .openCustom:
-            guard state.card != nil else { return .none }
-            state.card?.customText = ""
-            state.card?.customError = nil
+        case .openCustom(let path):
+            guard state.card?.row(path) != nil else { return .none }
+            // One field: opening it on another row moves it there.
+            state.card?.custom = Custom(path: path, text: "")
             return reduce(&state, .pause(.field), now: now)
         case .editCustom(let text):
             // The field's binding also writes back the SAME text (on focus):
             // only a real change clears the error.
-            guard let old = state.card?.customText, old != text else { return .none }
-            state.card?.customText = text
-            state.card?.customError = nil
+            guard let old = state.card?.custom?.text, old != text else { return .none }
+            state.card?.custom?.text = text
+            state.card?.custom?.error = nil
             return .none
         case .submitCustom:
-            guard let text = state.card?.customText else { return .none }
-            switch customBaud(text) {
+            guard let custom = state.card?.custom else { return .none }
+            switch customBaud(custom.text) {
             case .success(let baud):
-                state.card?.baud = baud
-                state.card?.customText = nil
-                state.card?.customError = nil
+                if let i = state.card?.rows.firstIndex(where: { same($0.path, custom.path) }) { state.card?.rows[i].baud = baud }
+                state.card?.custom = nil
                 return reduce(&state, .resume(.field), now: now)
             case .failure(let error):
-                state.card?.customError = error
+                state.card?.custom?.error = error
                 return .none
             }
         case .cancelCustom:
-            guard state.card?.customText != nil else { return .none }
-            state.card?.customText = nil
-            state.card?.customError = nil
+            guard state.card?.custom != nil else { return .none }
+            state.card?.custom = nil
             return reduce(&state, .resume(.field), now: now)
         case .dismiss:
             state.card = nil
             return .none
-        case .connect(let open):
-            // An open "Other…" field: its value, or nothing happens (the error shows).
-            if state.card?.customText != nil {
-                reduce(&state, .submitCustom, now: now)
-                if state.card?.customText != nil { return .none }
-            }
-            guard let card = state.card else { return .none }   // a second Connect finds no card
+        case .connect(let path, let open):
+            guard settleField(&state, now: now), let row = state.card?.row(path) else { return .none }
+            removeRows(&state, now: now) { same($0.path, path) }
+            return holds(open, row.path) ? .select(path: row.path) : .open(Opening(path: row.path, baud: row.baud))
+        case .connectAll(let split, let open):
+            guard settleField(&state, now: now), let rows = state.card?.rows else { return .none }
             state.card = nil
-            return holds(open, card.path) ? .select(path: card.path) : .open(path: card.path, baud: card.baud)
+            let opening = rows.filter { !holds(open, $0.path) }.map { Opening(path: $0.path, baud: $0.baud) }
+            return opening.isEmpty ? .none : .openAll(opening, split: split)
         case .windowClosed(let window):
             if state.card?.window == window { state.card = nil }
             return .none

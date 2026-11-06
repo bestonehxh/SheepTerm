@@ -15,6 +15,7 @@ import SheepSync
 ///   (`BackupManager.validate` + `sanitize`: decodes, no secret fields in
 ///   credentials, names cleaned) before it is written.
 /// - `password:<credential uuid>` — the Keychain password of a credential.
+/// - `key:<credential uuid>` — a credential's SSH key + passphrase (6.1).
 /// - `setting:<key>` — the settings Backup carries, minus the ones that
 ///   belong to one Mac's screen (`localOnlySettings`).
 ///
@@ -136,6 +137,30 @@ final class SheepTermSync: SyncDataSource {
         engine.start()
     }
 
+    /// Runs `body` once this launch's first sync is done — after the attempt
+    /// either way (offline, a failure: `syncNow` returns, `body` runs). Signed
+    /// in with the vault not open yet (checking, the passphrase asked): once
+    /// it opens and a pass ran — a join takes the cloud's copy, so deciding
+    /// before it would be undone (Fable round 14). Not set up, signed out, or
+    /// a new vault (nothing in the cloud yet): at once.
+    func afterFirstSync(_ body: @escaping @MainActor () -> Void) {
+        let phase = engine.phase
+        switch SyncPolicy.firstSyncWait(ready: phase == .ready,
+                                        vaultPending: phase == .checkingVault || phase == .needsPassphrase || phase == .signingIn) {
+        case .now:
+            body()
+        case .afterPass:
+            Task { @MainActor in
+                await engine.syncNow()
+                body()
+            }
+        case .whenPhaseChanges:
+            withObservationTracking { _ = engine.phase } onChange: { [weak self] in
+                Task { @MainActor in self?.afterFirstSync(body) }
+            }
+        }
+    }
+
     // MARK: Records out
 
     func syncSnapshot() -> SyncSnapshot {
@@ -170,6 +195,13 @@ final class SheepTermSync: SyncDataSource {
         records.merge(passwords.records) { a, _ in a }
         unavailable.formUnion(passwords.unavailable)
         unavailablePrefixes += passwords.unavailablePrefixes
+        let keys = SyncPolicy.keyRecords(
+            listTrusted: credentials.isTrusted, listFileReadable: records[SyncRecordCodec.credentials.order] != nil,
+            credentialsWithKey: credentials.credentials.filter { $0.publicKey != nil }.map(\.id),
+            key: { Keychain.keyDataWithoutPrompt(for: $0) })
+        records.merge(keys.records) { a, _ in a }
+        unavailable.formUnion(keys.unavailable)
+        unavailablePrefixes += keys.unavailablePrefixes
         for (key, data) in Self.syncedSettings() {
             records["setting:\(key)"] = data
         }
@@ -212,6 +244,10 @@ final class SheepTermSync: SyncDataSource {
         let settings = BackupManager.currentSettings()
         var out: [String: Data] = [:]
         for key in syncedSettingKeys {
+            // A value pinned on an updater is not the user's: not a record
+            // (unavailable, never a deletion — §20), so another Mac's own
+            // choice still comes down (Fable round 19).
+            if OptimizationPlan.isPinned(key, .standard) { continue }
             if let value = settings[key], let data = try? encoder.encode(value) { out[key] = data }
         }
         return out
@@ -345,7 +381,9 @@ final class SheepTermSync: SyncDataSource {
                 UserDefaults.standard.set(bounded, forKey: key)
                 // Only the key written: a setting the user changed meanwhile
                 // must still look changed to the defaults observer.
-                lastSettings[key] = data
+                // A value still the pin is not a record (`syncedSettings` skips
+                // it): remembering it would only make the next look see a change.
+                if !OptimizationPlan.isPinned(key, .standard) { lastSettings[key] = data }
                 wroteSettings = true
             } else if change != nil {
                 failed.insert(id)
@@ -370,6 +408,25 @@ final class SheepTermSync: SyncDataSource {
                       Keychain.setPasswordWithoutPrompt(password, for: uuid) else { failed.insert(id); continue }
             case .delete:
                 if !Keychain.deletePasswordWithoutPrompt(for: uuid) { failed.insert(id) }
+            case .skip:
+                continue
+            case .retry:
+                failed.insert(id)
+            }
+        }
+        // 4. SSH keys (6.1): the passwords' rules, against the credentials
+        //    that still say they carry a key — a key removed on another Mac
+        //    (its credential's publicKey now nil) is deleted here too, not
+        //    left behind in the vault.
+        let knownWithKey = Set(AppModel.shared.credentialStore.credentials.filter { $0.publicKey != nil }.map(\.id))
+        for (id, change) in changes where id.hasPrefix(SyncPolicy.keyPrefix) {
+            guard let uuid = UUID(uuidString: String(id.dropFirst(SyncPolicy.keyPrefix.count))) else { continue }
+            switch SyncPolicy.passwordAction(uuid, isDelete: change == nil, listTrusted: trusted, known: knownWithKey,
+                                             listFailedThisRound: listFailed) {
+            case .write:
+                guard let data = change ?? nil, Keychain.setKeyDataWithoutPrompt(data, for: uuid) else { failed.insert(id); continue }
+            case .delete:
+                if !Keychain.deleteKeyWithoutPrompt(for: uuid) { failed.insert(id) }
             case .skip:
                 continue
             case .retry:

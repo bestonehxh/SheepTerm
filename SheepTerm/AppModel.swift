@@ -103,6 +103,10 @@ struct QuickConnectRequest: Identifiable {
     var groupName: String? = nil
     /// Recent → Save as Host… on an SSH recent: the form starts with it.
     var sshPrefill: Host? = nil
+    /// ＋ ▸ New Jump Server… (6.1): the form starts on Jump.
+    var jumpServer = false
+    /// Reaches ▸ New Host… (6.0 (28)): the new host goes through this Jump Server.
+    var jumpVia: UUID? = nil
 }
 
 /// One showing of the "Add Hosts…" sheet. `groupID` is the group it was
@@ -113,6 +117,8 @@ struct QuickConnectRequest: Identifiable {
 struct AddHostsRequest: Identifiable {
     let id = UUID()
     let groupID: UUID?
+    /// Import ▸ Hosts File… (6.0 (57)): the file panel opens with the sheet.
+    var importFile = false
 }
 
 /// One showing of the "Set Credential for Group…" sheet, for the group it was
@@ -156,14 +162,28 @@ final class AppModel: ObservableObject {
     }
     /// The session that has the keyboard. Its workspace is the selected tab.
     @Published var selectedID: UUID? {
-        didSet { if let id = selectedID { book.focus(id) } }
+        didSet {
+            if let id = selectedID { book.focus(id) }
+            // Another tab selected any way (⌘1–9, a new session, a close, Home):
+            // the ⌘-clicked chips are let go (Fable round 14) — not a pane
+            // focused, closed or reconnected within the same tab (rounds 15,
+            // 16: the tab is remembered, not read back from a book that may
+            // have lost the old session already).
+            if chipPick.note(selectedWorkspace?.id), !chipSelection.isEmpty { chipSelection = [] }
+        }
     }
+    /// The tab `selectedID` was in when it last changed.
+    private var chipPick = ChipPick()
     /// Split panes (4.2 (7)): which sessions share a tab and how they are
     /// laid out. `tabs` stays the flat list of sessions; this is the tab
     /// strip's view of them.
     @Published var book = WorkspaceBook()
     var workspaces: [WorkspaceState] { book.workspaces }
     var selectedWorkspace: WorkspaceState? { selectedID.flatMap { book.workspace(containing: $0) } }
+    /// The top bar's Home (6.0 (40)): nothing selected = Home where the
+    /// terminal goes; every tab stays open, and a click on one goes back.
+    func showHome() { selectedID = nil }
+    var isShowingHome: Bool { selectedWorkspace == nil }
     /// Where the next session goes; consumed by `attach`. Set by the split
     /// actions and by `reconnect` right before they open a session.
     private var pendingPlacement: PanePlacement = .newTab
@@ -247,7 +267,34 @@ final class AppModel: ObservableObject {
     /// File ▸ Transfer Log… / the File Server popover (`TransferLogView`).
     @Published var showTransferLog = false
     /// 6.0's What's New, once (`WhatsNewPlan`).
-    @Published var showWhatsNew = false
+    @Published var showWhatsNew = false {
+        // Closing What's New: the Home-first question, if it is due (6.1 (4)).
+        // A run-loop turn later: the sheet closes first (Fable round 19).
+        didSet { if oldValue && !showWhatsNew { DispatchQueue.main.async { [weak self] in self?.askHomeFirstIfDue() } } }
+    }
+
+    /// A Mac that ran an earlier build: anything saved by it. A new Mac has
+    /// none of these on its first launch.
+    static func usedBefore(_ d: UserDefaults) -> Bool {
+        d.object(forKey: WhatsNewPlan.seenKey) != nil || OptimizationPlan.touched(d)
+            || FileManager.default.fileExists(atPath: BackupManager.baseDirectory.appendingPathComponent("hosts.json").path)
+    }
+
+    /// The updater's one question (6.1 (4), the owner): Home first? Either
+    /// answer is final here; Optimize ▸ At Launch changes it any time.
+    func askHomeFirstIfDue(_ d: UserDefaults = .standard) {
+        guard OptimizationPlan.needsHomeFirstAsk(d) else { return }
+        let alert = SheepAlert()
+        alert.messageText = String(localized: "Start on Home?")
+        alert.informativeText = String(localized: "Home shows your hosts as tiles when SheepTerm opens. You can change this any time in Optimize ▸ At Launch.")
+        alert.addButton(withTitle: String(localized: "Use Home"))
+        alert.addButton(withTitle: String(localized: "Not Now"))
+        let home = alert.sheepStyled().runModal() == .alertFirstButtonReturn
+        OptimizationPlan.answerHomeFirst(d, home: home)
+        objectWillChange.send()
+    }
+    /// The ways to add a host (6.1): shown once on a Mac with none (no longer in Help, 6.1 (2)).
+    @Published var showAddingHosts = false
     /// File → Known Hosts… (and the HOST KEY CHANGED offer, pre-filtered).
     @Published var knownHostsRequest: KnownHostsRequest?
     /// File → Search Logs… (4.2 (4)).
@@ -262,6 +309,25 @@ final class AppModel: ObservableObject {
     @Published var historyRequest: HistoryRequest?
     @Published var snippetVariables: SnippetVariablesRequest?
     @Published var showReorderGroups = false
+    /// Hosts ▸ New Group… / the sidebar's menus: the name prompt (SidebarView).
+    @Published var showNewGroup = false
+    /// Hosts ▸ New Group / Home's New Group (6.0 (41)): the prompt lives on
+    /// the sidebar (it reports into it), so a hidden sidebar is shown first —
+    /// setting the flag alone with the sidebar away did nothing.
+    /// A subgroup prompt for `parent` (Home's group ＋, 6.0 (43)): like New
+    /// Group, it lives on the sidebar, so a hidden sidebar is shown first.
+    @Published var newSubgroupTarget: HostGroup?
+    func requestNewSubgroup(in parent: HostGroup) {
+        if !sidebarShown { withAnimation(Self.sidebarAnimation) { sidebarShown = true } }
+        DispatchQueue.main.async { [weak self] in self?.newSubgroupTarget = parent }
+    }
+
+    func requestNewGroup() {
+        if !sidebarShown { withAnimation(Self.sidebarAnimation) { sidebarShown = true } }
+        DispatchQueue.main.async { [weak self] in self?.showNewGroup = true }
+    }
+    /// Right-click a group ▸ Group Icon… (6.1).
+    @Published var groupIconTarget: HostGroup?
     @Published var addHostsRequest: AddHostsRequest?
     @Published var groupCredentialRequest: GroupCredentialRequest?
     @Published var shareLinkRequest: ShareLinkRequest?
@@ -460,13 +526,16 @@ final class AppModel: ObservableObject {
         terminalFontWeight = Theme.terminalFontWeight
         terminalFontSmoothing = Theme.terminalFontSmoothing
         showStatusBar = UserDefaults.standard.object(forKey: "showStatusBar") as? Bool ?? true
-        // Session text (device IP + username), shortcut hints and This-Mac IP
-        // start HIDDEN — the bar shows just the connection dot, the highlight
-        // sheep/vendor control and the clock until the user opts them back in
-        // (View → Bottom Bar Items).
-        statusShowSession = UserDefaults.standard.object(forKey: "statusShowSession") as? Bool ?? false
-        statusShowHints = UserDefaults.standard.object(forKey: "statusShowHints") as? Bool ?? false
-        statusShowIP = UserDefaults.standard.object(forKey: "statusShowIP") as? Bool ?? false
+        // An updater keeps what it had where it never chose (6.1 (4)): pinned
+        // BEFORE the bottom bar and the launch tab are read.
+        OptimizationPlan.pinLaunchTabIfUpdating(.standard, usedBefore: Self.usedBefore(.standard))
+        // Session text (device IP + username), shortcut hints and This-Mac IP:
+        // a new Mac starts as the app ships, `OptimizationPlan.Settings()` —
+        // shown, as in Minimal (the owner, 6.1 (3); they started hidden before,
+        // and a new Mac read as Custom — Fable round 13).
+        statusShowSession = UserDefaults.standard.object(forKey: "statusShowSession") as? Bool ?? OptimizationPlan.Settings().statusShowSession
+        statusShowHints = UserDefaults.standard.object(forKey: "statusShowHints") as? Bool ?? OptimizationPlan.Settings().statusShowHints
+        statusShowIP = UserDefaults.standard.object(forKey: "statusShowIP") as? Bool ?? OptimizationPlan.Settings().statusShowIP
         statusShowClock = UserDefaults.standard.object(forKey: "statusShowClock") as? Bool ?? true
         statusShowFileServer = UserDefaults.standard.object(forKey: "statusShowFileServer") as? Bool ?? true
         statusShowTransfers = UserDefaults.standard.object(forKey: "statusShowTransfers") as? Bool ?? true
@@ -503,7 +572,12 @@ final class AppModel: ObservableObject {
         // UI left to recompile them, so nothing ever calls this again.
         Highlighter.installDefaults()
         FileServerEngines.install()
-        newLocalTab()
+        // Settings ▸ Optimization ▸ At Launch (6.1): a terminal tab, or Home
+        // (the board shown while no tab is open). Home on a new Mac; an
+        // updater keeps its terminal until it answers (6.1 (4)).
+        if OptimizationPlan.launchTab(.standard) != .home {
+            newLocalTab()
+        }
         installKeyMonitor()
         startSerialWatch()
     }
@@ -537,9 +611,9 @@ final class AppModel: ObservableObject {
         terminalFontWeight = Theme.terminalFontWeight
         terminalFontSmoothing = Theme.terminalFontSmoothing
         showStatusBar = defaults.object(forKey: "showStatusBar") as? Bool ?? true
-        statusShowSession = defaults.object(forKey: "statusShowSession") as? Bool ?? false
-        statusShowHints = defaults.object(forKey: "statusShowHints") as? Bool ?? false
-        statusShowIP = defaults.object(forKey: "statusShowIP") as? Bool ?? false
+        statusShowSession = defaults.object(forKey: "statusShowSession") as? Bool ?? OptimizationPlan.Settings().statusShowSession
+        statusShowHints = defaults.object(forKey: "statusShowHints") as? Bool ?? OptimizationPlan.Settings().statusShowHints
+        statusShowIP = defaults.object(forKey: "statusShowIP") as? Bool ?? OptimizationPlan.Settings().statusShowIP
         statusShowClock = defaults.object(forKey: "statusShowClock") as? Bool ?? true
         statusShowFileServer = defaults.object(forKey: "statusShowFileServer") as? Bool ?? true
         statusShowTransfers = defaults.object(forKey: "statusShowTransfers") as? Bool ?? true
@@ -573,8 +647,130 @@ final class AppModel: ObservableObject {
     /// View → Add Hosts…, the sidebar button, and a group's context menu all
     /// land here. Presented by ContentView, for the same reason Reorder
     /// Groups is: the sidebar leaves the hierarchy when it is hidden.
-    func showAddHosts(groupID: UUID? = nil) {
-        addHostsRequest = AddHostsRequest(groupID: groupID)
+    /// The switches as they stand, read the way Settings ▸ Optimization reads
+    /// them (`OptimizationSettingsView.current`).
+    func storedOptimization(_ d: UserDefaults = .standard) -> OptimizationPlan.Settings {
+        typealias P = OptimizationPlan
+        func bool(_ key: String, _ fallback: Bool) -> Bool { d.object(forKey: key) as? Bool ?? fallback }
+        var s = P.Settings()
+        s.sidebarAtLaunch = bool(SidebarLaunch.key, false)
+        s.sidebarStaysOpen = bool(SidebarKeepOpen.key, false)
+        s.groupColors = bool(GroupTree.groupColorsKey, GroupTree.groupColorsDefault)
+        s.colouredBadges = (d.string(forKey: HostBadgeStyle.key).flatMap(HostBadgeStyle.init(rawValue:)) ?? .coloured) == .coloured
+        s.showRecents = bool("showRecents", true)
+        s.recentsShown = d.object(forKey: "recentsShown") as? Int ?? 5
+        s.showStatusBar = showStatusBar
+        s.connectionStatus = statusConnectionStyle.rawValue
+        s.statusShowSession = statusShowSession
+        s.statusShowHints = statusShowHints
+        s.statusShowIP = statusShowIP
+        s.statusShowClock = statusShowClock
+        s.statusShowFileServer = statusShowFileServer
+        s.statusShowTransfers = statusShowTransfers
+        s.newTabButton = d.string(forKey: P.newTabButtonKey).flatMap(P.NewTabButton.init(rawValue:)) ?? .afterLastTab
+        s.showHomeButton = bool(P.showHomeButtonKey, true)
+        s.showSearchButton = bool(P.showSearchButtonKey, true)
+        s.homePlace = d.string(forKey: P.homePlaceKey).flatMap(P.HomePlace.init(rawValue:)) ?? .tabStrip
+        s.launchTab = P.launchTab(d)
+        s.autoReconnect = autoReconnect
+        s.autoPage = autoPage
+        s.dangerGuard = confirmDangerousCommands
+        s.safePaste = safePasteEnabled
+        s.logSessions = sessionLogging
+        s.aiEnabled = AIFeature.isEnabled(d)
+        s.aiPanelShown = AIFeature.panelShown(stored: d.bool(forKey: AIPanelModel.shownKey), enabled: s.aiEnabled)
+        s.features = Dictionary(uniqueKeysWithValues: P.Feature.allCases.map { ($0, P.Feature.isOn($0, in: d)) })
+        return s
+    }
+
+    /// 6.1 (2), the user: whoever updates keeps what they had set. Once per
+    /// Mac: a setup that is none of the presets becomes "My Settings", first
+    /// in Optimize for and the one shown — so trying a preset never loses it.
+    /// READ at launch, before anything can change a switch (Fable round 14),
+    /// and kept on disk until decided (round 15); decided by
+    /// `keepSetupBeforeUpdate(_:)` once Sync's first pull is in.
+    typealias SetupBeforeUpdate = OptimizationPlan.SetupBeforeUpdate
+
+    /// The setup as it stood at this build's first launch; nil once decided.
+    func setupBeforeUpdate(_ d: UserDefaults = .standard) -> SetupBeforeUpdate? {
+        OptimizationPlan.setupBeforeUpdate(d) { storedOptimization(d) }
+    }
+
+    /// Decides on `setup` (read at launch) against the presets as they are
+    /// NOW — another Mac's "My Settings" pulled meanwhile is seen and not
+    /// saved twice. The kept preset is made the one shown only while the
+    /// switches still are that setup (a preset picked meanwhile stays).
+    func keepSetupBeforeUpdate(_ setup: SetupBeforeUpdate, _ d: UserDefaults = .standard) {
+        guard d.object(forKey: OptimizationPlan.beforeUpdateKey) == nil else { return }
+        OptimizationPlan.markDecided(d)
+        let saved = OptimizationPlan.loadSaved(d.data(forKey: OptimizationPlan.savedPresetsKey))
+        // An edited Minimal/Standard (6.0 (52)) is that preset, not a setup of its own (Fable round 13).
+        let edited = OptimizationPlan.loadBuiltIns(d.data(forKey: OptimizationPlan.builtInsKey))
+        // A launch tab pinned when READ is not the user's: matched as what
+        // ships, kept as it was (Fable rounds 19, 20).
+        guard let list = OptimizationPlan.keepingBeforeUpdate(setup.settings, matchingAs: setup.forMatching, touched: setup.touched, saved: saved,
+                                                              name: String(localized: "My Settings"), edited: edited) else { return }
+        d.set(OptimizationPlan.encodeSaved(list), forKey: OptimizationPlan.savedPresetsKey)
+        if OptimizationPlan.showsKept(setup.settings, now: storedOptimization(d)) {
+            d.set("saved:" + list[0].id.uuidString, forKey: "optimizationBase")
+        }
+    }
+
+    func showAddHosts(groupID: UUID? = nil, importFile: Bool = false) {
+        addHostsRequest = AddHostsRequest(groupID: groupID, importFile: importFile)
+    }
+
+    /// Hosts ▸ Export Hosts… (6.0 (57)): every saved SSH host as JSON, CSV or
+    /// an OpenSSH config — names, addresses, ports, users, groups, jump
+    /// hosts; never a password or a key (`HostListCodec`).
+    func exportHostsViaPanel() {
+        let entries = HostListCodec.entries(groups: store.groups) { [credentialStore] host in
+            if !host.username.isEmpty { return host.username }
+            return host.credentialID.flatMap { id in credentialStore.credentials.first { $0.id == id }?.username } ?? ""
+        }
+        guard !entries.isEmpty else { NSSound.beep(); return }
+        let panel = NSSavePanel()
+        let formats = HostListCodec.Format.allCases
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: formats.map(\.label))
+        let label = NSTextField(labelWithString: String(localized: "Format:"))
+        let row = NSStackView(views: [label, popup])
+        row.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        panel.accessoryView = row
+        panel.nameFieldStringValue = formats[0].fileName
+        let picker = FormatPicker(panel: panel, formats: formats)
+        popup.target = picker
+        popup.action = #selector(FormatPicker.changed(_:))
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let format = formats[max(0, popup.indexOfSelectedItem)]
+        do {
+            try HostListCodec.export(entries, as: format).write(to: url, atomically: true, encoding: .utf8)
+            // A CSV has no jump column: said, not lost silently (Fable round 10).
+            let jumps = entries.filter { $0.jump != nil }.count
+            if format == .csv, jumps > 0 {
+                let alert = SheepAlert()
+                alert.messageText = String(localized: "Jump hosts not in the CSV: \(jumps)")
+                alert.informativeText = String(localized: "JSON and OpenSSH config keep them.")
+                alert.sheepStyled().runModal()
+            }
+        } catch {
+            let alert = SheepAlert()
+            alert.alertStyle = .warning
+            alert.messageText = String(localized: "Could not export \(url.lastPathComponent)")
+            alert.informativeText = error.localizedDescription
+            alert.sheepStyled().runModal()
+        }
+        withExtendedLifetime(picker) {}
+    }
+
+    /// Keeps the save panel's file name in step with the format picked.
+    private final class FormatPicker: NSObject {
+        let panel: NSSavePanel
+        let formats: [HostListCodec.Format]
+        init(panel: NSSavePanel, formats: [HostListCodec.Format]) { self.panel = panel; self.formats = formats }
+        @objc func changed(_ sender: NSPopUpButton) {
+            panel.nameFieldStringValue = formats[max(0, sender.indexOfSelectedItem)].fileName
+        }
     }
 
     func showShareLink(groupID: UUID) {
@@ -1196,7 +1392,14 @@ final class AppModel: ObservableObject {
             if case .ssh(let other) = tab.content { return other.host.id == hostID && other.canLendConnection }
             return false
         })
-        if (host.jumpHostID != nil || host.jumpSpecValue != nil) && !canLend {
+        // Through a jump of its own OR its group's (6.1 Via Jump Server):
+        // `JumpTarget.resolve` is the one rule (Fable round 2: a group's jump
+        // was missed and the device dialled directly).
+        let throughJump: Bool = {
+            if case .none = JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups) { return false }
+            return true
+        }()
+        if throughJump && !canLend {
             let alert = SheepAlert()
             alert.messageText = String(localized: "Open File does not go through a jump host yet.")
             alert.informativeText = String(localized: "“\(host.name)” is reached through a jump host. Connect its SSH tab first — the Files tab then rides that connection.")
@@ -1214,7 +1417,7 @@ final class AppModel: ObservableObject {
         let title = target.filesProto == nil ? host.name : "\(host.username.isEmpty ? "" : host.username + "@")\(host.address)"
         let controller = FilesTabController(endpoint: endpoint, title: title)
         if sharing { controller.sharedSession = lender }
-        controller.reachedThroughJump = host.jumpHostID != nil || host.jumpSpecValue != nil
+        controller.reachedThroughJump = throughJump
         let tab = SessionTab(content: .files(controller), title: title)
         controller.onStatus = { [weak tab] status in tab?.statusInfo = status }
         controller.onCloseTab = { [weak self, weak tab] in
@@ -1525,6 +1728,37 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Home ▸ Console (6.1 (8)): that cable's console — the tab that holds it,
+    /// else a new one at its usual speed (the saved host on it, or the cable's rule).
+    func openConsole(path: String) {
+        let port = SerialArrival.calloutPath(path)
+        if let tab = tabs.first(where: {
+            if case .serial(let controller) = $0.content { return !controller.isTelnet && SerialArrival.calloutPath(controller.host.address) == port }
+            return false
+        }) {
+            selectedID = tab.id
+            DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
+            return
+        }
+        open(host: SerialArrival.host(for: path, saved: store.groups.flatMap(\.hosts), usb: SerialWatcher.usbDevice(at: path)))
+    }
+
+    /// The Logs window's double-click (6.1): the log in a new read-only tab.
+    func openLog(_ url: URL) {
+        let controller = LocalTerminalController()
+        let tab = SessionTab(content: .local(controller), title: url.deletingPathExtension().lastPathComponent)
+        if attach(tab) { selectedID = tab.id }
+        controller.showLog(at: url)
+        bringMainWindowForward()
+    }
+
+    /// The Logs window opens things that live on the MAIN window (a tab, the
+    /// Search Logs sheet): it comes forward first, or they appear behind.
+    func bringMainWindowForward() {
+        NSApp.activate()
+        NSApp.orderedWindows.first { isMainTerminalWindow($0) }?.makeKeyAndOrderFront(nil)
+    }
+
     func newLocalTab() {
         // A new local tab always starts in the home directory (iTerm2's
         // default, the user's choice in 4.1 (37)). It used to inherit the
@@ -1607,7 +1841,7 @@ final class AppModel: ObservableObject {
             // rule live in `JumpTarget.resolve` (Models, harness-tested).
             var jump: JumpHop?
             var jumpUnresolved = false
-            switch JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts)) {
+            switch JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups) {
             case .none:
                 break
             case .saved(var bastion):
@@ -1634,7 +1868,23 @@ final class AppModel: ObservableObject {
                 // does not parse: reported in the tab, never bypassed.
                 jumpUnresolved = true
             }
-            let controller = SSHTerminalController(host: host, password: password, jump: jump,
+            // The credentials' SSH keys (6.1) ride along; a key is offered
+            // before the agent's, and a refused password has nothing to do with it.
+            var keys = SessionKeys()
+            if let credential, var key = credentialStore.key(for: credential) {
+                key.certificate = credential.certificate
+                keys.target = (key, credential.name)
+            }
+            if case .saved(let bastion) = JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups) {
+                keys.jumpAuthMethod = bastion.authMethod ?? .automatic
+            }
+            if case .saved(let bastion) = JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups),
+               let bastionCredential = bastion.credentialID.flatMap({ credentialStore.credential(for: $0) }),
+               var key = credentialStore.key(for: bastionCredential) {
+                key.certificate = bastionCredential.certificate
+                keys.jump = (key, bastionCredential.name)
+            }
+            let controller = SSHTerminalController(host: host, password: password, keys: keys, jump: jump,
                                                    jumpUnresolved: jumpUnresolved, reusingLogger: reusingLogger)
             // A refused start password is not offered again from the session
             // cache (a saved credential is the user's to edit — never
@@ -1818,9 +2068,10 @@ final class AppModel: ObservableObject {
     }
 
     /// ≡ → Add Host…: one SSH host into a group, no session.
-    func openAddHost(inGroup group: HostGroup? = nil) {
+    func openAddHost(inGroup group: HostGroup? = nil, jumpServer: Bool = false, via: UUID? = nil) {
         quickConnect = QuickConnectRequest(kind: .ssh, addOnly: true,
-                                           groupName: group.map { GroupTree.shownPath(of: $0.id, in: store.groups) })
+                                           groupName: group.map { GroupTree.shownPath(of: $0.id, in: store.groups) },
+                                           jumpServer: jumpServer, jumpVia: via)
     }
 
     /// Saves without connecting (Add Host…). Same door as Quick Connect's
@@ -1831,13 +2082,21 @@ final class AppModel: ObservableObject {
         var password: String
     }
 
-    func addHost(_ host: Host, toGroupNamed groupName: String, newCredential: NewCredential? = nil) {
+    /// `formSetsBadge` / `formSetsEnvironment`: whether the form that built
+    /// `host` could set those (an Add Host badge menu, the Environment row);
+    /// when it could not, an existing entry keeps its own (Fable round 3).
+    /// `onSaved` runs with the saved entry once it really holds what was
+    /// entered — at once, or after "Update Saved Host"; never on Keep.
+    func addHost(_ host: Host, toGroupNamed groupName: String, newCredential: NewCredential? = nil,
+                 formSetsBadge: Bool = false, formSetsEnvironment: Bool = false,
+                 onSaved: ((Host) -> Void)? = nil) {
         let make: (() -> UUID?)? = newCredential.map { pending in
             { [weak self] in
                 self?.credentialStore.add(name: pending.name, username: pending.username, password: pending.password).id
             }
         }
-        saveSession(host: host, toGroupNamed: groupName, addOnly: true, makeCredential: make)
+        saveSession(host: host, toGroupNamed: groupName, addOnly: true, makeCredential: make,
+                    formSetsBadge: formSetsBadge, formSetsEnvironment: formSetsEnvironment, onSaved: onSaved)
     }
 
     /// Opens the Known Hosts sheet, optionally filtered (a host name finds
@@ -1878,7 +2137,9 @@ final class AppModel: ObservableObject {
     /// `makeCredential` (Add Host): creates the credential a typed password
     /// becomes — called only on the paths that really add or update.
     private func saveSession(host: Host, toGroupNamed groupName: String, addOnly: Bool = false,
-                             makeCredential: (() -> UUID?)? = nil) {
+                             makeCredential: (() -> UUID?)? = nil,
+                             formSetsBadge: Bool = false, formSetsEnvironment: Bool = false,
+                             onSaved: ((Host) -> Void)? = nil) {
         var host = host
         // Saving from Quick Connect is a user action, so it has to re-arm
         // writes the same way every HostStore mutator does — this path
@@ -1896,6 +2157,7 @@ final class AppModel: ObservableObject {
             store.noteExplicitUserMutation()
             store.groups.append(HostGroup(name: HostStore.quickConnectGroupName(groupName), hosts: [host]))
             store.save()
+            onSaved?(host)
             return
         }
         guard let existing = store.groups[index].hosts.first(where: { $0.sameConnection(as: host) }) else {
@@ -1903,6 +2165,7 @@ final class AppModel: ObservableObject {
             store.noteExplicitUserMutation()
             store.groups[index].hosts.append(host)
             store.save()
+            onSaved?(host)
             return
         }
         // Same target, already saved. Keep the entry's own id — the sidebar
@@ -1921,6 +2184,14 @@ final class AppModel: ObservableObject {
         // renames a saved host: nobody ticks "save to group" expecting
         // “Core Switch” to become 10.0.0.1.
         if isGeneratedName(host) { updated.name = existing.name }
+        // What the form could not say, the saved entry keeps (Fable round 3:
+        // New SSH Tab + save turned a saved SRV / JMP into SSH, and a form
+        // without the Environment row dropped a "prod" tag).
+        if !formSetsBadge {
+            updated.sshBadge = existing.sshBadge
+            updated.isJumpServer = existing.isJumpServer
+        }
+        if !formSetsEnvironment { updated.environment = existing.environment }
         var changes = Self.savedHostChanges(from: existing, to: updated)
         if makeCredential != nil {
             changes.append(String(localized: "credential: \(existing.credentialID == nil ? String(localized: "none") : String(localized: "saved credential")) → new saved credential"))
@@ -1928,6 +2199,7 @@ final class AppModel: ObservableObject {
         // Nothing differs — the common "connect again to a host I already
         // saved" case. Silence is the right answer only HERE.
         guard !changes.isEmpty else {
+            onSaved?(existing)
             // Add Host opens nothing, so silence would look like the click
             // did nothing at all.
             if addOnly {
@@ -1961,6 +2233,7 @@ final class AppModel: ObservableObject {
             // updateHost finds the entry by id, carries matching recents over,
             // re-arms writes and saves.
             self.store.updateHost(updated)
+            onSaved?(updated)
         }
     }
 
@@ -2001,6 +2274,18 @@ final class AppModel: ObservableObject {
         if incoming.skipsLog != existing.skipsLog {
             changes.append(String(localized: "don't log this session: \(onOff(existing.skipsLog)) → \(onOff(incoming.skipsLog))"))
         }
+        // 6.1's fields (Fable round 2: a new badge / login / tag read as
+        // "nothing to add" and was dropped).
+        if incoming.badge != existing.badge {
+            changes.append(String(localized: "type: \(existing.badge) → \(incoming.badge)"))
+        }
+        if (incoming.authMethod ?? .automatic) != (existing.authMethod ?? .automatic) {
+            changes.append(String(localized: "authentication: \((existing.authMethod ?? .automatic).label) → \((incoming.authMethod ?? .automatic).label)"))
+        }
+        if incoming.environment != existing.environment {
+            let label = { (env: HostEnvironment?) in env?.label ?? String(localized: "none") }
+            changes.append(String(localized: "environment: \(label(existing.environment)) → \(label(incoming.environment))"))
+        }
         // The id and the typed spec are one answer ("which path"), described
         // as one line: the typed text is shown, a saved reference as "saved host".
         if incoming.jumpHostID != existing.jumpHostID || incoming.jumpSpecValue != existing.jumpSpecValue {
@@ -2023,6 +2308,8 @@ final class AppModel: ObservableObject {
 
     func close(tab: SessionTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        // Its stopwatch goes with it (6.1 (9)).
+        FloatingTools.shared.forget(tab.id)
         switch tab.content {
         case .local(let controller):
             controller.detach()
@@ -2091,6 +2378,7 @@ final class AppModel: ObservableObject {
 
     func select(workspace id: UUID) {
         guard let ws = book.workspace(id: id) else { return }
+        chipSelection = []
         selectedID = ws.focused
         DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
     }
@@ -2204,6 +2492,9 @@ final class AppModel: ObservableObject {
         let carriedAuto = !oldManual && oldVendor != .auto
         if carriedAuto { host.vendor = .auto }
         let index = tabs.firstIndex { $0.id == tab.id }
+        // The stopwatch survives the reconnect — a reboot is what it times (Fable).
+        let carriedTools = FloatingTools.shared.take(tab.id)
+        let tabsBefore = tabs.count
         // The successor takes this pane's place (`attach` reads it).
         pendingPlacement = .replacing(tab.id)
         close(tab: tab)
@@ -2223,6 +2514,8 @@ final class AppModel: ObservableObject {
             if selectedID == old { selectedID = next }
         }
         if let newTab = tabs.last {
+            // Only to a successor that was really opened (close took one, open added one) — never to another tab (Fable).
+            if tabs.count == tabsBefore { FloatingTools.shared.give(carriedTools, to: newTab.id) }
             newTab.notedSerialBaud = carriedNotedBaud
             newTab.vendorManuallyChosen = oldManual
             // An explicit choice (including an explicit .auto) must keep
@@ -2408,12 +2701,107 @@ final class AppModel: ObservableObject {
 
     /// Sidebar → Open in Split: `host` to the right of the focused pane (or
     /// its own tab when there is none).
-    func openInSplit(host: Host) {
-        if let focused = selectedID, book.canSplit(beside: focused, .right) {
-            pendingPlacement = .split(beside: focused, .right)
+    /// Right-click a host ▸ Open in Split ▸ a side (6.0 (56), the user:
+    /// "people don't know they can drag to split"). No room on that side =
+    /// its own tab, as before.
+    func openInSplit(host: Host, side: PaneDirection = .right) {
+        if let focused = selectedID, book.canSplit(beside: focused, side) {
+            pendingPlacement = .split(beside: focused, side)
         }
         open(host: host)
         pendingPlacement = .newTab
+    }
+
+    /// Whether Open in Split ▸ `side` has room beside the focused pane.
+    func canOpenInSplit(_ side: PaneDirection) -> Bool {
+        guard let focused = selectedID, (selectedWorkspace?.paneCount ?? 1) < PaneLayout.maxPanes else { return false }
+        return book.canSplit(beside: focused, side)
+    }
+
+    /// Tab right-click ▸ Split with ▸ another tab: every pane of that tab
+    /// joins this one on the right — the menu twin of dropping its chip.
+    func splitCandidates(for session: UUID) -> [(id: UUID, title: String)] {
+        splitChoices(for: session).filter(\.possible).map { ($0.id, $0.title) }
+    }
+
+    /// Every other tab, and whether it can share one with this (6.1 (5), the
+    /// owner: a tab menu with no Split with at all read as missing — one that
+    /// cannot is shown greyed). Either way round: that tab into this one, or
+    /// this one into that (a Ping tab keeps half of its tab, so it often only
+    /// fits the second way).
+    func splitChoices(for session: UUID) -> [(id: UUID, title: String, possible: Bool)] {
+        guard let here = book.workspace(containing: session) else { return [] }
+        return book.workspaces.filter { $0.id != here.id }.compactMap { ws in
+            guard let tab = tab(id: ws.focused) else { return nil }
+            let possible = book.accepts(.workspace(ws.id), beside: here.focused, .right)
+                || book.accepts(.workspace(here.id), beside: ws.focused, .right)
+            return (ws.id, tab.title, possible)
+        }
+    }
+
+    func splitWith(workspace other: UUID, into session: UUID) {
+        guard let here = book.workspace(containing: session), let there = book.workspace(id: other) else { NSSound.beep(); return }
+        if book.accepts(.workspace(other), beside: here.focused, .right) {
+            mergeWorkspace(other, beside: here.focused, .right)
+        } else {
+            // This tab into that one instead (a Ping tab beside a terminal).
+            mergeWorkspace(here.id, beside: there.focused, .right)
+        }
+    }
+
+    // MARK: - Several at once (6.1 (3), the owner: "split หลายๆ อันได้ทำยังไงให้ง่าย")
+
+    /// Chips ⌘-clicked into the selection, beside the selected tab (whose
+    /// chip is always part of it). A plain click clears it.
+    @Published var chipSelection: Set<UUID> = []
+
+    /// ⌘-click on a chip: in or out of the selection; the selected tab joins it.
+    func toggleChipSelection(_ workspace: UUID) {
+        if let here = selectedWorkspace?.id, here != workspace { chipSelection.insert(here) }
+        if chipSelection.contains(workspace) { chipSelection.remove(workspace) } else { chipSelection.insert(workspace) }
+    }
+
+    /// The selected chips that still exist, in strip order.
+    var selectedChips: [UUID] {
+        book.workspaces.map(\.id).filter(chipSelection.contains)
+    }
+
+    /// The panes of `ids`, in strip order — what Split Together gathers.
+    private func sessions(ofWorkspaces ids: [UUID]) -> [UUID] {
+        let wanted = Set(ids)
+        return book.workspaces.filter { wanted.contains($0.id) }.flatMap(\.sessions)
+    }
+
+    /// Whether gathering `ids` would change anything (two panes at least that can share a grid).
+    func canSplitTogether(_ ids: [UUID]) -> Bool {
+        var trial = book
+        return trial.gather(sessions(ofWorkspaces: ids)) != nil
+    }
+
+    /// Tab right-click ▸ Split Together (the ⌘-clicked chips) / Split with ▸
+    /// All Tabs: every pane of those tabs in one tab, as a grid
+    /// (`WorkspaceBook.gather`); past nine they stay in their tabs.
+    func splitTogether(_ ids: [UUID], focus: UUID? = nil) {
+        guard let ws = book.gather(sessions(ofWorkspaces: ids), focus: focus) else { NSSound.beep(); return }
+        chipSelection = []
+        focusMoved(ws.focused)
+    }
+
+    /// Sidebar ▸ Open in Split on several hosts, or a group ▸ Open All in
+    /// Split: each opens as usual, then the new sessions gather into one tab
+    /// (the first nine; the rest keep their own tabs).
+    func openInSplit(hosts: [Host]) {
+        let before = Set(tabs.map(\.id))
+        for host in hosts { open(host: host) }
+        let opened = tabs.map(\.id).filter { !before.contains($0) }
+        if let ws = book.gather(opened) { focusMoved(ws.focused) }
+        collapseSidebar()
+    }
+
+    /// Sidebar ▸ Connect on several hosts: each in its own tab.
+    func connect(hosts: [Host]) {
+        for host in hosts { open(host: host) }
+        collapseSidebar()
     }
 
     /// ⌥⌘ arrows: the keyboard to the neighbouring pane.
@@ -2687,6 +3075,8 @@ final class AppModel: ObservableObject {
     /// A cable plugged in: its default speed is today's rule (the saved
     /// serial host on that device, else `ConsoleBaud.baud(for:)`).
     private func serialArrived(_ path: String) {
+        // Features ▸ Serial Console & Cable Card off: no card pops up.
+        guard OptimizationPlan.Feature.isOn(.serial) else { return }
         let usb = SerialWatcher.usbDevice(at: path)
         let baud = SerialArrival.host(for: path, saved: store.groups.flatMap(\.hosts), usb: usb).port
         serialCardEvent(.arrived(path: path, detail: SerialArrivalCard.detail(path: path, usb: usb), baud: baud,
@@ -2699,8 +3089,8 @@ final class AppModel: ObservableObject {
         var next = serialCard
         let effect = SerialArrivalCard.reduce(&next, event, now: Date())
         if next != serialCard {
-            // Fade only when a card comes, goes or is replaced.
-            if next.card?.generation != serialCard.card?.generation {
+            // Fade only when a card comes or goes, or a row does.
+            if next.card?.generation != serialCard.card?.generation || next.card?.rows.count != serialCard.card?.rows.count {
                 withAnimation(.easeOut(duration: 0.2)) { serialCard = next }
             } else {
                 serialCard = next
@@ -2719,12 +3109,12 @@ final class AppModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow) + 0.05, execute: item)
     }
 
-    /// Connect: that console at the card's speed — a speed picked on the
-    /// card opens a copy, the saved host is never changed — or, when a tab
-    /// already holds the port, that tab.
-    func connectSerialCard() {
-        switch serialCardEvent(.connect(openPaths: openSerialPaths)) {
-        case .none:
+    /// A row's Connect: that console at the row's speed — a speed picked on
+    /// the card opens a copy, the saved host is never changed — or, when a
+    /// tab already holds the port, that tab.
+    func connectSerialCard(path: String) {
+        switch serialCardEvent(.connect(path: path, openPaths: openSerialPaths)) {
+        case .none, .openAll:
             return
         case .select(let path):
             let port = SerialArrival.calloutPath(path)
@@ -2737,12 +3127,28 @@ final class AppModel: ObservableObject {
                 selectedID = tab.id
                 DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }
             }
-        case .open(let path, let baud):
-            var host = SerialArrival.host(for: path, saved: store.groups.flatMap(\.hosts), usb: SerialWatcher.usbDevice(at: path))
-            host.port = baud
-            open(host: host)
+        case .open(let opening):
+            open(host: serialCardHost(opening))
         }
         collapseSidebar()
+    }
+
+    /// Connect All / Open All in Split (6.1 (3)): every row's console at its
+    /// speed, each in its own tab or all in one tab as a grid.
+    func connectAllSerialCards(split: Bool) {
+        guard case .openAll(let openings, let split) = serialCardEvent(.connectAll(split: split, openPaths: openSerialPaths)) else { return }
+        let before = Set(tabs.map(\.id))
+        for opening in openings { open(host: serialCardHost(opening)) }
+        if split, let ws = book.gather(tabs.map(\.id).filter { !before.contains($0) }) { focusMoved(ws.focused) }
+        collapseSidebar()
+    }
+
+    /// The host a card row opens: the saved one on that device (or a new
+    /// one), a COPY at the row's speed.
+    private func serialCardHost(_ opening: SerialArrivalCard.Opening) -> Host {
+        var host = SerialArrival.host(for: opening.path, saved: store.groups.flatMap(\.hosts), usb: SerialWatcher.usbDevice(at: opening.path))
+        host.port = opening.baud
+        return host
     }
 
     /// Sidebar auto-collapses once a session is opened from it,

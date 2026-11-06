@@ -22,6 +22,17 @@ struct SSHConfig: Sendable {
     /// Port forwards opened once the shell is up (5.0 (49)): loopback
     /// listeners whose connections ride this session (`PortForwarder`).
     var forwards: [ForwardRule] = []
+    /// The credential's own SSH key (6.1, Credentials ▸ Key), offered before
+    /// the agent's and ~/.ssh/id_*. `identityName` names it in notices.
+    var identity: StoredKey? = nil
+    var identityName: String = ""
+    /// The same for the bastion's credential (`jump`).
+    var jumpIdentity: StoredKey? = nil
+    var jumpIdentityName: String = ""
+    /// Add Host ▸ Authentication (6.1): which keys are offered and whether a
+    /// password may follow them. `.automatic` = everything, as before.
+    var authMethod: SSHAuthMethod = .automatic
+    var jumpAuthMethod: SSHAuthMethod = .automatic
 }
 
 nonisolated extension JumpHop {
@@ -778,6 +789,9 @@ nonisolated final class SSHWorker: Sendable {
         state.withLock { $0.askingForJumpHost = true }
         defer { state.withLock { $0.askingForJumpHost = false } }
         var hopConfig = hop.asConfig()
+        hopConfig.identity = target.jumpIdentity
+        hopConfig.identityName = target.jumpIdentityName
+        hopConfig.authMethod = target.jumpAuthMethod
         guard (1...65535).contains(hopConfig.port) else {
             closeSession("jump host \(hop.host): invalid port \(hopConfig.port)")
             return nil
@@ -1928,7 +1942,7 @@ nonisolated final class SSHWorker: Sendable {
 
     // MARK: Authentication
 
-    /// None, then public keys (ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa,
+    /// None, then public keys (the credential's own key, ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa,
     /// id_rsa — what libssh's publickey_auto tried), then rounds of password
     /// + keyboard-interactive on the SAME connection: a refused password is
     /// asked again ("Wrong password" on the card) for as long as the server
@@ -2078,6 +2092,18 @@ nonisolated final class SSHWorker: Sendable {
         func loadSigners() -> [SSHSigner] {
             if let signers { return signers }
             var loaded: [SSHSigner] = []
+            if let identity = config.identity, config.authMethod.offersCredentialKey {
+                // The key the user put on this login comes first. One that
+                // will not load (a wrong passphrase saved, a file the vault
+                // holds from another build) is named, never a silent skip.
+                let name = config.identityName.isEmpty ? "credential" : config.identityName
+                do { loaded += try SSHIdentity.signers(identity, label: "key of “\(name)”") { notice($0) } }
+                catch { notice("key of “\(name)” could not be used (\(error)) — skipped") }
+            }
+            if config.authMethod == .key, config.identity == nil {
+                notice("this host logs in with a key, but its credential has none")
+            }
+            guard config.authMethod.offersAgentAndFiles else { signers = loaded; return loaded }
             if let socket = SSHAgent.socketPath, let identities = try? SSHAgent.identities(socketPath: socket) {
                 // A signature may wait up to a minute for the user's
                 // approval; closing the tab must still end it.
@@ -2211,7 +2237,7 @@ nonisolated final class SSHWorker: Sendable {
             askedThisRound = false
             answeredThisRound = false
 
-            if offers("publickey") {
+            if offers("publickey"), config.authMethod != .password {
                 switch keyStage() {
                 case .success: return succeeded()
                 case .partial: continue
@@ -2221,9 +2247,13 @@ nonisolated final class SSHWorker: Sendable {
                 }
             }
 
-            let tryPassword = offers("password") && passwordToSave == nil
-            let tryInteractive = offers("keyboard-interactive")
+            let tryPassword = offers("password") && passwordToSave == nil && config.authMethod.allowsPassword
+            let tryInteractive = offers("keyboard-interactive") && config.authMethod.allowsPassword
             guard tryPassword || tryInteractive else {
+                if !config.authMethod.allowsPassword {
+                    notice("no key this host takes was accepted — Authentication is \(config.authMethod.rawValue), so no password is asked")
+                    return false
+                }
                 notice("the server accepts only: \(methods.joined(separator: ", ")) — no key it takes was found")
                 return false
             }

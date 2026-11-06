@@ -13,6 +13,8 @@ import Foundation
 nonisolated enum ViewMenuLayout {
     enum Item: String, CaseIterable, Sendable {
         case toggleSidebar
+        /// The top bar's Home (6.0 (40)).
+        case home
         // Sidebar ▸
         case sidebarAtLaunch, keepSidebarOpen, groupColors, reorderGroups, addHosts
         // Terminal ▸
@@ -25,12 +27,15 @@ nonisolated enum ViewMenuLayout {
         case showAIPanel, aiAssistant
         // Bottom Bar ▸
         case showBottomBar, connectionStatus, sessionInfo, shortcutHints, thisMacIP, clock, fileServer, transferProgress
+        /// Settings ▸ Optimization (6.0 (53), the user: "Optimize belongs in View too").
+        case optimize
         case networkInfo
 
         /// The English title as written in SheepTermCommands (the catalog key).
         var title: String {
             switch self {
             case .toggleSidebar: "Toggle Sidebar"
+            case .home: "Home"
             case .sidebarAtLaunch: "Show Sidebar at Launch"
             case .keepSidebarOpen: "Keep Sidebar Open"
             case .groupColors: "Group Colors"
@@ -59,6 +64,7 @@ nonisolated enum ViewMenuLayout {
             case .clock: "Clock"
             case .fileServer: "File Server"
             case .transferProgress: "Transfer Progress"
+            case .optimize: "Optimize…"
             case .networkInfo: "Network Info…"
             }
         }
@@ -75,6 +81,7 @@ nonisolated enum ViewMenuLayout {
 
     static let tree: [Node] = [
         .item(.toggleSidebar),
+        .item(.home),
         .submenu("Sidebar", [.item(.sidebarAtLaunch), .item(.keepSidebarOpen), .item(.groupColors), .item(.reorderGroups), .item(.addHosts)]),
         .submenu("Terminal", [
             .item(.toggleHighlighting), .item(.autoPage), .item(.deviceFamily), .item(.clearScrollback),
@@ -87,6 +94,7 @@ nonisolated enum ViewMenuLayout {
             .item(.showBottomBar), .item(.connectionStatus), .item(.sessionInfo), .item(.shortcutHints),
             .item(.thisMacIP), .item(.clock), .item(.fileServer), .item(.transferProgress),
         ]),
+        .item(.optimize),
         .item(.networkInfo),
     ]
 
@@ -110,6 +118,8 @@ nonisolated enum ViewMenuLayout {
     static func shortcut(_ item: Item, webSelected: Bool) -> Shortcut? {
         switch item {
         case .toggleSidebar: Shortcut(key: "0", modifiers: [.command])
+        // Beside Toggle Sidebar; ⇧⌘H is Toggle Highlighting's.
+        case .home: Shortcut(key: "0", modifiers: [.command, .shift])
         case .showAIPanel: Shortcut(key: "a", modifiers: [.command, .option])
         case .toggleHighlighting: Shortcut(key: "h", modifiers: [.command, .shift])
         case .clearScrollback: webSelected ? nil : Shortcut(key: "l", modifiers: [.command])

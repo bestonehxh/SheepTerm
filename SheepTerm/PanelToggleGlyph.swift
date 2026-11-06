@@ -26,8 +26,27 @@ struct PanelToggleGlyph: View {
             }
             context.fill(Path(roundedRect: mark, cornerRadius: line / 2), with: .foreground)
         }
-        .frame(width: 16, height: 13)
+        .frame(width: ChromeSymbol.box.width, height: ChromeSymbol.box.height)
         .accessibilityHidden(true)   // the button carries the name
+    }
+}
+
+/// A tab-bar symbol at the sidebar glyph's size (6.1 (10), the owner: the
+/// sidebar, search and Home icons "ขนาดไม่สมดุลกัน"): fitted into the same
+/// 16 × 13 box as `PanelToggleGlyph`, so every icon in the row is 13 pt tall
+/// and centred, whatever the symbol's own proportions or baseline.
+struct ChromeSymbol: View {
+    let name: String
+    static let box = CGSize(width: 16, height: 13)
+
+    init(_ name: String) { self.name = name }
+
+    var body: some View {
+        Image(systemName: name)
+            .resizable()
+            .scaledToFit()
+            .frame(width: Self.box.width, height: Self.box.height)
+            .accessibilityHidden(true)   // the button carries the name
     }
 }
 

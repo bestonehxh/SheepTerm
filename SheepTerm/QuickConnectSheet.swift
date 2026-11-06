@@ -10,11 +10,22 @@ struct QuickConnectSheet: View {
     var addOnly = false
     /// Add Host…: the SSH | Web switch (`AddHostSheet`); nil elsewhere.
     var kindSwitch: Binding<ConnectionKind>? = nil
+    /// Add Host's Jump type (6.1): an SSH host saved as a Jump Server.
+    var jumpSwitch: Binding<Bool>? = nil
+    private var isJumpServer: Bool { addOnly && kind == .ssh && (jumpSwitch?.wrappedValue ?? false) }
     /// A group's context menu → Add Host…: the group the form starts in.
     var initialGroup: String? = nil
     /// Recent → Save as Host…: the recent's values (`RecentSave`), filled in once.
     var prefill: Host? = nil
+    /// Reaches ▸ New Host… (6.0 (28)): starts with this Jump Server set.
+    var initialJumpVia: UUID? = nil
     @State private var prefilled = false
+    /// Reaches ▸ New Host… picked: after Add, a new Add Host opens behind it.
+    @State private var addBehind = false
+    /// Optimization ▸ Environment Tags (6.0 (30)).
+    @State private var environment: HostEnvironment?
+    /// Add Host's SSH label (6.0 (35)), from the badge menu.
+    @Environment(\.sshBadgeSwitch) private var sshBadgeSwitch
 
     @EnvironmentObject var model: AppModel
     /// Observed explicitly: `credentials` is @Published on CredentialStore,
@@ -77,6 +88,9 @@ struct QuickConnectSheet: View {
     /// SSH port forwards (see `PortForwardSpec`); `forwardDraft` is the open add form.
     @State private var forwards: [PortForwardSpec] = []
     @State private var forwardDraft: ForwardDraft?
+    @State private var authMethod: SSHAuthMethod = .automatic
+    /// A Jump Server's Reaches (6.1): groups that connect through it.
+    @State private var reaches: Set<UUID> = []
 
     private static let defaultGroup = "Quick Connect"
     private static let newGroupTag = "\u{0}new-group"
@@ -97,15 +111,23 @@ struct QuickConnectSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(addOnly ? String(localized: "Add Host")
-                 : kind == .ssh ? String(localized: "New SSH Connection")
-                 : kind == .telnet ? String(localized: "New Telnet Session")
-                 : String(localized: "New Serial Console"))
+                 : kind == .ssh ? String(localized: "New SSH Tab")
+                 : kind == .telnet ? String(localized: "New Telnet Tab")
+                 : String(localized: "New Serial Tab"))
                 .font(.headline)
-            if let kindSwitch {
-                HostKindSwitch(kind: kindSwitch)
-            }
+            // The type tabs under the title (6.1 (10)). One hop only (Fable
+            // round 6): a host that goes through a jump host is not offered Jump.
+            if let kindSwitch { HostKindTabs(kind: kindSwitch, jump: hasOwnJump && !isJumpServer ? nil : jumpSwitch) }
 
             Form {
+                if isTCP || addOnly {
+                    // Name first, the host's badge in front of it (6.0 (28)).
+                    HStack(spacing: 8) {
+                        if kindSwitch != nil { HostKindSwitch(kind: kind, jump: isJumpServer) }
+                        TextField("Name", text: $name, prompt: Text("optional"))
+                    }
+                    .formRow("Name")
+                }
                 if isTCP {
                     TextField("Host / IP", text: $address, prompt: Text("10.10.1.1"))
                         .formRow("Host / IP")
@@ -126,35 +148,51 @@ struct QuickConnectSheet: View {
                     }
                 }
                 if kind == .ssh {
-                    FormPopup(selection: $credentialSelection,
-                              items: [.option(String(localized: "Enter manually"), nil)] + model.credentialStore.credentials.map {
-                                  .option("\($0.name) (\($0.username))", $0.id)
-                              })
-                    .formRow("Credential")
-
-                    if credentialSelection == nil {
-                        TextField("Username", text: $username, prompt: Text("admin"))
-                            .formRow("Username")
-                        RevealableSecureField(title: "Password", text: $password)
-                            .formRow("Password")
-                        Toggle("Save as credential", isOn: $saveCredential)
-                        if saveCredential {
-                            TextField("Credential name", text: $credentialName,
-                                      prompt: Text(defaultCredentialName))
-                                .formRow("Credential name")
+                    AuthMethodRow(method: $authMethod)
+                        .onChange(of: authMethod) { _, method in
+                            // A credential the new method cannot use is dropped.
+                            if method == .agent { credentialSelection = nil }
+                            if method == .key, let id = credentialSelection,
+                               model.credentialStore.credential(for: id)?.publicKey == nil { credentialSelection = nil }
+                            if method == .key, credentialSelection == nil { credentialSelection = keyCredentials.first?.id }
+                        }
+                    if authMethod != .agent {
+                        FormPopup(selection: $credentialSelection,
+                                  items: (authMethod == .key ? [] : [.option(String(localized: "Enter manually"), nil)])
+                                      + AuthMethodRow.credentials(model.credentialStore.credentials, for: authMethod).map {
+                                      .option("\($0.name) (\($0.username))", $0.id)
+                                  })
+                        .formRow("Credential")
+                        if authMethod == .key, keyCredentials.isEmpty {
+                            Text("No credential has a key yet — Hosts ▸ Credentials…")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.destructive)
                         }
                     }
 
-                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
-                        .formRow("Device family")
-                } else if kind == .telnet {
+                    if credentialSelection == nil, authMethod != .key {
+                        TextField("Username", text: $username, prompt: Text("admin"))
+                            .formRow("Username")
+                        if authMethod != .agent {
+                            RevealableSecureField(title: "Password", text: $password)
+                                .formRow("Password")
+                            // Named user@host by itself; renamed in Credentials (the
+                            // user, 6.0 (28): a name field here only confused).
+                            Toggle("Save as credential", isOn: $saveCredential)
+                        }
+                    }
+
+                    if isJumpServer {
+                        ReachesRow(reaches: $reaches, groups: model.store.groups, addBehind: $addBehind)
+                    } else if familiesOn {
+                        FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
+                            .formRow("Device family")
+                    }
+                } else if kind == .telnet, familiesOn {
                     FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                         .formRow("Device family")
                 }
-                if isTCP {
-                    TextField("Name", text: $name, prompt: Text("optional"))
-                        .formRow("Name")
-                } else {
+                if !isTCP {
                     HStack {
                         Picker("Device", selection: $device) {
                             if devices.isEmpty {
@@ -186,13 +224,18 @@ struct QuickConnectSheet: View {
                         .onChange(of: device) { _, path in
                             baud = ConsoleBaud.baud(for: SerialWatcher.usbDevice(at: path))
                         }
-                    FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
-                        .formRow("Device family")
+                    if familiesOn {
+                        FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
+                            .formRow("Device family")
+                    }
                 }
 
+                if OptimizationPlan.Feature.isOn(.environmentTags) {
+                    EnvironmentRow(environment: $environment)
+                }
                 Divider()
 
-                if isTCP {
+                if isTCP || addOnly {
                     if !addOnly {
                         Toggle("Save to Group", isOn: $saveSession)
                             .help("Also keep this connection as a host in a group.")
@@ -211,26 +254,37 @@ struct QuickConnectSheet: View {
                 if kind == .ssh {
                     // Only when the family HAS a pager-off command (5.0 (59),
                     // the user: a greyed row under Auto only added clutter).
-                    if vendor.disablePagingCommand != nil {
+                    if vendor.disablePagingCommand != nil, !isJumpServer {
                         Toggle("No Paging", isOn: $disablePaging)
                             .help("Turns the device's pager off after login (\(vendor.disablePagingCommand ?? "")), so long output is not cut into pages.")
                     }
                     // The connection plumbing most connections never change,
                     // behind Advanced (the user, 2026-10-25: too busy).
+                    // Features ▸ Port Forwards in Add Host: the row out in the form.
+                    if forwardsOutside {
+                        PortForwardsRow(forwards: $forwards, draft: $forwardDraft)
+                    }
                     AdvancedToggle(isOn: $showAdvanced)
-                    if showAdvanced || jumpError != nil || forwardError != nil {
+                    if showAdvanced || jumpError != nil || (forwardError != nil && !forwardsOutside) {
                         FormPopup(selection: $cipherMode, items: CipherMode.allCases.map { .option($0.label, $0) })
                             .formRow("Cipher mode")
                         Toggle("Forward SSH agent", isOn: $agentForward)
-                        JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
-                                    candidates: jumpCandidates,
-                                    render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                        // 6.1: a jump path is set on the Jump Server (Reaches)
+                        // or a group; a host's own one shows only to be changed.
+                        // Not on a Jump Server: it never goes through one (Fable round 7).
+                        if hasOwnJump, !isJumpServer {
+                            JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
+                                        candidates: jumpCandidates,
+                                        render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                        }
                         if let jumpError {
                             Text(jumpError)
                                 .font(.system(size: 10))
                                 .foregroundStyle(Theme.destructive)
                         }
-                        PortForwardsRow(forwards: $forwards, draft: $forwardDraft)
+                        if !forwardsOutside {
+                            PortForwardsRow(forwards: $forwards, draft: $forwardDraft)
+                        }
                     }
                 }
             }
@@ -260,6 +314,18 @@ struct QuickConnectSheet: View {
             }
         }
         .onAppear {
+            // Features ▸ Key-based SSH first: a new SSH host starts on Key
+            // when a credential has one.
+            if kind == .ssh, prefill == nil, authMethod == .automatic,
+               OptimizationPlan.Feature.isOn(.keyFirst), !keyCredentials.isEmpty {
+                authMethod = .key
+            }
+            if let via = initialJumpVia, jumpHostID == nil,
+               let bastion = model.store.groups.flatMap(\.hosts).first(where: { $0.id == via }) {
+                jumpHostID = via
+                jumpText = JumpHostRow.text(for: bastion, credentials: credentialStore)
+                showAdvanced = true
+            }
             if let initialGroup, groupNames.contains(initialGroup) { groupSelection = initialGroup }
             if kind == .telnet, let prefill, prefill.kind == .telnet, !prefilled {
                 // Recent → Save as Host… on a telnet recent.
@@ -286,6 +352,8 @@ struct QuickConnectSheet: View {
                 vendor = prefill.highlightVendor
                 showAdvanced = prefill.hasAdvancedSettings
                 forwards = prefill.forwardSpecs
+                authMethod = prefill.authMethod ?? .automatic
+                environment = prefill.environment
                 jumpHostID = prefill.jumpHostID
                 if let jumpID = prefill.jumpHostID {
                     jumpText = model.store.groups.flatMap(\.hosts).first { $0.id == jumpID }
@@ -314,6 +382,17 @@ struct QuickConnectSheet: View {
             AuthPrompt.forceASCIIKeyboard()
         }
     }
+
+    private var keyCredentials: [Credential] {
+        AuthMethodRow.credentials(model.credentialStore.credentials, for: .key)
+    }
+
+    /// A per-host jump path from before 6.1 (a recent, a prefill).
+    /// Settings ▸ Optimization ▸ Features (6.0 (29)).
+    private var familiesOn: Bool { OptimizationPlan.Feature.isOn(.deviceFamilies) }
+    private var forwardsOutside: Bool { OptimizationPlan.Feature.isOn(.forwardsInAddHost) }
+
+    private var hasOwnJump: Bool { jumpHostID != nil || !jumpText.isEmpty }
 
     private var noLogToggle: some View {
         Toggle("Don't Log", isOn: $noLog)
@@ -438,7 +517,8 @@ struct QuickConnectSheet: View {
         switch kind {
         case .ssh:
             return parsedPort != nil && !targetHost.isEmpty && addressError == nil
-                && !JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID) && forwardError == nil
+                && (isJumpServer || !JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID)) && forwardError == nil
+                && (authMethod != .key || credentialSelection != nil)
         case .telnet:
             return parsedPort != nil && !targetHost.isEmpty && addressError == nil
         default: return !device.isEmpty
@@ -453,18 +533,18 @@ struct QuickConnectSheet: View {
     /// Saved SSH hosts that can be a bastion: one hop only, so a host that
     /// is itself behind a jump host is not offered (same rule as Edit Host).
     private var jumpCandidates: [Host] {
-        model.store.groups.flatMap(\.hosts).filter { JumpTarget.canBeBastion($0) }
+        model.store.groups.flatMap(\.hosts).filter { JumpTarget.canBeBastion($0, groups: model.store.groups) }
     }
 
     /// The red line under "Via jump host" (see `JumpTarget.fieldError`).
     private var jumpError: String? {
-        guard kind == .ssh else { return nil }
+        guard kind == .ssh, !isJumpServer else { return nil }
         return JumpTarget.fieldError(text: jumpText, jumpHostID: jumpHostID,
                                      candidates: jumpCandidates, saved: model.store.groups.flatMap(\.hosts))
     }
 
     private var targetGroup: String? {
-        guard isTCP, saveSession || addOnly else { return nil }
+        guard isTCP || addOnly, saveSession || addOnly else { return nil }
         if groupSelection == Self.newGroupTag {
             // The store's group-name pass, not just a trim: a pasted U+2028
             // survived `trimmingCharacters` and made a raw group, and a
@@ -499,7 +579,7 @@ struct QuickConnectSheet: View {
 
             if let selected = model.credentialStore.credential(for: credentialSelection) {
                 hostUsername = selected.username
-            } else if saveCredential, !password.isEmpty, !addOnly {
+            } else if saveCredential, !password.isEmpty, !addOnly, authMethod != .agent {
                 // CredentialStore skips the Keychain write for an empty
                 // password, which left the host bound to a credential that
                 // could never authenticate and prompted on every connect.
@@ -535,7 +615,7 @@ struct QuickConnectSheet: View {
             )
         } else {
             host = Host(
-                name: (device as NSString).lastPathComponent,
+                name: trimmedName.isEmpty ? (device as NSString).lastPathComponent : trimmedName,
                 kind: .serial,
                 address: device,
                 port: baud
@@ -552,12 +632,21 @@ struct QuickConnectSheet: View {
         // doors now say the same thing.
         host.vendor = vendor
         host.noLog = noLog ? true : nil
+        host.environment = environment
+        if kind == .ssh, !isJumpServer { host.sshBadge = sshBadgeSwitch?.wrappedValue }
         if kind == .ssh {
             host.disablePaging = disablePaging
             // Travels with the host into the session, a recent and a saved group.
-            host.jumpHostID = jumpHostID
-            host.jumpSpec = JumpTarget.storedSpec(text: jumpText, jumpHostID: jumpHostID)
+            // A Jump Server never goes through another one (one hop only).
+            host.jumpHostID = isJumpServer ? nil : jumpHostID
+            host.jumpSpec = isJumpServer ? nil : JumpTarget.storedSpec(text: jumpText, jumpHostID: jumpHostID)
             host.forwards = PortForwardSpec.stored(forwards, draft: forwardDraft)
+            host.authMethod = authMethod == .automatic ? nil : authMethod
+            if isJumpServer {
+                host.isJumpServer = true
+                host.vendor = nil
+                host.disablePaging = nil
+            }
         }
         // A password typed beside "Enter manually" is for THIS session (it is
         // saved only if "Save as credential" was ticked, and then the host
@@ -565,7 +654,7 @@ struct QuickConnectSheet: View {
         // Keychain: with `.complete` the nil credential stands, so SSHWorker
         // prompts — which is what "Enter manually" says on the label.
         let sessionPassword: String?
-        if kind == .ssh, credentialSelection == nil, !password.isEmpty {
+        if kind == .ssh, credentialSelection == nil, !password.isEmpty, authMethod.allowsPassword {
             sessionPassword = password
         } else {
             sessionPassword = nil
@@ -576,12 +665,22 @@ struct QuickConnectSheet: View {
             // once it knows the host is really added or updated (Keep Saved
             // Host must not leave a credential nothing uses).
             var newCredential: AppModel.NewCredential?
-            if kind == .ssh, credentialSelection == nil, saveCredential, !password.isEmpty {
+            if kind == .ssh, credentialSelection == nil, saveCredential, !password.isEmpty, authMethod != .agent {
                 let typedName = credentialName.trimmingCharacters(in: .whitespacesAndNewlines)
                 newCredential = .init(name: typedName.isEmpty ? defaultCredentialName : typedName,
                                       username: effectiveUsername, password: password)
             }
-            model.addHost(host, toGroupNamed: targetGroup, newCredential: newCredential)
+            // Reaches and "add a host behind" once the entry really is saved —
+            // after the Update / Keep answer, never on Keep (Fable round 3: a
+            // second main.async ran while that alert was still up).
+            let wanted = reaches, behind = addBehind, jumping = isJumpServer
+            model.addHost(host, toGroupNamed: targetGroup, newCredential: newCredential,
+                          formSetsBadge: sshBadgeSwitch != nil,
+                          formSetsEnvironment: OptimizationPlan.Feature.isOn(.environmentTags)) { saved in
+                guard jumping, saved.isJumpServer == true else { return }
+                if !wanted.isEmpty { model.store.setReaches(wanted, for: saved.id) }
+                if behind { DispatchQueue.main.async { model.openAddHost(via: saved.id) } }
+            }
             dismiss()
             return
         }

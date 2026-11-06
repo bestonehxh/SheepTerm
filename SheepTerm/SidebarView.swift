@@ -15,7 +15,8 @@ struct SidebarView: View {
     /// The search field's focus lights the group level bars (`GroupTree.barsActive`).
     @FocusState private var searchFocused: Bool
     @AppStorage(GroupTree.groupColorsKey) private var groupColors = GroupTree.groupColorsDefault
-    @State private var showNewGroup = false
+    @AppStorage(HostBadgeStyle.key) private var badgeStyle = HostBadgeStyle.coloured
+    @AppStorage(OptimizationPlan.Feature.environmentTags.key) private var environmentTags = OptimizationPlan.Feature.environmentTags.defaultOn
     @State private var renameTarget: HostGroup?
     @State private var editTarget: Host?
     /// Mirrors TopBarView's own fullscreen state — same will*-notification
@@ -24,8 +25,8 @@ struct SidebarView: View {
     @State private var collapsedGroups: Set<UUID> = Self.loadCollapsedGroups()
     /// Subgroups that are OPEN (they start shut, each opens on its own).
     @State private var openSubgroups: Set<UUID> = Self.loadOpenSubgroups()
+    @State private var menuAnchor = MenuAnchorBox()
     /// The group an "Add Subgroup…" from a group's menu makes a subgroup in.
-    @State private var newSubgroupParent: HostGroup?
     @AppStorage("showRecents") private var showRecents = true
     @AppStorage("recentsShown") private var recentsShown = 5
 
@@ -77,7 +78,7 @@ struct SidebarView: View {
     /// says WHY when the store refuses. HostStore refuses a duplicate name
     /// and says nothing, so creating onto a name that is taken looked like
     /// the sheet had simply been ignored.
-    private func createGroup(named rawName: String, in parent: HostGroup?) {
+    private func createGroup(named rawName: String, in parent: HostGroup?, icon: GroupIcon? = nil, color: GroupIconColor? = nil) {
         // The CLEANED name, because that is what `addGroup` compares and
         // stores: a 90-character name whose first 64 characters are already a
         // group's, or "Lab\u{0}", was refused in there and the sheet simply
@@ -92,12 +93,14 @@ struct SidebarView: View {
             reportNameTaken(name)
             return
         }
-        guard store.addGroup(named: name, parent: parent?.id) != nil else {
+        guard let created = store.addGroup(named: name, parent: parent?.id) else {
             reportRenameProblem(parent.map { String(localized: "“\($0.name)” is no longer there, or is already \(GroupTree.userDepth) levels deep.") }
                                     ?? String(localized: "The name has no usable characters."),
                                 title: failed)
             return
         }
+        // The icon and colour picked in the prompt (6.0 (44)).
+        if icon != nil || color != nil { store.setIcon(icon, color: color, forGroup: created) }
         // A new subgroup is put where it can be seen.
         if let parent {
             collapsedGroups.remove(parent.id)
@@ -229,8 +232,10 @@ struct SidebarView: View {
                 collapsedGroups.subtract(ids.flatMap { GroupTree.subtreeIDs(of: $0, in: store.groups) })
                 store.deleteGroups(withIDs: ids)
             },
-            onNewSubgroup: { newSubgroupParent = firstGroup(withID: $0.id) },
+            onNewSubgroup: { model.newSubgroupTarget = firstGroup(withID: $0.id) },
             groupColors: groupColors,
+            badgeStyle: badgeStyle,
+            environmentTags: environmentTags,
             keyBridge: keyBridge
         )
         // Not only on appear: a Remove Section (or a rename) leaves its key
@@ -294,16 +299,17 @@ struct SidebarView: View {
         // bar — lights the level bars; leaving dims them again.
         .onHover { inside in keyBridge.barActivity.pointerInside = inside }
         .onChange(of: searchFocused) { _, focused in keyBridge.barActivity.focusedSearch = focused }
-        .sheet(isPresented: $showNewGroup) {
-            NamePromptSheet(title: "New Group", confirmLabel: "Create") { rawName in
-                createGroup(named: rawName, in: nil)
+        .sheet(isPresented: $model.showNewGroup) {
+            NamePromptSheet(title: "New Group", confirmLabel: "Create", iconAutoRGB: GroupTree.levelColor(depth: 1)) { rawName, icon, color in
+                createGroup(named: rawName, in: nil, icon: icon, color: color)
             }
         }
-        .sheet(item: $newSubgroupParent) { parent in
+        .sheet(item: $model.newSubgroupTarget) { parent in
             // Names the parent, and its words differ from New Group's: the
             // two prompts must not read alike (the user: they confused people).
-            NamePromptSheet(title: "Add Subgroup to “\(parent.name)”", confirmLabel: "Add") { rawName in
-                createGroup(named: rawName, in: parent)
+            NamePromptSheet(title: "Add Subgroup to “\(parent.name)”", confirmLabel: "Add",
+                            iconAutoRGB: GroupTree.levelColor(depth: GroupTree.depth(of: parent.id, in: store.groups) + 1)) { rawName, icon, color in
+                createGroup(named: rawName, in: parent, icon: icon, color: color)
             }
         }
         .sheet(item: $renameTarget) { group in
@@ -320,6 +326,9 @@ struct SidebarView: View {
                     reportNameTaken(name)
                 }
             }
+        }
+        .sheet(item: $model.groupIconTarget) { group in
+            GroupIconSheet(group: group)
         }
         .sheet(item: $editTarget) { host in
             if host.kind == .web {
@@ -338,59 +347,30 @@ struct SidebarView: View {
         HStack(spacing: 10) {
             SyncAccountButton()
             Spacer()
-            Menu {
-                Button {
-                    showNewGroup = true
-                } label: {
-                    Label("New Group", systemImage: "folder.badge.plus")
-                }
-                Button {
-                    model.openAddHost()
-                } label: {
-                    Label("Add Host…", systemImage: "plus")
-                }
-                Button {
-                    model.showAddHosts()
-                } label: {
-                    Label("Add Hosts…", systemImage: "tablecells")
-                }
-                Divider()
-                Button {
-                    model.showReorderGroups = true
-                } label: {
-                    Label("Reorder Groups…", systemImage: "arrow.up.arrow.down")
-                }
-                Button {
-                    // Expand = every group open at every depth; Collapse =
-                    // every top-level group folded and every subgroup shut.
-                    if everythingCollapsed {
-                        collapsedGroups = []
-                        openSubgroups = Set(store.groups.filter { $0.parentID != nil }.map(\.id))
-                    } else {
+            // A Button that pops an NSMenu, not a SwiftUI Menu: a borderless
+            // Menu only answered on its glyph, so the box's edges did nothing.
+            // The menu is the right-click-on-empty-space one (+ Reorder Groups…).
+            Button {
+                let menu = SidebarAddMenu.build(model: model, groups: store.groups, allFolded: everythingCollapsed,
+                                     reorder: { model.showReorderGroups = true }) { fold in
+                    if fold {
                         collapsedGroups = Set(GroupTree.children(of: nil, in: store.groups).map(\.id))
                         openSubgroups = []
+                    } else {
+                        collapsedGroups = []
+                        openSubgroups = Set(store.groups.filter { $0.parentID != nil }.map(\.id))
                     }
-                } label: {
-                    // The glyph and the words flip with the state.
-                    Label(everythingCollapsed ? String(localized: "Expand All") : String(localized: "Collapse All"),
-                          systemImage: everythingCollapsed
-                              ? "arrow.up.left.and.arrow.down.right"
-                              : "arrow.down.right.and.arrow.up.left")
                 }
+                // Above the button (the bar is the window's bottom edge); the
+                // anchor is flipped, so its top is y = 0.
+                menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -menu.size.height - 4), in: menuAnchor.view)
             } label: {
                 // Drawn, not the SF Symbol: line.3.horizontal at this size
                 // packs its three strokes ~2 pt apart and reads as one block.
-                // An image (template) because a Menu label shows only text
-                // and images — shapes in it are dropped.
                 Image(nsImage: Self.menuGlyph)
-                    // The whole box opens the menu (a borderless Menu's control is its label).
-                    .frame(width: 26, height: 24)
-                    .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .modifier(ChromeIconBox())
+            .buttonStyle(ChromeIconButtonStyle())
+            .background(MenuAnchorView(box: menuAnchor))
             .accessibilityLabel("Groups and Hosts")
         }
         .padding(.horizontal, 12)

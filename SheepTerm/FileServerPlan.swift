@@ -503,15 +503,15 @@ nonisolated enum FileServerPlan {
         case (.panos, _):
             break
 
-        case (.linux, .tftp):
+        case (.linux, .tftp), (.containers, .tftp):
             pull("curl -o \(shellQuoted(f)) tftp://\(at)/\(f)")
-        case (.linux, .scp), (.gaia, .scp):
+        case (.linux, .scp), (.containers, .scp), (.gaia, .scp):
             let portArg = standard ? "" : "-P \(port) "
             pull("scp \(portArg)\(u)@\(ip):\(shellQuoted(f)) .")
-        case (.linux, .sftp), (.gaia, .sftp):
+        case (.linux, .sftp), (.containers, .sftp), (.gaia, .sftp):
             let portArg = standard ? "" : "-P \(port) "
             pull("sftp \(portArg)\(u)@\(ip):\(shellQuoted(f))")
-        case (.linux, .ftp), (.gaia, .ftp):
+        case (.linux, .ftp), (.containers, .ftp), (.gaia, .ftp):
             // curl asks for the password itself with `-u user`.
             pull("curl -u \(u) -o \(shellQuoted(f)) ftp://\(at)/\(f)")
         }

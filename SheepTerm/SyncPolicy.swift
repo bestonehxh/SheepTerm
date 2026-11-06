@@ -6,6 +6,22 @@ import Foundation
 nonisolated enum SyncPolicy {
     static let passwordPrefix = "password:"
 
+    /// When something that must see the cloud's copy first may run
+    /// (`SheepTermSync.afterFirstSync`; Fable round 14).
+    enum FirstSyncWait: Equatable {
+        /// No vault to wait for: not set up, signed out, a new vault.
+        case now
+        /// The vault is open: after one pass, whatever its outcome.
+        case afterPass
+        /// Signed in, the vault not open yet (checking, the passphrase asked):
+        /// look again when the phase moves.
+        case whenPhaseChanges
+    }
+
+    static func firstSyncWait(ready: Bool, vaultPending: Bool) -> FirstSyncWait {
+        ready ? .afterPass : vaultPending ? .whenPhaseChanges : .now
+    }
+
     struct PasswordRecords: Equatable {
         var records: [String: Data] = [:]
         var unavailable: Set<String> = []
@@ -28,6 +44,27 @@ nonisolated enum SyncPolicy {
         for id in credentialIDs {
             let key = passwordPrefix + id.uuidString
             if let value = password(id) { out.records[key] = Data(value.utf8) } else { out.unavailable.insert(key) }
+        }
+        return out
+    }
+
+    static let keyPrefix = "key:"
+
+    /// One record per credential that carries an SSH key (6.1): the vault
+    /// entry's bytes (`StoredKey` JSON), under the same rules as passwords —
+    /// an untrusted list reads nothing as deleted, and a key that cannot be
+    /// read now is unknown. A credential with no `publicKey` has no key: its
+    /// absence is real (a key removed here is removed everywhere).
+    static func keyRecords(listTrusted: Bool, listFileReadable: Bool, credentialsWithKey: [UUID],
+                           key: (UUID) -> Data?) -> PasswordRecords {
+        var out = PasswordRecords()
+        guard listTrusted, listFileReadable else {
+            out.unavailablePrefixes = [keyPrefix]
+            return out
+        }
+        for id in credentialsWithKey {
+            let name = keyPrefix + id.uuidString
+            if let value = key(id) { out.records[name] = value } else { out.unavailable.insert(name) }
         }
         return out
     }

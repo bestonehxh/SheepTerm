@@ -43,6 +43,11 @@ public protocol SSHSigner: AnyObject {
 /// all (older servers) plain ssh-rsa if allowed — what OpenSSH's client does.
 public func publicKeyAlgorithm(for key: SSHPublicKey, accepted: [HostKeyAlgorithm],
                                serverSignatureAlgorithms: [String]?) -> String? {
+    // A certificate: the bare key's choice, as its certificate algorithm.
+    if let info = key.certificate, let bare = try? SSHPublicKey(blob: info.plainBlob) {
+        return publicKeyAlgorithm(for: bare, accepted: accepted, serverSignatureAlgorithms: serverSignatureAlgorithms)
+            .map(SSHCertificate.algorithm(forBase:))
+    }
     guard key.keyType == "ssh-rsa" else {
         return accepted.contains(where: { $0.rawValue == key.keyType }) ? key.keyType : nil
     }

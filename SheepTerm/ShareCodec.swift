@@ -98,10 +98,13 @@ enum ShareCodec {
     /// so it is information, never a setting.
     static func stripForExport(_ group: HostGroup) -> HostGroup {
         var copy = group
+        // A group's Jump Server (6.1) is a saved id, like a host's.
+        copy.jumpHostID = nil
         copy.hosts = group.hosts.map { host in
             var host = host
             host.credentialID = nil
             host.agentForward = nil
+            if host.authMethod == .key { host.authMethod = nil }
             // Neither form of jump host travels: the saved id means nothing
             // outside this hosts.json, and a typed bastion is a PATH — a file
             // that could route the importer's login through a host of its
@@ -125,11 +128,15 @@ enum ShareCodec {
     /// negotiates with. See `decode`.
     static func stripForImport(_ group: HostGroup) -> HostGroup {
         var copy = group
+        copy.jumpHostID = nil
         copy.hosts = group.hosts.map { host in
             var host = host
             host.credentialID = nil
             host.agentForward = false
             host.cipherMode = nil
+            // Key names a credential's key, and the credential is stripped:
+            // back to Automatic, or the host could never log in (Fable round 2).
+            if host.authMethod == .key { host.authMethod = nil }
             // An id from another hosts.json would name whichever of OUR hosts
             // happens to share it (or nothing) — never what the author meant;
             // a typed bastion is dropped for the reason in `stripForExport`.

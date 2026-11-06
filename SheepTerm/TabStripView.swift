@@ -9,6 +9,9 @@ struct TabStripView: View {
     /// (see the comment below). Fullscreen has no border — the same nudge
     /// there put the chips 1pt BELOW the icons beside them.
     var compensateWindowBorder = true
+    /// A view after the last chip, inside the strip (the ＋ in its After
+    /// Last Tab place); nil = none.
+    var trailing: AnyView? = nil
 
     /// Drag state, the way SheepText's tab bar does it (4.2 (1)): the real
     /// tab order stays put while dragging; the dragged chip follows the
@@ -50,6 +53,10 @@ struct TabStripView: View {
     private static let space = "tabstrip"
     private static let dropSpace = "tabstrip-drop"
 
+    // Optimization ▸ Tab Bar (6.0 (40)): the Home chip can go, or move to the top bar.
+    @AppStorage(OptimizationPlan.showHomeButtonKey) private var showHomeButton = true
+    @AppStorage(OptimizationPlan.homePlaceKey) private var homePlace = OptimizationPlan.HomePlace.tabStrip
+
     var body: some View {
         // ScrollViewReader so the active tab is brought into view: with many
         // tabs it could sit off-screen with nothing to scroll it back. See
@@ -66,6 +73,11 @@ struct TabStripView: View {
             // above the row the eye actually reads — the one the traffic
             // lights sit on. Measured against them, not against the frame.
             HStack(spacing: Self.chipSpacing) {
+                // Home (6.0 (40), the user's pick C): always the first chip,
+                // icon only, no ×; selected while Home is what is shown.
+                if showHomeButton, homePlace == .tabStrip {
+                    HomeChip(isSelected: model.isShowingHome) { model.showHome() }
+                }
                 // One chip per WORKSPACE (a tab of one or more panes): the
                 // focused pane's title and the pane count.
                 ForEach(model.workspaces) { workspace in
@@ -77,8 +89,14 @@ struct TabStripView: View {
                         tab: tab,
                         paneCount: workspace.paneCount,
                         isSelected: model.selectedWorkspace?.id == workspace.id,
+                        isPicked: model.chipSelection.contains(workspace.id),
                         isDropTarget: dropSpot == .chip(workspace.id),
                         onSelect: {
+                            // ⌘-click (6.1 (3)): picks chips for Split Together; nothing else moves.
+                            if NSEvent.modifierFlags.contains(.command) {
+                                model.toggleChipSelection(workspace.id)
+                                return
+                            }
                             // A click on the tab that is already selected
                             // changes no selection, so onChange below never
                             // hears of it — and it may be half under the edge.
@@ -116,6 +134,9 @@ struct TabStripView: View {
                     .id(workspace.id)
                     }
                 }
+                // Settings ▸ Optimization ▸ New Tab Button ▸ After Last Tab
+                // (6.1): the ＋ rides right behind the last chip.
+                if let trailing { trailing }
             }
             // Pointer over the chips = the window is not movable, or the
             // window server turns a chip drag into a window drag (see
@@ -474,6 +495,8 @@ struct TabItemView: View {
     /// Panes in this tab; the chip says so when there is more than one.
     var paneCount: Int = 1
     let isSelected: Bool
+    /// ⌘-clicked into the selection Split Together gathers.
+    var isPicked = false
     /// A pane header is being dragged over this chip.
     var isDropTarget = false
     let onSelect: () -> Void
@@ -563,6 +586,10 @@ struct TabItemView: View {
                 .fill(isDropTarget ? Theme.controlFill
                       : isSelected ? Theme.tabActive : (hovering ? Theme.tabActive.opacity(ChipHover.tabChipOpacity) : Color.clear))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Theme.accent.opacity(isPicked ? 0.8 : 0), lineWidth: 1)
+        )
         .foregroundStyle(isSelected ? Theme.tabText : Theme.dimText)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -581,6 +608,37 @@ struct TabItemView: View {
         .accessibilityAction(named: "Close Tab") { onClose() }
         .onHover { hovering = $0 }
         .contextMenu {
+            // Split first, then what this session does, New Tab and Close last
+            // (6.1 (5), the owner: a right-click on a tab is about THIS tab).
+            // The menu twin of dropping a tab's chip on a pane edge (6.0 (56)).
+            let model = AppModel.shared
+            let others = model.splitChoices(for: tab.id)
+            // Every tab in one, as a grid (6.1 (3)) — only when that is more than one other.
+            let all = model.workspaces.map(\.id)
+            let showAll = all.count >= 3 && model.canSplitTogether(all)
+            if !others.isEmpty {
+                Menu("Split with") {
+                    if showAll {
+                        Button("All Tabs") { model.splitTogether(all, focus: tab.id) }
+                        Divider()
+                    }
+                    ForEach(others, id: \.id) { other in
+                        // One that cannot share a tab with this is shown greyed, not left out.
+                        Button(other.title) { model.splitWith(workspace: other.id, into: tab.id) }
+                            .disabled(!other.possible)
+                    }
+                }
+                .help(others.contains(where: \.possible) ? "Or drag a tab onto the edge of a pane"
+                      : "No room: a Ping tab keeps half of its tab, and a tab holds nine panes")
+            }
+            // The ⌘-clicked chips, this one among them (6.1 (3)).
+            let picked = model.selectedChips
+            if picked.count >= 2, let here = model.book.workspace(containing: tab.id)?.id, picked.contains(here),
+               model.canSplitTogether(picked) {
+                Button("Split Together") { model.splitTogether(picked, focus: tab.id) }
+                    .help("The ⌘-clicked tabs in one, side by side")
+            }
+            Divider()
             switch tab.content {
             case .ssh, .serial:
                 Button("Reconnect") { onReconnect() }
@@ -610,6 +668,15 @@ struct TabItemView: View {
                 Button("Copy All Output") { onCopyAllOutput() }
                 Divider()
             }
+            // 6.1 (9): this tab's stopwatch, floating over it.
+            Button(FloatingTools.shared.shown.contains(tab.id) ? "Hide Stopwatch" : "Stopwatch") {
+                // The card shows over the selected tab: select it first, as the pane menu does (Fable).
+                AppModel.shared.selectedID = tab.id
+                FloatingTools.shared.toggleStopwatch(for: tab.id)
+            }
+            Divider()
+            NewTabSubmenu()
+            Divider()
             Button("Close Tab") { onClose() }
         }
     }
@@ -696,5 +763,30 @@ struct PingTabGlyph: View {
         }
         .frame(width: Self.dot + CGFloat(Self.colors.count - 1) * Self.step, height: Self.dot, alignment: .leading)
         .accessibilityHidden(true)
+    }
+}
+
+/// The strip's first chip (6.0 (40)): Home. The tab chips' shape and fills,
+/// a house where they have a dot, and nothing to close.
+struct HomeChip: View {
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        // The top bar's icon size and box (6.1 (10), the owner: beside the
+        // sidebar and Search icons it was "ขนาดไม่สมดุลกัน").
+        ChromeSymbol(isSelected ? "house.fill" : "house")
+            .frame(width: 26, height: 24)
+            .background(RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Theme.tabActive : (hovering ? Theme.tabActive.opacity(ChipHover.tabChipOpacity) : Color.clear)))
+            .foregroundStyle(isSelected ? Theme.tabText : Theme.dimText)
+            .contentShape(Rectangle())
+            .onTapGesture { onSelect() }
+            .onHover { hovering = $0 }
+            .help("Home (⇧⌘0)")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Home")
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

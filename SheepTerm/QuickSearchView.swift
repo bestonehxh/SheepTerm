@@ -121,7 +121,7 @@ struct QuickSearchView: View {
             } else if let target = connectTarget {
                 paletteRow(
                     badge: target.kind.badge,
-                    badgeColor: Theme.kindColor(target.kind),
+                    badgeColor: Theme.badgeColor(for: target),
                     symbol: target.kind == .web ? "globe" : nil,
                     name: target.kind == .web ? String(localized: "Open \(target.address)") : target.name,
                     detail: target.kind == .web ? String(localized: "web tab · press ↩") : String(localized: "port \(String(target.port)) · press ↩")
@@ -135,8 +135,8 @@ struct QuickSearchView: View {
                 ForEach(results) { host in
                     paletteRow(
                         isHighlighted: highlightedKey == host.connectionKey,
-                        badge: host.kind.badge,
-                        badgeColor: Theme.kindColor(host.kind),
+                        badge: host.badge,
+                        badgeColor: Theme.badgeColor(for: host),
                         symbol: host.kind == .web ? "globe" : nil,
                         name: host.name,
                         detail: Self.detail(for: host, query: query)

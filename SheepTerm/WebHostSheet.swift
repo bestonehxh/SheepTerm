@@ -13,6 +13,8 @@ struct WebHostSheet: View {
     let mode: Mode
     /// Add Host…: the SSH | Web switch (nil elsewhere).
     var kindSwitch: Binding<ConnectionKind>? = nil
+    /// The switch's Jump segment (6.1).
+    var jumpSwitch: Binding<Bool>? = nil
 
     @EnvironmentObject var model: AppModel
     @ObservedObject private var credentialStore = AppModel.shared.credentialStore
@@ -28,10 +30,11 @@ struct WebHostSheet: View {
     private static let defaultGroup = "Quick Connect"
     private static let newGroupTag = "\u{0}new-group"
 
-    init(mode: Mode, kindSwitch: Binding<ConnectionKind>? = nil, prefill: (name: String, url: String)? = nil,
-         groupName: String? = nil) {
+    init(mode: Mode, kindSwitch: Binding<ConnectionKind>? = nil, jumpSwitch: Binding<Bool>? = nil,
+         prefill: (name: String, url: String)? = nil, groupName: String? = nil) {
         self.mode = mode
         self.kindSwitch = kindSwitch
+        self.jumpSwitch = jumpSwitch
         if let groupName { _groupSelection = State(initialValue: groupName) }
         if let prefill {
             _name = State(initialValue: prefill.name)
@@ -78,12 +81,13 @@ struct WebHostSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.headline)
-            if let kindSwitch {
-                HostKindSwitch(kind: kindSwitch)
-            }
+            if let kindSwitch { HostKindTabs(kind: kindSwitch, jump: jumpSwitch) }
             Form {
-                TextField("Name", text: $name, prompt: Text(isEditing ? "" : String(localized: "optional")))
-                    .formRow("Name")
+                HStack(spacing: 8) {
+                    if kindSwitch != nil { HostKindSwitch(kind: .web) }
+                    TextField("Name", text: $name, prompt: Text(isEditing ? "" : String(localized: "optional")))
+                }
+                .formRow("Name")
                 TextField("URL", text: $url, prompt: Text(verbatim: "https://10.0.0.1"))
                     .formRow("URL")
                     .help("http:// or https:// — https:// is added when there is no scheme")
@@ -180,15 +184,38 @@ struct AddHostSheet: View {
     var sshPrefill: Host? = nil
     /// The group the form starts in (a group's context menu → Add Host…).
     var groupName: String? = nil
+    /// ＋ ▸ New Jump Server… opens it on Jump.
+    var startsOnJump = false
+    /// Reaches ▸ New Host…: the bastion the new host goes through.
+    var jumpVia: UUID? = nil
+    /// The Jump segment (6.1): the SSH form, saving a Jump Server.
+    @State private var jump = false
+    /// The SSH label picked in the badge menu (6.0 (35)): Server / Docker / Cloud.
+    @State private var sshBadge: SSHBadge?
+    @State private var jumpApplied = false
 
     var body: some View {
+        form.environment(\.sshBadgeSwitch, $sshBadge)
+    }
+
+    @ViewBuilder private var form: some View {
         if kind == .web {
-            WebHostSheet(mode: .add, kindSwitch: $kind, prefill: webPrefill, groupName: groupName)
+            WebHostSheet(mode: .add, kindSwitch: $kind, jumpSwitch: $jump, prefill: webPrefill, groupName: groupName)
         } else {
             // A fresh form per kind (`.id`): the telnet one starts on port 23.
-            QuickConnectSheet(kind: kind == .telnet ? .telnet : .ssh, addOnly: true, kindSwitch: $kind,
-                              initialGroup: groupName, prefill: sshPrefill?.kind == kind ? sshPrefill : nil)
+            // SSH and Jump share one form (what is typed survives the switch).
+            QuickConnectSheet(kind: kind == .telnet ? .telnet : .ssh, addOnly: true, kindSwitch: $kind, jumpSwitch: $jump,
+                              initialGroup: groupName, prefill: sshPrefill?.kind == kind ? sshPrefill : nil,
+                              initialJumpVia: kind == .ssh ? jumpVia : nil)
                 .id(kind)
+                // Once: back on SSH after Telnet is the user's SSH, not Jump again (Fable).
+                .onAppear {
+                    if startsOnJump, !jumpApplied { jump = true; jumpApplied = true }
+                    // Recent ▸ Save as Host… keeps the recent's SRV / DCK / CLD (Fable round 2).
+                    if sshBadge == nil, let badge = sshPrefill?.sshBadge, sshPrefill?.kind == kind { sshBadge = badge }
+                    // …and its Jump Server flag (Fable round 3).
+                    if !jumpApplied, sshPrefill?.isJumpServer == true, kind == .ssh { jump = true; jumpApplied = true }
+                }
         }
     }
 }

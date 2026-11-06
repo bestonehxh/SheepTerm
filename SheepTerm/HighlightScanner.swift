@@ -1127,7 +1127,22 @@ nonisolated extension HighlightScanner {
         "linux": Profile(
             interface: Vocab.linux, bare: ["lo"],
             stateGood: Vocab.goodCore + ["listening", "loaded", "ok"],
-            stateBad: Vocab.badCore + ["dead", "inactive", "masked", "refused", "denied"],
+            // 6.1: the kernel's own words for a process it killed or that crashed.
+            stateBad: Vocab.badCore + ["dead", "inactive", "masked", "refused", "denied",
+                                       "oom-killer", "oom-kill", "segfault"],
+            stateWarn: ["warning", "warn", "degraded"],
+            omitting: [.cxPort]
+        ),
+        // 6.1: `kubectl get` / `docker ps` STATUS words on a Linux box.
+        "containers": Profile(
+            interface: Vocab.linux, bare: ["lo"],
+            stateGood: Vocab.goodCore + ["running", "ready", "completed", "succeeded", "healthy",
+                                         "bound", "available", "listening", "loaded", "ok"],
+            stateBad: Vocab.badCore + ["crashloopbackoff", "imagepullbackoff", "errimagepull", "oomkilled",
+                                       "evicted", "notready", "exited", "unhealthy",
+                                       "dead", "inactive", "refused", "denied", "oom-killer", "segfault"],
+            stateWarn: ["warning", "warn", "degraded", "pending", "containercreating", "terminating",
+                        "restarting", "unknown"],
             omitting: [.cxPort]
         ),
     ]
@@ -1287,6 +1302,10 @@ struct VendorFingerprint {
             // three unrelated captures; the full phrase is Gaia-only.
             (.gaia, s(["check point gaia", "gaia r8", "set installer policy",
                        "set clienv", "enter expert password"])),
+            // Before Linux: a box that prints these is a Linux box too, and
+            // the container words are the more specific pack. Column headers
+            // `kubectl get` and `docker ps` print on every listing.
+            (.containers, s(["ready   status", "container id   image", "kubectl get "])),
             (.linux, s(["gnu/linux", "ubuntu ", "debian gnu", "centos",
                         "red hat enterprise", "linux version"])),
         ]

@@ -1011,9 +1011,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
                                     width: Self.dotSize, height: Self.dotSize)).fill()
     }
 
-    /// Right-click on a pane's header: Unsplit (the pane leaves for a tab of
-    /// its own, like Tabs → Unsplit or a drop on the empty strip), Close
-    /// Pane, and on a web pane Save as Host….
+    /// Right-click on a pane's header: what THIS session does first — the
+    /// tab menu's own (Reconnect, Duplicate, Open File, Ping, Copy All
+    /// Output; Reload / Save as Host… on a web pane; Restart All on Ping —
+    /// 6.1 (5), the owner: "reconnect ต้องกดได้จากตรงนี้ด้วย"), then Move Pane to
+    /// New Tab and Close Pane.
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         func add(_ title: String, _ action: Selector) {
@@ -1021,8 +1023,46 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             item.target = self
             menu.addItem(item)
         }
-        add(String(localized: "Unsplit"), #selector(unsplit))
-        if isWeb { add(String(localized: "Save as Host…"), #selector(saveAsHost)) }
+        func run(_ title: String, _ body: @escaping (AppModel, SessionTab) -> Void) {
+            let session = self.session
+            menu.addItem(MenuAction(title: title) {
+                let model = AppModel.shared
+                guard let tab = model.tab(id: session) else { return }
+                body(model, tab)
+            })
+        }
+        if let tab = AppModel.shared.tab(id: session) {
+            switch tab.content {
+            case .ssh, .serial:
+                run(String(localized: "Reconnect")) { $0.reconnect(tab: $1) }
+                if case .ssh = tab.content {
+                    run(String(localized: "Duplicate")) { $0.duplicate(tab: $1) }
+                    run(String(localized: "Open File")) { model, tab in
+                        model.selectedID = tab.id
+                        model.openFilesForSelectedTab()
+                    }
+                    run(String(localized: "Ping")) { $0.pingTab($1) }
+                }
+                run(String(localized: "Copy All Output")) { $0.copyAllOutput(tab: $1) }
+            case .web:
+                run(String(localized: "Reload")) { $0.reconnect(tab: $1) }
+                add(String(localized: "Save as Host…"), #selector(saveAsHost))
+            case .files:
+                run(String(localized: "Reconnect")) { $0.reconnect(tab: $1) }
+            case .ping:
+                run(String(localized: "Restart All")) { $0.reconnect(tab: $1) }
+            case .local:
+                run(String(localized: "Copy All Output")) { $0.copyAllOutput(tab: $1) }
+            }
+            menu.addItem(.separator())
+        }
+        let session = self.session
+        menu.addItem(MenuAction(title: FloatingTools.shared.shown.contains(session) ? String(localized: "Hide Stopwatch") : String(localized: "Stopwatch")) {
+            AppModel.shared.selectedID = session
+            FloatingTools.shared.toggleStopwatch(for: session)
+        })
+        menu.addItem(.separator())
+        add(String(localized: "Move Pane to New Tab"), #selector(unsplit))
         menu.addItem(.separator())
         add(String(localized: "Close Pane"), #selector(closePane))
         return menu

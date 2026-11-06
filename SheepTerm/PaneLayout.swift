@@ -243,6 +243,24 @@ nonisolated struct PaneLayout: Equatable, Sendable {
         }
     }
 
+    /// Several sessions at once (6.1 (3): Open in Split on a selection, Open
+    /// All in Split, Split Together): rows of equal panes, read left → right
+    /// then down — 2 and 3 side by side, 4 = 2 × 2, 5–6 = 3 + 2/3, 7–9 = 3 × 3
+    /// (the last row may be short). Always on the grid (`isGrid`). nil for
+    /// none or more than `maxPanes`.
+    static func grid(_ sessions: [UUID]) -> PaneLayout? {
+        guard !sessions.isEmpty, sessions.count <= maxPanes else { return nil }
+        guard sessions.count > 1 else { return PaneLayout(sessions[0]) }
+        let columns = sessions.count == 4 ? 2 : min(sessions.count, maxPerSplit)
+        let rows: [PaneNode] = stride(from: 0, to: sessions.count, by: columns).map { start in
+            let cells = sessions[start..<min(start + columns, sessions.count)].map(PaneNode.leaf)
+            return cells.count == 1 ? cells[0]
+                : .split(id: UUID(), axis: .horizontal, children: cells, fractions: evenShares(cells.count))
+        }
+        return PaneLayout(root: rows.count == 1 ? rows[0]
+                          : .split(id: UUID(), axis: .vertical, children: rows, fractions: evenShares(rows.count)))
+    }
+
     private static func evenShares(_ n: Int) -> [CGFloat] {
         Array(repeating: 1 / CGFloat(n), count: n)
     }

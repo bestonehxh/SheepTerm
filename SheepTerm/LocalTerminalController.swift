@@ -18,6 +18,10 @@ final class LocalTerminalController: NSObject {
 
     var onTitleChange: ((String) -> Void)?
     var onExit: ((Int32?) -> Void)?
+    /// A log opened from the Logs window (6.1): the file's text in the
+    /// terminal, read-only — no process, keys go nowhere. `showLog` sets it.
+    private(set) var logFile: URL?
+    private var logHighlight: VendorHighlightProvider?
 
     override init() {
         super.init()
@@ -75,6 +79,27 @@ final class LocalTerminalController: NSObject {
         }
     }
 
+    /// Fills this tab with a session log, read-only, coloured by the device
+    /// family the text itself shows (`VendorFingerprint`, as a live session
+    /// would detect it). Nothing is started and nothing is ever sent.
+    func showLog(at url: URL) {
+        logFile = url
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
+            terminalView.feed("\u{1b}[91m\(String(localized: "Could not read this log."))\u{1b}[0m\r\n")
+            return
+        }
+        let view = LogLibrary.viewerBytes(data)
+        var fingerprint = VendorFingerprint()
+        let detected = fingerprint.consider(Array(view.bytes.prefix(64 * 1024))) ?? .auto
+        let provider = VendorHighlightProvider(vendor: detected)
+        logHighlight = provider
+        terminalView.highlightProvider = provider
+        if view.cut {
+            terminalView.feed("\u{1b}[2m\(String(localized: "… the start of this log is not shown — Reveal in Finder for the whole file"))\u{1b}[0m\r\n")
+        }
+        terminalView.feed(view.bytes)
+    }
+
     func detach() {
         // Kill the shell first — closing a tab must not leave an orphaned
         // process holding a pty and eating CPU in the background.
@@ -117,6 +142,8 @@ extension LocalTerminalController: TerminalViewDelegate {
     }
 
     func send(_ view: TerminalView, bytes: [UInt8]) {
+        // A log tab has no process: what is typed goes nowhere.
+        guard logFile == nil else { return }
         process.send(bytes)
     }
 

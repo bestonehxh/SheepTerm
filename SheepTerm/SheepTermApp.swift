@@ -57,11 +57,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let debugEnv = ProcessInfo.processInfo.environment
         scripted = debugEnv.keys.contains { $0.hasPrefix("SHEEPTERM_DEBUG_") } && debugEnv["SHEEPTERM_DEBUG_SHEET"] != "whatsnew"
         #endif
+        // Before anything can change a switch: what this Mac had set before
+        // 6.1 is kept as a preset of its own, once (the user, 6.1 (2)).
+        // Read NOW, decided after Sync's first pull (signed in), so another
+        // Mac's "My Settings" is here first and not overwritten (Fable rounds 13, 14).
+        if !scripted, let setup = AppModel.shared.setupBeforeUpdate() {
+            SheepTermSync.shared.afterFirstSync { AppModel.shared.keepSetupBeforeUpdate(setup) }
+        }
         let marketing = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         if !scripted, WhatsNewPlan.shouldShow(seen: UserDefaults.standard.string(forKey: WhatsNewPlan.seenKey),
                                               running: WhatsNewPlan.running(marketing: marketing, build: build)) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.showWhatsNew = true }
+        } else if !scripted, OptimizationPlan.needsHomeFirstAsk(.standard) {
+            // An updater without What's New this time: the Home question now
+            // (with What's New it comes as that closes).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.askHomeFirstIfDue() }
+        } else if !scripted, !UserDefaults.standard.bool(forKey: AddingHostsSheet.shownKey),
+                  AppModel.shared.store.groups.allSatisfy({ $0.hosts.isEmpty }) {
+            // 6.1: a Mac with no saved host is shown the ways to add one —
+            // once, and never on top of What's New.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.showAddingHosts = true }
         }
 #if DEBUG
         // Memory-keychain scratch runs: every credential gets a demo password so the screens have something to share.
@@ -288,6 +304,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // SHEEPTERM_DEBUG_SHOTS=<dir>: the 6.1 screens rendered off screen to
+        // PNGs (What's New / Help pictures). Scratch runs with sample data only:
+        // a `.shots` bundle id, CFFIXED_USER_HOME, SHEEPTERM_MEMORY_KEYCHAIN=1.
+        if let dir = env["SHEEPTERM_DEBUG_SHOTS"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { DebugShots.render(to: dir) }
+        }
         // SHEEPTERM_DEBUG_SETTINGS_PNG=<path>: Settings ▸ General rendered to a
         // file (screenshots). Scratch runs only.
         if let path = env["SHEEPTERM_DEBUG_SETTINGS_PNG"] {
@@ -349,6 +371,208 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     } else {
                         FileServerModel.shared.popoverShown = true
                     }
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_HOME_PNG=<path>: Home's tile grid (6.1 (4)) on sample
+        // hosts held in memory, rendered off screen. Scratch runs only
+        // (CFFIXED_USER_HOME, SHEEPTERM_MEMORY_KEYCHAIN=1).
+        if let path = env["SHEEPTERM_DEBUG_HOME_PNG"], PasswordVault.usesMemoryKeychain {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let store = AppModel.shared.store
+                func ssh(_ name: String, _ ip: String) -> Host { Host(name: name, kind: .ssh, address: ip) }
+                var core = HostGroup(name: "Core", hosts: [ssh("Core-SW1", "10.0.0.1"), ssh("Core-SW2", "10.0.0.2"),
+                                                           ssh("Dist-SW1", "10.0.1.1"), ssh("Dist-SW2", "10.0.1.2")])
+                var fw = HostGroup(name: "Firewalls", hosts: [ssh("FortiGate-HQ", "192.168.222.1"), ssh("FortiGate-DR", "192.168.223.1"),
+                                                              ssh("PA-Edge", "203.0.113.1")])
+                var access = HostGroup(name: "Head Office", hosts: (1...4).map { ssh("HO-SW\($0)", "10.0.2.\($0)") })
+                var bldg = HostGroup(name: "Building A", hosts: (1...6).map { ssh("BldgA-SW\($0)", "10.0.3.\($0)") }, parentID: access.id)
+                var floor = HostGroup(name: "Floor 2", hosts: (1...3).map { ssh("F2-AP\($0)", "10.0.4.\($0)") }, parentID: bldg.id)
+                core.icon = .rack; fw.icon = .shield; access.icon = .building; bldg.icon = .building; floor.icon = .wifi
+                store.groups = [core, fw, access, bldg, floor]
+                store.recents = Array((core.hosts + fw.hosts + access.hosts.prefix(6)).shuffled().prefix(12))
+                let board: [HomePlan.Widget] = [
+                    .init(source: .recent, size: .large), .init(source: .group(core.id), size: .medium),
+                    .init(source: .group(fw.id), size: .small), .init(source: .types([HostType.ssh.rawValue]), size: .small),
+                    .init(source: .group(fw.id), size: .wide), .init(source: .group(access.id), size: .medium),
+                    .init(source: .group(bldg.id), size: .small), .init(source: .group(floor.id), size: .small),
+                    .init(source: .group(bldg.id), size: .medium),
+                ]
+                // SHEEPTERM_DEBUG_HOME_DEFAULT=1: the board a new Mac gets, not the sample one.
+                if env["SHEEPTERM_DEBUG_HOME_DEFAULT"] == "1" {
+                    UserDefaults.standard.removeObject(forKey: HomePlan.storageKey)
+                } else {
+                    UserDefaults.standard.set(HomePlan.save(board), forKey: HomePlan.storageKey)
+                }
+                let width = CGFloat(Double(env["SHEEPTERM_DEBUG_HOME_WIDTH"] ?? "") ?? 900)
+                let view = HomeView().environmentObject(AppModel.shared).frame(width: width, height: 980)
+                    .background(Theme.tabActive).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame = NSRect(x: 0, y: 0, width: width, height: 980)
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: width, height: 980),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_TOOLS_PNG=<path>: 6.1 (9)'s floating cards (a stopwatch with
+        // laps, Rack Fill) and the Add Hosts examples, rendered off screen. Scratch runs only.
+        if let path = env["SHEEPTERM_DEBUG_TOOLS_PNG"], PasswordVault.usesMemoryKeychain {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let id = UUID()
+                let start = Date().addingTimeInterval(-767.3)
+                FloatingTools.shared.update(id) { w in
+                    w.start(at: start)
+                    w.lap(at: start.addingTimeInterval(155), note: "Upgrade")
+                    w.lap(at: start.addingTimeInterval(517), note: "Down")
+                    w.lap(at: start.addingTimeInterval(767), note: "Up")
+                }
+                let view = HStack(alignment: .top, spacing: 20) {
+                    VStack(spacing: 20) {
+                        StopwatchCard(session: id).fixedSize().popupChrome()
+                        RackFillCard().fixedSize().popupChrome()
+                    }
+                    ImportExamples().popupChrome()
+                }
+                .padding(24).background(Theme.tabActive).environmentObject(AppModel.shared).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    host.frame.size = host.fittingSize
+                    window.setContentSize(host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_ADDHOST_PNG=<path>: 6.1 (10)'s Add Host — the type tabs
+        // under the title, the badge before the Name — on SSH, Telnet and Web.
+        if let path = env["SHEEPTERM_DEBUG_ADDHOST_PNG"], PasswordVault.usesMemoryKeychain {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let view = HStack(alignment: .top, spacing: 20) {
+                    ForEach([ConnectionKind.ssh, .telnet, .web], id: \.self) { kind in
+                        AddHostSheet(kind: kind).frame(width: 470).background(Theme.tabActive)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .padding(24).environmentObject(AppModel.shared).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    host.frame.size = host.fittingSize
+                    window.setContentSize(host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_TOPBAR_PNG=<path>: the tab bar's icons before (font sizes)
+        // and after `ChromeSymbol` (6.1 (10)), rendered off screen, 3×.
+        if let path = env["SHEEPTERM_DEBUG_TOPBAR_PNG"], PasswordVault.usesMemoryKeychain {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                func cell(_ v: some View) -> some View { v.modifier(ChromeIconBox(tint: nil, pressed: false, width: 26, height: 24)) }
+                let view = VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 4) {
+                        cell(PanelToggleGlyph(trailing: false, open: true))
+                        cell(Image(systemName: "magnifyingglass").font(.system(size: 13)))
+                        cell(Image(systemName: "house").font(.system(size: 12.5)))
+                        cell(Image(systemName: "stopwatch").font(.system(size: 12.5)))
+                        cell(Image(systemName: "square.grid.3x3.square").font(.system(size: 12.5)))
+                    }
+                    HStack(spacing: 4) {
+                        cell(PanelToggleGlyph(trailing: false, open: true))
+                        cell(ChromeSymbol("magnifyingglass"))
+                        cell(ChromeSymbol("house"))
+                        cell(ChromeSymbol("stopwatch"))
+                        cell(ChromeSymbol("square.grid.3x3.square"))
+                    }
+                    TopBarView().frame(width: 420)
+                }
+                .padding(12).background(Theme.tabActive).environment(\.colorScheme, .dark)
+                .environmentObject(AppModel.shared)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    let size = host.fittingSize
+                    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 3), pixelsHigh: Int(size.height * 3),
+                                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                    rep.size = size
+                    host.cacheDisplay(in: host.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_CABLES_PNG=<path>: the console card with 1, 2, 5 and 8
+        // cables (6.1 (3)), rendered off screen to a file.
+        if let path = env["SHEEPTERM_DEBUG_CABLES_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let kinds = ["FTDI", "FTDI", "Prolific", "HPN Serial Port", "HPN Serial Port", "CH340", "FTDI", "Silicon Labs"]
+                func card(_ n: Int) -> SerialArrivalCard.Card {
+                    SerialArrivalCard.Card(generation: n, rows: (0..<n).map { i in
+                        SerialArrivalCard.Row(path: "/dev/cu.usbserial-14\(i + 1)0", detail: "usbserial-14\(i + 1)0 · \(kinds[i])",
+                                              baud: kinds[i] == "HPN Serial Port" ? 115_200 : 9600)
+                    }, window: 0, remaining: 15, runningSince: nil)
+                }
+                let view = HStack(alignment: .bottom, spacing: 24) {
+                    ForEach([1, 2, 5, 8], id: \.self) { n in
+                        SerialArrivalCardContent(card: card(n), send: { _ in }, onConnect: { _ in }, onConnectAll: { _ in }).fixedSize()
+                    }
+                }
+                .padding(24).background(Theme.chrome).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    host.frame.size = host.fittingSize
+                    window.setContentSize(host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
                 }
             }
         }
@@ -866,6 +1090,21 @@ struct SheepTermApp: App {
             SheepTermCommands()
         }
 
+        // File ▸ Logs… (6.1): the session logs, in a window of their own.
+        Window("Logs", id: LogsView.windowID) {
+            LogsView()
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 560, height: 620)
+
+        // Help ▸ SheepTerm Guide (6.1): the manual, real pictures of the app.
+        Window("SheepTerm Guide", id: ManualView.windowID) {
+            ManualView()
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 920, height: 680)
+
         Settings {
             SettingsView()
         }
@@ -991,6 +1230,16 @@ struct SheepTermCommands: Commands {
     @AppStorage(GroupTree.groupColorsKey) private var groupColors = GroupTree.groupColorsDefault
     @AppStorage(SidebarLaunch.key) private var sidebarAtLaunch = false
     @AppStorage(SidebarKeepOpen.key) private var sidebarStaysOpen = false
+    // Settings ▸ Optimization ▸ Features (6.0 (29)): off = the menu item is gone.
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage(OptimizationPlan.Feature.telnet.key) private var telnetOn = true
+    @AppStorage(OptimizationPlan.Feature.serial.key) private var serialOn = true
+    @AppStorage(OptimizationPlan.Feature.deviceFamilies.key) private var familiesOn = true
+    @AppStorage(OptimizationPlan.Feature.broadcast.key) private var broadcastOn = true
+    @AppStorage(OptimizationPlan.Feature.jumpServers.key) private var jumpOn = true
+    @AppStorage(HostBadgeStyle.key) private var badgeStyle = HostBadgeStyle.coloured
+    @AppStorage("showRecents") private var showRecents = true
 
     /// Highlighting only means something for a remote session. On a local
     /// shell the Device Family menu still opened and still moved its
@@ -1035,7 +1284,12 @@ struct SheepTermCommands: Commands {
 
         // Help ▸ What's New… — any time, no shortcut (the window also opens
         // on its own once per release, WhatsNewPlan).
-        CommandGroup(after: .help) {
+        // The guide takes the place of macOS's own "Help" item (which only
+        // said help is not available) and its ⌘?.
+        CommandGroup(replacing: .help) {
+            Button("SheepTerm Guide") { openWindow(id: ManualView.windowID) }
+                .keyboardShortcut("?", modifiers: .command)
+            // Adding Hosts… left Help (the user, 6.1 (2)): the Guide covers it.
             Button("What's New…") { model.showWhatsNew = true }
         }
 
@@ -1044,14 +1298,16 @@ struct SheepTermCommands: Commands {
                 .keyboardShortcut("k", modifiers: .command)
             Button("New Terminal Tab") { model.newLocalTab() }
                 .keyboardShortcut("t", modifiers: .command)
-            Button("New SSH Connection…") { model.openQuickConnect(.ssh) }
+            // One wording for every kind (6.1): "New … Tab".
+            Button("New SSH Tab…") { model.openQuickConnect(.ssh) }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-            Button("New Telnet Session…") { model.openQuickConnect(.telnet) }
-            Button("New Serial Console…") { model.openQuickConnect(.serial) }
-            // No shortcut: ⌘T is New Terminal Tab, and ⌘N would read as a
-            // new window to anyone coming from a browser.
-            Button("New Web Tab") { model.newWebTab() }
+            // The ＋ menu's order (`NewItemMenu.entries`): one list, read the same everywhere.
+            if serialOn { Button("New Serial Tab…") { model.openQuickConnect(.serial) } }
+            if jumpOn { Button("New Jump Server…") { model.openAddHost(jumpServer: true) } }
+            if telnetOn { Button("New Telnet Tab…") { model.openQuickConnect(.telnet) } }
             Divider()
+            // No shortcut: ⌘T is New Terminal Tab, ⌘N is Hosts ▸ Add Host….
+            Button("New Web Tab") { model.newWebTab() }
             Button("New Ping Tab") { model.openPing(inNewTab: true) }
             // Main window only — while Settings is key, ⌘⇧W must not close
             // a terminal tab in the background.
@@ -1059,13 +1315,10 @@ struct SheepTermCommands: Commands {
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(!mainWindowKey.isKey)
             Divider()
-            Button("Passwords…") { model.showCredentials = true }
-            Button("Known Hosts…") { model.openKnownHosts() }
-            Divider()
             Toggle("Log Sessions to File", isOn: $model.sessionLogging)
-            Button("Open Logs Folder") {
-                NSWorkspace.shared.open(SessionLogger.logsDirectory)
-            }
+            // The logs listed in the app, linked to the folder (6.1); the
+            // folder itself is a button in that window.
+            Button("Logs…") { openWindow(id: LogsView.windowID) }
             Button("Search Logs…") { model.showLogSearch = true }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
             Divider()
@@ -1073,15 +1326,35 @@ struct SheepTermCommands: Commands {
             // (Open File… — starts on the focused SSH tab's device and rides
             // its connection), files FOR devices (Serve File… → the popover,
             // which also holds the Transfer Log).
-            Button("Open File…") { model.showFileTransfer = true }
-            Button("Serve File…") { FileServerModel.shared.popoverShown = true }
-            Divider()
-            Button("Import Group…") { model.importGroupViaPanel() }
-            Button("Import from Link…") { model.showImportLink() }
-            Button("Shared Links…") { model.showSharedLinks = true }
+            Button("Transfer Client…") { model.showFileTransfer = true }
+            Button("Transfer Server…") { FileServerModel.shared.popoverShown = true }
             Divider()
             Button("Back Up Configuration…") { BackupManager.backUp() }
             Button("Restore Configuration…") { BackupManager.restore() }
+        }
+
+        // Hosts (6.1): everything about saved hosts in one menu, after View —
+        // adding, groups, import/share, credentials and known hosts (they
+        // used to be spread over File and the sidebar's ≡).
+        CommandMenu("Hosts") {
+            Button("Add Host…") { model.openAddHost() }
+                .keyboardShortcut("n", modifiers: .command)
+            Button("Add Hosts…") { model.showAddHosts() }
+            Button("New Group") { model.requestNewGroup() }
+            Divider()
+            Menu("Import") {
+                Button("Import Group…") { model.importGroupViaPanel() }
+                Button("Import from Link…") { model.showImportLink() }
+                // CSV, JSON or an OpenSSH config, looked over in Add Hosts first (6.0 (57)).
+                Button("Import Hosts File…") { model.showAddHosts(importFile: true) }
+            }
+            Button("Export Hosts…") { model.exportHostsViaPanel() }
+            Button("Shared Links…") { model.showSharedLinks = true }
+            Divider()
+            Button("Credentials…") { model.showCredentials = true }
+            Button("Known Hosts…") { model.openKnownHosts() }
+            Divider()
+            Button("Reorder Groups…") { model.showReorderGroups = true }
         }
 
         CommandGroup(after: .pasteboard) {
@@ -1128,12 +1401,24 @@ struct SheepTermCommands: Commands {
                 Label("Toggle Sidebar", systemImage: "sidebar.leading")
             }
             .viewShortcut(.toggleSidebar, webSelected: isWebSelected)
+            Button {
+                model.showHome()
+            } label: {
+                Label("Home", systemImage: "house")
+            }
+            .viewShortcut(.home, webSelected: isWebSelected)
 
             Menu("Sidebar", systemImage: "sidebar.left") {
                 Toggle("Show Sidebar at Launch", isOn: $sidebarAtLaunch)
                 Toggle("Keep Sidebar Open", isOn: $sidebarStaysOpen)
                 // The sidebar's level bars (design G), on unless set.
                 Toggle("Group Colors", isOn: $groupColors)
+                // The same rows as Settings ▸ Optimization ▸ Sidebar (6.0 (32)).
+                Picker("Host Badges", selection: $badgeStyle) {
+                    Text("Coloured").tag(HostBadgeStyle.coloured)
+                    Text("Grey").tag(HostBadgeStyle.grey)
+                }
+                Toggle("Show Recent", isOn: $showRecents)
                 Divider()
                 Button {
                     model.showReorderGroups = true
@@ -1161,15 +1446,17 @@ struct SheepTermCommands: Commands {
                 Toggle(isOn: $model.autoPage) {
                     Label("Auto-page (--More--)", systemImage: "arrow.down.to.line")
                 }
-                Menu("Device Family", systemImage: "cpu") {
-                    ForEach(Vendor.allCases) { family in
-                        Toggle(family.localizedLabel, isOn: Binding(
-                            get: { model.selectedTab?.highlightVendor == family },
-                            set: { _ in model.setHighlightVendorCurrent(family) }
-                        ))
+                if familiesOn {
+                    Menu("Device Family", systemImage: "cpu") {
+                        ForEach(Vendor.allCases) { family in
+                            Toggle(family.localizedLabel, isOn: Binding(
+                                get: { model.selectedTab?.highlightVendor == family },
+                                set: { _ in model.setHighlightVendorCurrent(family) }
+                            ))
+                        }
                     }
+                    .disabled(!isRemoteSessionSelected)
                 }
-                .disabled(!isRemoteSessionSelected)
                 // ⌘K already belongs to Quick Connect, so this takes ⌘L. Only
                 // the history above the screen goes — the visible screen and
                 // the remote session are untouched. ⌘L has one owner at a
@@ -1304,6 +1591,14 @@ struct SheepTermCommands: Commands {
                 Toggle("Transfer Progress", isOn: $model.statusShowTransfers)
             }
 
+            // Every switch that shapes the app, after the submenus that hold
+            // some of them (6.0 (53)).
+            Button("Optimize…") {
+                SettingsView.openOnOptimization = true
+                openSettings()
+                NotificationCenter.default.post(name: SettingsView.showOptimization, object: nil)
+            }
+
             Divider()
             // macOS 27 hides link addresses and the ARP table from a local
             // tab's commands; the app reads them itself (NetworkTables).
@@ -1329,8 +1624,10 @@ struct SheepTermCommands: Commands {
             Divider()
             Button("Edit Snippets…") { model.showSnippets = true }
             Divider()
-            Button("Broadcast to Tabs…") { model.showBroadcast = true }
-                .keyboardShortcut("b", modifiers: [.command, .shift])
+            if broadcastOn {
+                Button("Broadcast to Tabs…") { model.showBroadcast = true }
+                    .keyboardShortcut("b", modifiers: [.command, .shift])
+            }
         }
 
         // Per-host command history (5.0 (1)). ⌘Y: ⌃ chords belong to the
@@ -1355,12 +1652,29 @@ struct SheepTermCommands: Commands {
             Button("Split Down") { model.splitFocusedPane(.down) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
                 .disabled(!model.canSplitFocusedPane(.down) || !mainWindowKey.isKey)
+            // The tab right-click's Split with, here too (the user, 6.1 (2)).
+            Menu("Split with") {
+                if let here = model.selectedID {
+                    ForEach(model.splitCandidates(for: here), id: \.id) { other in
+                        Button(other.title) { model.splitWith(workspace: other.id, into: here) }
+                    }
+                }
+            }
+            .disabled(model.selectedID.map { model.splitCandidates(for: $0).isEmpty } ?? true || !mainWindowKey.isKey)
             Button("Close Pane") { model.closeCurrentTab() }
                 .disabled(model.selectedTab == nil)
             // Also by dragging the pane's header onto the empty tab strip.
-            Button("Unsplit") { model.moveFocusedPaneToNewTab() }
+            // Plain names (6.0 (56), the user: the split menu was hard to read).
+            // 6.1 (9): the focused pane's stopwatch.
+            Button("Stopwatch") { if let id = model.selectedID { FloatingTools.shared.toggleStopwatch(for: id) } }
+                .keyboardShortcut("t", modifiers: [.command, .option])
+                .disabled(model.selectedID == nil || !mainWindowKey.isKey)
+            // Rack Fill in the middle of the window, over any tab (6.1 (9)).
+            Button("Rack Fill") { FloatingTools.shared.rackFillShown.toggle() }
+                .disabled(!mainWindowKey.isKey)
+            Button("Move Pane to New Tab") { model.moveFocusedPaneToNewTab() }
                 .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
-            Menu("Focus Pane") {
+            Menu("Go to Pane") {
                 Button("Left") { model.focusPane(.left) }
                     .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 Button("Right") { model.focusPane(.right) }
@@ -1371,10 +1685,10 @@ struct SheepTermCommands: Commands {
                     .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             }
             .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
-            Button("Zoom Pane") { model.toggleZoomFocusedPane() }
+            Button("Maximize Pane") { model.toggleZoomFocusedPane() }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
                 .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
-            Button("Even Out Panes") { model.evenOutCurrentPanes() }
+            Button("Equal Sizes") { model.evenOutCurrentPanes() }
                 .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
             Divider()
             Button("Next Tab") { model.selectAdjacentTab(offset: 1) }
@@ -1417,6 +1731,7 @@ extension Vendor {
         case .fortios: return String(localized: "Fortinet FortiOS")
         case .gaia: return String(localized: "Check Point Gaia")
         case .linux: return String(localized: "Linux / server")
+        case .containers: return String(localized: "Containers / Kubernetes")
         }
     }
 }
@@ -1439,3 +1754,163 @@ private extension ViewMenuLayout.Shortcut {
         return KeyboardShortcut(named[key] ?? KeyEquivalent(Character(key)), modifiers: mods)
     }
 }
+
+#if DEBUG
+/// The sidebar with its right-click menu open over empty space — the menu's
+/// items read from the real builder (`SidebarAddMenu.build`), drawn the way
+/// macOS draws a menu: an open NSMenu cannot be rendered off screen.
+private struct RightClickShot: View {
+    private var items: [String?] {
+        SidebarAddMenu.build(model: AppModel.shared, groups: AppModel.shared.store.groups, allFolded: false,
+                             reorder: nil, fold: { _ in }).items.map { $0.isSeparatorItem ? nil : $0.title }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            SidebarView(store: AppModel.shared.store).frame(width: 280).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, title in
+                    if let title {
+                        HStack {
+                            Text(title).font(.system(size: 13))
+                            Spacer()
+                            if title == String(localized: "Import") { Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)) }
+                        }
+                        .padding(.horizontal, 10).frame(height: 24)
+                        .foregroundStyle(index == 0 ? Color.white : Color.primary)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(index == 0 ? Theme.accent : Color.clear))
+                    } else {
+                        Divider().padding(.vertical, 5).padding(.horizontal, 10)
+                    }
+                }
+            }
+            .padding(5)
+            .frame(width: 200)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.22)))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.12), lineWidth: 1))
+            .shadow(color: .black.opacity(0.5), radius: 18, y: 8)
+            .offset(x: 170, y: 300)
+        }
+    }
+}
+
+/// A menu as macOS draws it, from the app's own item list (the guide's
+/// ＋ picture): the first item lit.
+private struct MenuShot: View {
+    let items: [String?]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, title in
+                if let title {
+                    Text(title).font(.system(size: 13))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).frame(height: 24)
+                        .foregroundStyle(index == 0 ? Color.white : Color.primary)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(index == 0 ? Theme.accent : Color.clear))
+                } else {
+                    Divider().padding(.vertical, 5).padding(.horizontal, 10)
+                }
+            }
+        }
+        .padding(5)
+        .frame(width: 230)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.22)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .padding(28)
+    }
+}
+
+/// `SHEEPTERM_DEBUG_SHOTS`: real views, sample data, drawn into borderless
+/// windows far off screen and written as PNGs (2× for crisp pictures).
+@MainActor enum DebugShots {
+    static func render(to dir: String) {
+        let model = AppModel.shared
+        let credentials = model.credentialStore.credentials
+        // A sample saved preset for the Optimization shot (the shots build's
+        // own defaults domain — never the user's).
+        // SHEEPTERM_SHOTS_LONG=1: four 20-character sets, to check the row fits.
+        if ProcessInfo.processInfo.environment["SHEEPTERM_SHOTS_LONG"] == "1" {
+            let sets = (1...4).map { i -> OptimizationPlan.SavedPreset in
+                var s = OptimizationPlan.Settings(); s.statusShowClock = i % 2 == 0; s.features[.broadcast] = i < 3
+                return OptimizationPlan.SavedPreset(name: "Customer Site North\(i)", settings: s)
+            }
+            UserDefaults.standard.set(OptimizationPlan.encodeSaved(sets), forKey: OptimizationPlan.savedPresetsKey)
+        } else if OptimizationPlan.loadSaved(UserDefaults.standard.data(forKey: OptimizationPlan.savedPresetsKey)).count != 1 {
+            var lab = OptimizationPlan.Settings()
+            lab.showSearchButton = false
+            lab.features[.telnet] = false
+            UserDefaults.standard.set(OptimizationPlan.encodeSaved([OptimizationPlan.SavedPreset(name: "Lab", settings: lab)]),
+                                      forKey: OptimizationPlan.savedPresetsKey)
+        }
+        // Shown as "Minimal, edited" (Save / Restore Default beside it).
+        UserDefaults.standard.set("role:network", forKey: "optimizationBase")
+        var shots: [(String, AnyView, CGSize)] = [
+            ("home", AnyView(HomeView()), CGSize(width: 1000, height: 620)),
+            ("addhost", AnyView(AddHostSheet(kind: .ssh)), CGSize(width: 460, height: 640)),
+            ("optimization", AnyView(OptimizationSettingsView()), CGSize(width: 700, height: 900)),
+            ("credentials", AnyView(CredentialsSheet()), CGSize(width: 560, height: 360)),
+            ("rightclick", AnyView(RightClickShot()), CGSize(width: 420, height: 560)),
+        ]
+        // The guide (Help ▸ SheepTerm Guide): its own pictures, and a few pages.
+        shots.append(("newmenu", AnyView(MenuShot(items: NewItemMenu.entries(model: model).map { $0?.title })), CGSize(width: 286, height: 400)))
+        shots.append(("addhosts", AnyView(AddHostsSheet(request: AddHostsRequest(groupID: nil))), CGSize(width: 760, height: 520)))
+        shots.append(("logs", AnyView(LogsView()), CGSize(width: 560, height: 420)))
+        for topic in ["connect", "jump", "keys"] {
+            shots.append(("guide-\(topic)", AnyView(ManualView(topic: topic)), CGSize(width: 920, height: 680)))
+        }
+        for page in 0...WhatsNewView.featureCount {
+            shots.append(("whatsnew-\(page)", AnyView(WhatsNewView(page: page)), CGSize(width: 600, height: 600)))
+        }
+        if let bastion = model.store.groups.flatMap(\.hosts).first(where: { $0.isJumpServer == true }) {
+            shots.append(("jumphost", AnyView(HostEditSheet(host: bastion)), CGSize(width: 460, height: 640)))
+        }
+        if model.store.groups.count > 1 {
+            shots.append(("groupicon", AnyView(GroupIconSheet(group: model.store.groups[1])), CGSize(width: 340, height: 300)))
+        }
+        if let keyed = credentials.first(where: { $0.certificate != nil }) {
+            shots.append(("credential-edit", AnyView(CredentialEditSheet(edit: CredentialEdit(credential: keyed)) {}),
+                          CGSize(width: 420, height: 420)))
+        }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        var windows: [NSWindow] = []
+        var hosts: [(String, NSView)] = []
+        // A sheet is shot at its own height (no blank band above and below);
+        // a page (Home, Settings) at the size given.
+        let fitted: Set<String> = ["addhost", "credential-edit", "credentials", "groupicon", "jumphost", "newmenu", "addhosts"]
+        for (name, view, given) in shots {
+            let content = view.environmentObject(model).environment(\.colorScheme, .dark)
+            let host: NSView
+            var size = given
+            if fitted.contains(name) {
+                let sheet = NSHostingView(rootView: AnyView(content.fixedSize(horizontal: false, vertical: true)
+                    .frame(width: given.width).background(Theme.chrome)))
+                size = CGSize(width: given.width, height: ceil(sheet.fittingSize.height))
+                host = sheet
+            } else {
+                host = NSHostingView(rootView: AnyView(content.frame(width: size.width, height: size.height).background(Theme.chrome)))
+            }
+            host.appearance = NSAppearance(named: .darkAqua)
+            host.frame = NSRect(origin: .zero, size: size)
+            let window = NSWindow(contentRect: NSRect(x: -6000, y: -6000, width: size.width, height: size.height),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = host
+            window.orderFront(nil)
+            windows.append(window)
+            hosts.append((name, host))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            for (name, host) in hosts {
+                host.layoutSubtreeIfNeeded()
+                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { continue }
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
+            }
+            windows.forEach { $0.orderOut(nil) }
+            FileManager.default.createFile(atPath: dir + "/done", contents: nil)
+        }
+    }
+}
+#endif

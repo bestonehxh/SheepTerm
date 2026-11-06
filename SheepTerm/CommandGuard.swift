@@ -109,10 +109,10 @@ public nonisolated enum CommandGuard {
         Rule("systemctl poweroff"),
         Rule("systemctl halt"),
         // Linux / Check Point Gaia only (see `vendors`)
-        Rule("shutdown", .notFirst("-c", minimum: 2), vendors: [.linux, .gaia]),   // -c cancels one
-        Rule("halt", vendors: [.linux, .gaia]),
-        Rule("poweroff", vendors: [.linux, .gaia]),
-        Rule("init", .exactly(["0", "6"]), vendors: [.linux, .gaia]),
+        Rule("shutdown", .notFirst("-c", minimum: 2), vendors: [.linux, .containers, .gaia]),   // -c cancels one
+        Rule("halt", vendors: [.linux, .containers, .gaia]),
+        Rule("poweroff", vendors: [.linux, .containers, .gaia]),
+        Rule("init", .exactly(["0", "6"]), vendors: [.linux, .containers, .gaia]),
     ]
 
     /// Words in front of a command that run it from somewhere else: IOS

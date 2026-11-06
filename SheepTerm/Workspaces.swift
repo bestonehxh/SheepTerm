@@ -68,6 +68,21 @@ nonisolated enum PaneDragPayload: Equatable, Sendable {
     }
 }
 
+/// ⌘-clicked tab chips (6.1 (3)): they are let go when the selected TAB
+/// changes — another tab, Home, or the tab closing — never when the
+/// keyboard only moves between panes of the same tab, or a pane in it is
+/// closed or reconnected. The tab is REMEMBERED here, not read back from a
+/// book that may have lost the old session already (Fable rounds 15–17).
+nonisolated struct ChipPick: Equatable {
+    private(set) var tab: UUID?
+
+    /// The selected tab is now `after`: whether the chips go.
+    mutating func note(_ after: UUID?) -> Bool {
+        defer { tab = after }
+        return tab == nil || tab != after
+    }
+}
+
 nonisolated struct WorkspaceBook: Equatable, Sendable {
     private(set) var workspaces: [WorkspaceState] = []
     /// Ping panes: each keeps half its tab at least (`PaneLayout.keepsWhole`).
@@ -328,6 +343,37 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
     mutating func move(session: UUID, toWorkspace id: UUID) -> Bool {
         guard let ws = workspace(id: id), !ws.layout.contains(session) else { return false }
         return move(session: session, beside: ws.focused, .right)
+    }
+
+    /// Several sessions into ONE tab, as a grid (6.1 (3): Split Together, All
+    /// Tabs, Open in Split on a selection): the first `PaneLayout.maxPanes`
+    /// of them that are here, in the order given, laid out by
+    /// `PaneLayout.grid`; the rest stay where they are. Ping panes stay in
+    /// their own tabs (one keeps half a tab — no grid holds two of them).
+    /// Tabs left empty go; the new tab takes the place of the first
+    /// session's tab. `focus` keeps the keyboard when it is gathered, else
+    /// the first does. nil — nothing changes — for fewer than two.
+    @discardableResult
+    mutating func gather(_ sessions: [UUID], focus: UUID? = nil) -> WorkspaceState? {
+        var seen = Set<UUID>()
+        let take = Array(sessions.filter { workspace(containing: $0) != nil && !compactSessions.contains($0) && seen.insert($0).inserted }
+            .prefix(PaneLayout.maxPanes))
+        guard take.count >= 2, let layout = PaneLayout.grid(take), let first = index(ofWorkspaceContaining: take[0]) else { return nil }
+        let taking = Set(take)
+        // Where it lands: before the first tab that keeps a pane, from the first session's tab on.
+        let place = workspaces[..<first].filter { !Set($0.sessions).isSubset(of: taking) }.count
+        var book = self
+        for session in take {
+            guard let i = book.index(ofWorkspaceContaining: session) else { return nil }
+            book.workspaces[i].zoomed = nil
+            book.takeOut(session, fromWorkspaceAt: i)
+        }
+        var fresh = WorkspaceState(session: take[0])
+        fresh.layout = layout
+        fresh.focused = focus.flatMap { taking.contains($0) ? $0 : nil } ?? take[0]
+        book.workspaces.insert(fresh, at: min(place, book.workspaces.count))
+        self = book
+        return fresh
     }
 
     /// Closing a whole tab of several panes asks first (the owner, 2026-10-28):

@@ -32,14 +32,24 @@ struct SerialArrivalCardOverlay: View {
                     .allowsHitTesting(false)
                 if let card = model.serialCard.card, card.window == windowNumber {
                     let frame = SerialArrivalCard.frame(area: geo.size, card: cardSize, obstacles: obstacles)
+                    let content = SerialArrivalCardContent(card: card, send: { model.serialCardEvent($0) },
+                                                           onConnect: { model.connectSerialCard(path: $0) },
+                                                           onConnectAll: { model.connectAllSerialCards(split: $0) })
+                        .fixedSize()
+                        .onGeometryChange(for: CGSize.self, of: { $0.size }) { cardSize = $0 }
                     Group {
                         if let frame, !card.pauses.contains(.hidden) {
-                            SerialArrivalCardContent(card: card, send: { model.serialCardEvent($0) },
-                                                     onConnect: { model.connectSerialCard() })
-                                .fixedSize()
-                                .onGeometryChange(for: CGSize.self, of: { $0.size }) { cardSize = $0 }
+                            content
                                 .offset(x: frame.minX, y: frame.minY)
                                 .transition(.opacity)
+                        } else if !card.pauses.contains(.hidden) {
+                            // Yielding: still laid out, unseen and untouchable, so its size
+                            // follows its rows — a row going can give it its spot back
+                            // (Fable round 14: it stayed hidden at the old, taller size).
+                            content
+                                .opacity(0)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
                         }
                     }
                     // Keyed on the generation too: a replacement card that arrives while the
@@ -128,11 +138,16 @@ struct SerialCardProbe: NSViewRepresentable {
 
 /// Design "B": the cable icon, "Console cable", ×; the device name and kind;
 /// the speed menu and Connect. The popups' glass and accent button.
+/// Several cables (6.1 (3)): "Console cables · N", a row per cable (name,
+/// kind, speed, Connect), then Connect All / Open All in Split.
 struct SerialArrivalCardContent: View {
     let card: SerialArrivalCard.Card
     let send: (SerialArrivalCard.Event) -> Void
-    let onConnect: () -> Void
+    let onConnect: (String) -> Void
+    let onConnectAll: (_ split: Bool) -> Void
     @FocusState private var fieldFocused: Bool
+
+    private static let rowHeight: CGFloat = 30
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -140,7 +155,7 @@ struct SerialArrivalCardContent: View {
                 Image(systemName: "cable.connector")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.accent)
-                Text("Console cable")
+                Text(card.isList ? String(localized: "Console cables · \(card.rows.count)") : String(localized: "Console cable"))
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -155,20 +170,8 @@ struct SerialArrivalCardContent: View {
                 .focusable(false)
                 .help(String(localized: "Dismiss"))
             }
-            Text(card.detail)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            HStack(spacing: 10) {
-                if card.customText != nil { customField } else { speedMenu }
-                Spacer(minLength: 0)
-                CardButton(String(localized: "Connect"), role: .accent,
-                           help: String(localized: "Open this console at \(String(card.baud)) baud")) { onConnect() }
-                    .frame(width: 100)
-            }
-            .padding(.top, 4)
-            if let error = card.customError {
+            if card.isList { list } else if let row = card.rows.first { single(row) }
+            if let error = card.custom?.error {
                 Text(Self.text(error))
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.destructive)
@@ -177,41 +180,113 @@ struct SerialArrivalCardContent: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .frame(width: 280)
+        .frame(width: card.isList ? 340 : 280)
         .popupChrome()
         .pointerStyle(.default)
         .onHover { send($0 ? .pause(.hover) : .resume(.hover)) }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(Text("Console cable \(card.detail)"))
-        .accessibilityAction(named: "Open") { onConnect() }
+        .accessibilityLabel(Text(card.isList ? "Console cables" : "Console cable \(card.rows.first?.detail ?? "")"))
+        .accessibilityAction(named: "Open") {
+            if card.isList { onConnectAll(false) } else if let row = card.rows.first { onConnect(row.path) }
+        }
         .accessibilityAction(named: "Dismiss") { send(.dismiss) }
     }
 
-    private var speedMenu: some View {
+    /// One cable: the card as it always was.
+    @ViewBuilder private func single(_ row: SerialArrivalCard.Row) -> some View {
+        Text(row.detail)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        HStack(spacing: 10) {
+            speedControl(row)
+            Spacer(minLength: 0)
+            CardButton(String(localized: "Connect"), role: .accent,
+                       help: String(localized: "Open this console at \(String(row.baud)) baud")) { onConnect(row.path) }
+                .frame(width: 100)
+        }
+        .padding(.top, 4)
+    }
+
+    /// Several: a row each (scrolling past `visibleRows`), then both "all" buttons.
+    @ViewBuilder private var list: some View {
+        let rows = VStack(spacing: 0) {
+            ForEach(card.rows, id: \.path) { row in listRow(row) }
+        }
+        Group {
+            if card.rows.count > SerialArrivalCard.visibleRows {
+                ScrollView { rows }
+                    .frame(height: Self.rowHeight * CGFloat(SerialArrivalCard.visibleRows))
+            } else {
+                rows
+            }
+        }
+        .padding(.top, 2)
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+            CardButton(String(localized: "Connect All"), role: .neutral,
+                       help: String(localized: "Each console in its own tab")) { onConnectAll(false) }
+                .fixedSize()
+            CardButton(String(localized: "Open All in Split"), role: .accent,
+                       help: String(localized: "All consoles in one tab, side by side")) { onConnectAll(true) }
+                .fixedSize()
+        }
+        .padding(.top, 6)
+    }
+
+    private func listRow(_ row: SerialArrivalCard.Row) -> some View {
+        HStack(spacing: 8) {
+            // The device name whole; a long kind ("HPN Serial Port") gives way.
+            Text(row.detail)
+                .font(.system(size: 11.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(row.detail)
+            Spacer(minLength: 4)
+            speedControl(row)
+            Button(String(localized: "Connect")) { onConnect(row.path) }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .help(String(localized: "Open this console at \(String(row.baud)) baud"))
+        }
+        .frame(height: Self.rowHeight)
+    }
+
+    @ViewBuilder private func speedControl(_ row: SerialArrivalCard.Row) -> some View {
+        if let custom = card.custom, SerialArrival.calloutPath(custom.path) == SerialArrival.calloutPath(row.path) {
+            customField(custom)
+        } else {
+            speedMenu(row)
+        }
+    }
+
+    private func speedMenu(_ row: SerialArrivalCard.Row) -> some View {
         Menu {
             ForEach(SerialArrivalCard.menuRates, id: \.self) { rate in
                 Button {
-                    send(.pickBaud(rate))
+                    send(.pickBaud(path: row.path, rate))
                 } label: {
-                    if rate == card.baud { Label(String(rate), systemImage: "checkmark") } else { Text(String(rate)) }
+                    if rate == row.baud { Label(String(rate), systemImage: "checkmark") } else { Text(String(rate)) }
                 }
             }
             Divider()
-            Button(String(localized: "Other…")) { send(.openCustom) }
+            Button(String(localized: "Other…")) { send(.openCustom(path: row.path)) }
         } label: {
-            Text("\(String(card.baud)) baud")
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
+            Text(card.isList ? String(row.baud) : "\(String(row.baud)) baud")
+                .font(.system(size: card.isList ? 11.5 : 12, weight: .medium).monospacedDigit())
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .padding(.horizontal, 10)
-        .frame(height: 26)
+        .padding(.horizontal, card.isList ? 8 : 10)
+        .frame(height: card.isList ? 22 : 26)
         .background(Capsule().fill(Color.primary.opacity(0.1)))
         .help(String(localized: "Speed"))
     }
 
-    private var customField: some View {
-        TextField(String(localized: "Baud"), text: Binding(get: { card.customText ?? "" },
+    private func customField(_ custom: SerialArrivalCard.Custom) -> some View {
+        TextField(String(localized: "Baud"), text: Binding(get: { custom.text },
                                                            set: { send(.editCustom($0)) }))
             .textFieldStyle(.plain)
             .font(.system(size: 12, design: .monospaced))
@@ -221,9 +296,9 @@ struct SerialArrivalCardContent: View {
             .onExitCommand { send(.cancelCustom) }
             .noAutoFill()
             .padding(.horizontal, 10)
-            .frame(width: 110, height: 26)
+            .frame(width: card.isList ? 90 : 110, height: card.isList ? 22 : 26)
             .background(Capsule().fill(Color.primary.opacity(0.1)))
-            .overlay(Capsule().stroke(card.customError == nil ? Theme.accent.opacity(0.7) : Theme.destructive, lineWidth: 1))
+            .overlay(Capsule().stroke(custom.error == nil ? Theme.accent.opacity(0.7) : Theme.destructive, lineWidth: 1))
             .onAppear { DispatchQueue.main.async { fieldFocused = true } }
     }
 

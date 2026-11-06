@@ -32,7 +32,7 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
     var badge: String {
         switch self {
         case .ssh: return "SSH"
-        case .serial: return "SER"
+        case .serial: return "CON"
         case .telnet: return "TEL"
         case .local: return "ZSH"
         case .web: return "WEB"
@@ -43,6 +43,34 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
     /// Kinds that are a terminal session on a device (highlight, snippets,
     /// broadcast, history, paging, logging).
     var isDeviceSession: Bool { self == .ssh || self == .serial || self == .telnet }
+}
+
+/// Add Host ▸ Authentication (6.1). Tolerant like `CipherMode`: a value
+/// from a newer build reads as `.automatic`.
+nonisolated enum SSHAuthMethod: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic, password, key, agent
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = SSHAuthMethod(rawValue: raw) ?? .automatic
+    }
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .automatic: return String(localized: "Automatic")
+        case .password: return String(localized: "Password")
+        case .key: return String(localized: "Key")
+        case .agent: return "ssh-agent"
+        }
+    }
+
+    /// Public keys offered: the credential's (`key`), the agent's (`agent`), or all.
+    var offersCredentialKey: Bool { self == .automatic || self == .key }
+    var offersAgentAndFiles: Bool { self == .automatic || self == .agent }
+    /// Whether a password / keyboard-interactive round may follow the keys.
+    var allowsPassword: Bool { self == .automatic || self == .password }
 }
 
 enum CipherMode: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -141,6 +169,20 @@ struct Host: Identifiable, Codable, Hashable {
     /// choice, like `agentForward`: a `.sheepterm` neither carries nor sets
     /// it (ShareCodec strips both ways); Sync and Backup carry it.
     var forwards: [String]? = nil
+    /// How this SSH host logs in (6.1, Add Host ▸ Authentication). nil =
+    /// `.automatic`, what every host did before: the credential's key, the
+    /// agent, ~/.ssh keys, then the password.
+    var authMethod: SSHAuthMethod? = nil
+    /// A Jump Server (6.1): an SSH host other hosts are reached through. The
+    /// groups it reaches name it (`HostGroup.jumpHostID`); it is itself never
+    /// behind a group's jump server. nil/false = an ordinary host.
+    var isJumpServer: Bool? = nil
+    /// Environment tag (6.0 (30), Optimization ▸ Environment Tags): prod,
+    /// staging or dev. nil = none. Shown beside the host, changes nothing else.
+    var environment: HostEnvironment? = nil
+    /// What an SSH host's badge says (6.0 (35), the user): SRV, DCK or CLD
+    /// instead of SSH — a label, the connection is plain SSH. nil = SSH.
+    var sshBadge: SSHBadge? = nil
     /// The raw `kind` string of a host whose kind this build does not know
     /// (`kind == .unsupported`); written back as-is. Not a JSON key.
     var unknownKind: String? = nil
@@ -160,6 +202,12 @@ struct Host: Identifiable, Codable, Hashable {
         copy.forwards = nil
         return copy
     }
+
+    /// The sidebar / Quick Search badge: JMP for a Jump Server.
+    var badge: String { hostType?.badge ?? kind.badge }
+
+    /// What the badge says the host IS (6.1): SSH, JMP, TEL, CON or WEB.
+    var hostType: HostType? { HostType(host: self) }
 
     var hasAdvancedSettings: Bool {
         (cipherMode ?? .auto) != .auto || (agentForward ?? false) || jumpHostID != nil || jumpSpecValue != nil
@@ -255,7 +303,8 @@ struct Host: Identifiable, Codable, Hashable {
 extension Host {
     enum CodingKeys: String, CodingKey {
         case id, name, kind, address, port, username, credentialID, section, cipherMode, agentForward,
-             vendor, disablePaging, jumpHostID, jumpSpec, noLog, webTrustedCertSHA256, forwards
+             vendor, disablePaging, jumpHostID, jumpSpec, noLog, webTrustedCertSHA256, forwards,
+             authMethod, isJumpServer, environment, sshBadge
     }
 
     init(from decoder: Decoder) throws {
@@ -286,6 +335,11 @@ extension Host {
         // Tolerant: a value of the wrong shape (another build, a hand edit)
         // is dropped, not a reason to quarantine the whole hosts.json.
         forwards = (try? c.decodeIfPresent([String].self, forKey: .forwards)) ?? nil
+        authMethod = try c.decodeIfPresent(SSHAuthMethod.self, forKey: .authMethod)
+        isJumpServer = (try? c.decodeIfPresent(Bool.self, forKey: .isJumpServer)) ?? nil
+        // Tolerant like the rest: a value this build cannot read is dropped.
+        environment = (try? c.decodeIfPresent(HostEnvironment.self, forKey: .environment)) ?? nil
+        sshBadge = (try? c.decodeIfPresent(SSHBadge.self, forKey: .sshBadge)) ?? nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -308,6 +362,10 @@ extension Host {
         try c.encodeIfPresent(noLog, forKey: .noLog)
         try c.encodeIfPresent(webTrustedCertSHA256, forKey: .webTrustedCertSHA256)
         try c.encodeIfPresent(forwards, forKey: .forwards)
+        if let authMethod, authMethod != .automatic { try c.encode(authMethod, forKey: .authMethod) }
+        if isJumpServer == true { try c.encode(true, forKey: .isJumpServer) }
+        try c.encodeIfPresent(environment, forKey: .environment)
+        if kind == .ssh { try c.encodeIfPresent(sshBadge, forKey: .sshBadge) }
     }
 }
 
@@ -402,8 +460,19 @@ struct HostGroup: Identifiable, Codable, Hashable {
     /// one-level section list, empty sections included) and by a `.sheepterm`
     /// export (`GroupTree.exportable`).
     var sections: [String] = []
+    /// The Jump Server this group's hosts are reached through (6.1, its
+    /// "Reaches" row / the group's Via Jump Server menu). Subgroups inherit
+    /// it; a host's own `jumpHostID`/`jumpSpec` wins. Never in a `.sheepterm`.
+    var jumpHostID: UUID? = nil
+    /// The group's icon (6.1, right-click ▸ Group Icon…): our own line art in
+    /// front of the name, after the level bar. nil = the bar alone.
+    var icon: GroupIcon? = nil
+    /// The group's colour (6.1): the icon's AND the level bar's (the user: the
+    /// bar follows it), from a fixed palette in the app's tone; nil = the
+    /// level's colour. Kept without an icon too — a bar can be recoloured alone.
+    var iconColor: GroupIconColor? = nil
 
-    enum CodingKeys: String, CodingKey { case id, name, hosts, parentID, sections }
+    enum CodingKeys: String, CodingKey { case id, name, hosts, parentID, sections, jumpHostID, icon, iconColor }
 
     /// Written by hand: a synthesized `init(from:)` throws `keyNotFound` for
     /// a missing key even when the property has a default value (measured —
@@ -426,6 +495,10 @@ struct HostGroup: Identifiable, Codable, Hashable {
         hosts = try container.decode([Host].self, forKey: .hosts)
         parentID = (try? container.decodeIfPresent(UUID.self, forKey: .parentID)) ?? nil
         sections = (try? container.decodeIfPresent([String].self, forKey: .sections)) ?? []
+        jumpHostID = (try? container.decodeIfPresent(UUID.self, forKey: .jumpHostID)) ?? nil
+        // Tolerant: an icon or colour this build does not draw is no icon.
+        icon = (try? container.decodeIfPresent(GroupIcon.self, forKey: .icon)) ?? nil
+        iconColor = (try? container.decodeIfPresent(GroupIconColor.self, forKey: .iconColor)) ?? nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -439,6 +512,9 @@ struct HostGroup: Identifiable, Codable, Hashable {
             try container.encodeNil(forKey: .parentID)
         }
         if !sections.isEmpty { try container.encode(sections, forKey: .sections) }
+        try container.encodeIfPresent(jumpHostID, forKey: .jumpHostID)
+        try container.encodeIfPresent(icon, forKey: .icon)
+        try container.encodeIfPresent(iconColor, forKey: .iconColor)
     }
 
     init(id: UUID = UUID(), name: String, hosts: [Host], parentID: UUID? = nil, sections: [String] = []) {
@@ -1701,16 +1777,48 @@ enum JumpTarget: Equatable {
         host.kind == .ssh && host.jumpHostID == nil && host.jumpSpecValue == nil
     }
 
-    static func resolve(host: Host, saved: [Host]) -> JumpTarget {
+    static func resolve(host: Host, saved: [Host], groups: [HostGroup] = []) -> JumpTarget {
         let jumpID = host.jumpHostID.flatMap { $0 == host.id ? nil : $0 }
-        if let jumpID, let bastion = saved.first(where: { $0.id == jumpID }), canBeBastion(bastion) {
+        if let jumpID, let bastion = saved.first(where: { $0.id == jumpID }), canBeBastion(bastion, groups: groups) {
             return .saved(bastion)
         }
         if let spec = host.jumpSpecValue {
             guard let parsed = parse(spec) else { return .invalid }
             return .spec(parsed)
         }
-        return jumpID == nil ? .none : .invalid
+        if jumpID != nil { return .invalid }
+        // 6.1: the Jump Server its group (or a parent group) reaches through.
+        guard let viaID = groupVia(for: host, in: groups) else { return .none }
+        guard let bastion = saved.first(where: { $0.id == viaID }), canBeBastion(bastion, groups: groups) else { return .invalid }
+        return .saved(bastion)
+    }
+
+    /// The Jump Server `host`'s group chain names (nearest group first), or
+    /// nil. A Jump Server is never behind one (one hop only), and a group
+    /// never sends its own Jump Server through itself.
+    static func groupVia(for host: Host, in groups: [HostGroup]) -> UUID? {
+        // SSH only: a telnet or web host in the group connects straight there.
+        guard host.kind == .ssh, host.isJumpServer != true, !groups.isEmpty,
+              var group = groups.first(where: { $0.hosts.contains { $0.id == host.id } }) else { return nil }
+        var seen: Set<UUID> = []
+        while seen.insert(group.id).inserted {
+            if let via = group.jumpHostID, via != host.id { return via }
+            guard let parentID = group.parentID, let parent = groups.first(where: { $0.id == parentID }) else { return nil }
+            group = parent
+        }
+        return nil
+    }
+
+    /// `canBeBastion`, also refusing a bastion that a group sends through
+    /// another Jump Server (that would be two hops).
+    static func canBeBastion(_ host: Host, groups: [HostGroup]) -> Bool {
+        canBeBastion(host) && groupVia(for: host, in: groups) == nil
+    }
+
+    /// Every saved Jump Server, in sidebar order — what a group's Via Jump
+    /// Server menu offers.
+    static func jumpServers(in groups: [HostGroup]) -> [Host] {
+        groups.flatMap(\.hosts).filter { $0.isJumpServer == true && $0.kind == .ssh }
     }
 
     /// The red line under the "Via jump host" row, or nil. A saved
@@ -1771,6 +1879,98 @@ enum JumpTarget: Equatable {
 /// It knows nothing about `Credential`/`CredentialStore` on purpose: the
 /// saved credentials arrive as plain triples, so the harness (whose sources
 /// stop at Models) can exercise the same code the sheet runs.
+/// Environment tag (6.0 (30)). Tolerant: an unknown value reads as nil
+/// (`Host.init(from:)` drops it).
+nonisolated enum HostEnvironment: String, Codable, CaseIterable, Identifiable, Sendable {
+    case prod, staging, dev
+    var id: String { rawValue }
+    var label: String { rawValue.uppercased() }
+}
+
+/// An SSH host's badge (6.0 (35)): Server, Docker or Cloud — a label the
+/// user picks in the Add Host badge menu; the session is plain SSH.
+nonisolated enum SSHBadge: String, Codable, CaseIterable, Sendable {
+    case server, docker, cloud
+}
+
+/// The five things a saved host can be (6.1), each with its badge: the Add
+/// Host badge menu, the Add Hosts Type column and a CSV's Type field all
+/// speak this, so a type is named one way everywhere. Jump is SSH with
+/// `Host.isJumpServer`.
+nonisolated enum HostType: String, CaseIterable, Identifiable, Sendable {
+    /// SSH and its labels first, then the ＋ menu's order (Serial, Jump,
+    /// Telnet, Web — the user, 6.0 (56): Telnet under Jump): every list of
+    /// types reads the same.
+    case ssh, server, docker, cloud, serial, jump, telnet, web
+
+    var id: String { rawValue }
+
+    var badge: String {
+        switch self {
+        case .ssh: return "SSH"
+        case .server: return "SRV"
+        case .docker: return "DCK"
+        case .cloud: return "CLD"
+        case .jump: return "JMP"
+        case .telnet: return "TEL"
+        case .serial: return "CON"
+        case .web: return "WEB"
+        }
+    }
+
+    var kind: ConnectionKind {
+        switch self {
+        case .ssh, .server, .docker, .cloud, .jump: return .ssh
+        case .telnet: return .telnet
+        case .serial: return .serial
+        case .web: return .web
+        }
+    }
+
+    /// The SSH label this type stands for; nil for SSH itself and the rest.
+    var sshBadge: SSHBadge? {
+        switch self {
+        case .server: return .server
+        case .docker: return .docker
+        case .cloud: return .cloud
+        default: return nil
+        }
+    }
+
+    init?(host: Host) {
+        switch host.kind {
+        case .ssh:
+            if host.isJumpServer == true { self = .jump; return }
+            switch host.sshBadge {
+            case .server: self = .server
+            case .docker: self = .docker
+            case .cloud: self = .cloud
+            case nil: self = .ssh
+            }
+        case .telnet: self = .telnet
+        case .serial: self = .serial
+        case .web: self = .web
+        case .local, .unsupported: return nil
+        }
+    }
+
+    /// A Type cell or CSV field: the badge, the menu's word, or the usual
+    /// synonyms, any case. nil = not a type (the row is refused, never guessed).
+    init?(word: String) {
+        switch word.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "", "ssh": self = .ssh
+        case "srv", "server": self = .server
+        case "dck", "dkr", "docker", "container": self = .docker
+        case "cld", "cloud": self = .cloud
+        case "jmp", "jump", "jump server", "jumpserver", "bastion": self = .jump
+        case "tel", "telnet": self = .telnet
+        case "con", "ser", "serial", "console": self = .serial
+        case "web", "http", "https": self = .web
+        default: return nil
+        }
+    }
+}
+
 enum BulkHostParser {
     /// The three table columns a paste can land in.
     enum Column {
@@ -1782,6 +1982,9 @@ enum BulkHostParser {
         /// 2", carried as `Host.section` until `applyImport` files it. Per
         /// ROW: two hosts of one paste can go into two subgroups.
         case section
+        /// The row's `HostType` (6.0 (28)). Only ever reached through a
+        /// header naming it: a positional paste never lands here.
+        case type
     }
 
     /// Left to right, the way a pasted block's fields are read off when the
@@ -2176,11 +2379,12 @@ enum BulkHostParser {
         // column header says now — a paste copied out of the sheet must be
         // readable back in, refused under the name the user just saw.
         "group": .section, "section": .section, "subgroup": .section,
+        "type": .type, "kind": .type,
     ]
 
     /// What the alert offers when a header is refused.
     static let acceptedHeadingSummary =
-        "Name, Host / IP, Credential, Group (any order; Host, IP or Address also mean Host / IP; Section or Subgroup also means Group)"
+        "Name, Host / IP, Credential, Group, Type (any order; Host, IP or Address also mean Host / IP; Section or Subgroup also means Group; Type is SSH, Server, Docker, Cloud, Jump, Telnet or Web — a console stays in Recent)"
 
     /// Is this row a HEADER at all? A data row always carries a TARGET, so a
     /// first line with no address anywhere in it is a header — right or
@@ -3057,16 +3261,23 @@ enum BulkHostParser {
                          credentialUsername: String?,
                          pastedUsername: String,
                          section: String? = nil,
-                         noLog: Bool = false) -> Host? {
-        let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
+                         noLog: Bool = false,
+                         type: HostType = .ssh) -> Host? {
+        var raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
+        let label = section?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Type Web with a bare address: https, as the Add Host web form does.
+        if type == .web, !WebAddress.hasWebScheme(raw) { raw = "https://" + raw }
+        // A console is never filed in a group — it lives in Recent only (the
+        // user, 6.0 (42)): a Serial row is refused, like a row with no target.
+        if type == .serial { return nil }
         // An http(s):// URL in the Host / IP cell is a WEB host (5.0 web
         // tabs): the URL is its address, the credential works as for SSH.
         if WebAddress.hasWebScheme(raw) {
             let pasted = pastedUsername.trimmingCharacters(in: .whitespacesAndNewlines)
             let user = (credentialUsername?.isEmpty == false ? credentialUsername : nil) ?? pasted
             guard var web = Host.web(name: name, url: raw, username: user, credentialID: credentialID) else { return nil }
-            let label = section?.trimmingCharacters(in: .whitespacesAndNewlines)
             web.section = (label?.isEmpty ?? true) ? nil : label
             return web
         }
@@ -3080,12 +3291,14 @@ enum BulkHostParser {
         if raw.contains(":") || raw.contains("[") || raw.contains("@") {
             guard let parsed = ConnectParser.parse(raw, requireHostShape: false) else { return nil }
             host = parsed.address
-            port = parsed.port
+            // Telnet's own port unless the cell wrote one.
+            let wrotePort = raw.range(of: #":\d+$"#, options: .regularExpression) != nil
+            port = type == .telnet && !wrotePort ? Host.defaultTelnetPort : parsed.port
             addressUser = parsed.username
         } else {
             guard !raw.contains(where: { $0.isWhitespace }) else { return nil }
             host = raw
-            port = Host.defaultSSHPort
+            port = type == .telnet ? Host.defaultTelnetPort : Host.defaultSSHPort
             addressUser = ""
         }
 
@@ -3097,16 +3310,17 @@ enum BulkHostParser {
             username = pasted.isEmpty ? addressUser : pasted
         }
 
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let label = section?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Host(name: trimmedName.isEmpty ? host : trimmedName,
-                    kind: .ssh,
-                    address: host,
-                    port: port,
-                    username: username,
-                    credentialID: credentialID,
-                    section: (label?.isEmpty ?? true) ? nil : label,
-                    noLog: noLog ? true : nil)
+        var made = Host(name: trimmedName.isEmpty ? host : trimmedName,
+                        kind: type == .telnet ? .telnet : .ssh,
+                        address: host,
+                        port: port,
+                        username: username,
+                        credentialID: credentialID,
+                        section: (label?.isEmpty ?? true) ? nil : label,
+                        noLog: noLog ? true : nil)
+        if type == .jump { made.isJumpServer = true }
+        made.sshBadge = type.sshBadge
+        return made
     }
 }
 
@@ -3837,6 +4051,49 @@ final class HostStore: ObservableObject {
         return true
     }
 
+    /// A group's Via Jump Server menu (6.1): the Jump Server its hosts are
+    /// reached through, nil = straight there. One write.
+    /// Right-click ▸ Group Icon… (6.1): one write.
+    func setIcon(_ icon: GroupIcon?, color: GroupIconColor?, forGroup groupID: UUID) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }),
+              groups[index].icon != icon || groups[index].iconColor != color else { return }
+        noteUserMutation()
+        groups[index].icon = icon
+        groups[index].iconColor = color
+        save()
+    }
+
+    func setJumpServer(_ jumpID: UUID?, forGroup groupID: UUID) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }), groups[index].jumpHostID != jumpID else { return }
+        noteUserMutation()
+        groups[index].jumpHostID = jumpID
+        save()
+    }
+
+    /// A Jump Server's Reaches row (6.1): exactly `groupIDs` go through
+    /// `jumpID` afterwards — added ones point at it, ones it no longer reaches
+    /// go straight again. Other Jump Servers' groups are left alone unless
+    /// picked here. One write.
+    func setReaches(_ groupIDs: Set<UUID>, for jumpID: UUID) {
+        var changed = groups
+        for index in changed.indices {
+            if groupIDs.contains(changed[index].id) {
+                changed[index].jumpHostID = jumpID
+            } else if changed[index].jumpHostID == jumpID {
+                changed[index].jumpHostID = nil
+            }
+        }
+        guard changed != groups else { return }
+        noteUserMutation()
+        groups = changed
+        save()
+    }
+
+    /// The groups that name `jumpID` as their Jump Server.
+    func reaches(of jumpID: UUID) -> Set<UUID> {
+        Set(groups.filter { $0.jumpHostID == jumpID }.map(\.id))
+    }
+
     func deleteGroup(_ group: HostGroup) {
         deleteGroups(withIDs: [group.id])
     }
@@ -3867,6 +4124,13 @@ final class HostStore: ObservableObject {
             }
         }
         groups.removeAll { doomed.contains($0.id) }
+        // A Jump Server that went with them reaches nothing any more: the
+        // surviving groups it served go straight (Fable round 3; the same
+        // sweep `removeHosts` does).
+        let goneHosts = Set(victims.flatMap(\.hosts).map(\.id))
+        for index in groups.indices {
+            if let jump = groups[index].jumpHostID, goneHosts.contains(jump) { groups[index].jumpHostID = nil }
+        }
         // Same rule as `removeHosts`: a target another group still holds
         // keeps its recent, and is not tombstoned.
         pruneRecents(forRemovedKeys: keys)
@@ -4305,6 +4569,10 @@ final class HostStore: ObservableObject {
         for host in victims { deletedHostIDs.insert(host.id) }
         for index in groups.indices {
             groups[index].hosts.removeAll { wanted.contains($0.id) }
+            // A deleted Jump Server reaches nothing (Fable round 2): its
+            // groups go straight again instead of every host failing with
+            // "jump host missing" and no Via row ticked to fix it.
+            if let jump = groups[index].jumpHostID, wanted.contains(jump) { groups[index].jumpHostID = nil }
         }
         // A removed host must not linger in Recent — it can no longer be
         // connected to. But the same TARGET may be saved twice (two groups,
@@ -4980,6 +5248,22 @@ extension String {
 
 /// A saved login (credentials.json). The password is never here — it lives
 /// in the Keychain vault, keyed by `id` (`CredentialStore`).
+/// The keys an entry of credentials.json may carry — checked by name when a
+/// backup or a Sync round brings the file in (`BackupManager.validate`), so a
+/// hand-made file with a "password" beside a credential is refused instead of
+/// written to disk. Every field `Credential` encodes must be listed: leaving
+/// `websites` (5.0 (24)) off made every backup or Sync round with a web login
+/// refuse the whole file. `publicKey` (6.1) is public, not a secret.
+nonisolated enum CredentialFileKeys {
+    static let allowed: Set<String> = ["id", "name", "username", "websites", "publicKey", "certificate"]
+
+    /// Per entry, the keys not in `allowed` (sorted); nil = not a list of objects.
+    static func unexpected(in data: Data) -> [[String]]? {
+        guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        return entries.map { Set($0.keys).subtracting(allowed).sorted() }
+    }
+}
+
 struct Credential: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
@@ -4990,4 +5274,12 @@ struct Credential: Identifiable, Codable, Hashable {
     /// Optional so every credentials.json written before decodes unchanged;
     /// nil and [] mean the same.
     var websites: [String]? = nil
+    /// The public half of the SSH key this login carries (6.1), as an
+    /// authorized_keys line ("ssh-ed25519 AAAA… comment"). nil = no key.
+    /// Only the public line lives here — the private key and its passphrase
+    /// are in the Keychain vault (`Keychain.key(for:)`), like the password.
+    var publicKey: String? = nil
+    /// The OpenSSH user certificate for that key (6.1), a `-cert.pub` line.
+    /// Public like `publicKey`; offered before the bare key. nil = none.
+    var certificate: String? = nil
 }

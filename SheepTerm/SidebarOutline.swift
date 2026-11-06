@@ -91,6 +91,10 @@ struct SidebarOutline: NSViewRepresentable {
     let onNewSubgroup: (HostGroup) -> Void
     /// View → Group Colors (`GroupTree.groupColorsKey`): the level bars drawn or not.
     var groupColors = GroupTree.groupColorsDefault
+    /// Settings ▸ Optimization ▸ Host Badges (6.1): coloured by type or grey.
+    var badgeStyle = HostBadgeStyle.coloured
+    /// Settings ▸ Optimization ▸ Environment Tags: a row's "PROD · …" (Fable round 4).
+    var environmentTags = OptimizationPlan.Feature.environmentTags.defaultOn
     /// The search field's ↑/↓/Return reach the outline through this (the
     /// caret never leaves the field); the coordinator fills it in.
     var keyBridge = SidebarKeyBridge()
@@ -244,7 +248,10 @@ final class SidebarOutlineView: NSOutlineView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
-        guard row >= 0, let item = item(atRow: row) as? SidebarItem else { return nil }
+        // Empty space below the rows (6.1): what can be added, from where
+        // the pointer already is.
+        if row < 0 { return coordinator?.emptySpaceMenu() }
+        guard let item = item(atRow: row) as? SidebarItem else { return nil }
         // "This Mac" / "Recent" / "Connect" have no menu AND must not disturb
         // anything: `selectRowIndexes` does not consult `shouldSelectItem`, so
         // selecting one here cleared the hosts the user had just picked and
@@ -307,6 +314,12 @@ final class SidebarRowView: NSTableRowView {
         didSet { if hovering != oldValue { needsDisplay = true } }
     }
     private var hoverArea: NSTrackingArea?
+    /// A heading ("This Mac", "Recent", "Connect"): never selected, never
+    /// clicked, so no box at all — not even under the pointer (6.1 (6), the
+    /// owner: "กดไม่ได้ก็ไม่ต้องมีเงา").
+    var isHeading = false {
+        didSet { if isHeading != oldValue { needsDisplay = true } }
+    }
 
     /// The box's colour — "Graphite" (the user picked it from six): grey
     /// boxes only, pointer over faint, selected stronger, the row being
@@ -334,10 +347,13 @@ final class SidebarRowView: NSTableRowView {
     private func fillBox(_ color: NSColor?) {
         guard let color else { return }
         color.setFill()
-        // The same 6 pt on both sides for every row; a group header's
-        // triangle is moved INTO the box instead (`SidebarOutlineView
-        // .frameOfOutlineCell`).
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 6, yRadius: 6).fill()
+        // 6 pt on the right; on the left it starts past the level bar (6.0
+        // (45), the user: the box ate the colour bar) — the bar ends at
+        // `barX + barWidth`, the box 2.5 pt after it. A group header's
+        // triangle is moved INTO the box (`SidebarOutlineView.frameOfOutlineCell`).
+        let left = SidebarMetrics.barX + SidebarMetrics.barWidth + 2.5
+        let box = NSRect(x: bounds.minX + left, y: bounds.minY + 1, width: bounds.width - left - 6, height: bounds.height - 2)
+        NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6).fill()
     }
 
     override func updateTrackingAreas() {
@@ -369,10 +385,11 @@ final class SidebarRowView: NSTableRowView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        // Section rows have no AppKit selection style (`.none`), so their box
-        // — hover and selected alike — is drawn here too (the user: sections
-        // as well). Other rows: the hover box and the flash of an activated
-        // row when not selected (double-clicking the already-selected row).
+        // A heading takes no click: nothing to show under the pointer.
+        guard !isHeading else { return }
+        // Rows with no AppKit selection style (`.none`) get their box here.
+        // Other rows: the hover box and the flash of an activated row when
+        // not selected (double-clicking the already-selected row).
         if selectionHighlightStyle == .none {
             fillBox(Self.boxColor(selected: isSelected, activated: activated, hovering: hovering))
             return
@@ -393,7 +410,7 @@ protocol SidebarRowHighlight: AnyObject {
 /// points from the row's left edge, for a top-level group; each level is one
 /// `step` further in. The level bar sits in the GUTTER at `barX` (it costs no
 /// width), the arrow right after it (glyph at `arrowX`), the name where it
-/// always was (`nameX`). A group's hosts start under its ARROW (`hostX`) —
+/// always was (`nameX`). A group's hosts start just past its ARROW (`hostX`) —
 /// This Mac / Recent's hosts too. Every row's text stops `trailing` short of
 /// the row's right edge. The highlight box keeps its own 6 pt inset.
 enum SidebarMetrics {
@@ -405,8 +422,9 @@ enum SidebarMetrics {
     static let arrowX: CGFloat = 9.5
     /// A top-level group's name.
     static let nameX: CGFloat = 22.5
-    /// A top-level group's hosts' badges (and This Mac / Recent's): under the arrow.
-    static let hostX: CGFloat = 10
+    /// A top-level group's hosts' badges (and This Mac / Recent's): 6 pt past
+    /// the arrow (6.0 (39), the user: "hosts sit a little too far left").
+    static let hostX: CGFloat = 16
     static let trailing: CGFloat = 9
     /// From a group's name back to its bar.
     static let barToName: CGFloat = nameX - barX
@@ -432,11 +450,13 @@ final class SidebarLevelBar: NSView {
     private(set) var level = 0
     private(set) var shown = true
 
-    func configure(level: Int, active: Bool, shown: Bool) {
+    /// `color`: the group's picked icon colour (6.1, the user: the bar follows
+    /// it); nil = the level's colour.
+    func configure(level: Int, active: Bool, shown: Bool, color: UInt32? = nil) {
         self.level = level
         self.shown = shown
         isHidden = level < 1
-        let rgb = GroupTree.levelColor(depth: max(1, level))
+        let rgb = color ?? GroupTree.levelColor(depth: max(1, level))
         layer?.backgroundColor = NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
                                          green: CGFloat((rgb >> 8) & 0xFF) / 255,
                                          blue: CGFloat(rgb & 0xFF) / 255, alpha: 1).cgColor
@@ -569,11 +589,44 @@ final class SidebarHostCell: NSView, SidebarRowHighlight {
 /// and subgroups follow it one small step in (`SidebarItem.depth`), so the
 /// sidebar never indents a full level per depth (the user: no stair of
 /// indents, no second page).
+/// A group's icon in its sidebar row (6.1): the line art as a stroked shape
+/// layer, the ≡ glyph's stroke, in the group's colour.
+final class SidebarGroupIconView: NSView {
+    static let size: CGFloat = 14
+    private let shape = CAShapeLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        shape.fillColor = nil
+        shape.lineCap = .round
+        shape.lineJoin = .round
+        shape.lineWidth = 1.4 * Self.size / 16
+        layer?.addSublayer(shape)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(icon: GroupIcon?, rgb: UInt32) {
+        isHidden = icon == nil
+        guard let icon else { shape.path = nil; return }
+        // The art is drawn top-down; the layer is bottom-up.
+        var flip = CGAffineTransform(translationX: 0, y: Self.size).scaledBy(x: 1, y: -1)
+        shape.path = icon.cgPath(size: Self.size).copy(using: &flip)
+        shape.strokeColor = NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                                    blue: CGFloat(rgb & 0xFF) / 255, alpha: 1).cgColor
+        shape.frame = CGRect(x: 0, y: 0, width: Self.size, height: Self.size)
+    }
+}
+
 final class SidebarFolderCell: NSView, SidebarRowHighlight, SidebarLevelBarCell {
     let levelBar = SidebarLevelBar()
     private let arrow = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let count = NSTextField(labelWithString: "")
+    let iconView = SidebarGroupIconView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -582,7 +635,7 @@ final class SidebarFolderCell: NSView, SidebarRowHighlight, SidebarLevelBarCell 
         title.font = .systemFont(ofSize: 12.5, weight: .medium)
         title.lineBreakMode = .byTruncatingTail
         count.font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .medium)
-        for view in [levelBar, arrow, title, count] { addSubview(view) }
+        for view in [levelBar, arrow, iconView, title, count] { addSubview(view) }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -617,8 +670,13 @@ final class SidebarFolderCell: NSView, SidebarRowHighlight, SidebarLevelBarCell 
 
     override func layout() {
         super.layout()
-        let textX = Self.leading + indent
-        let barX = textX + SidebarMetrics.labelInset - SidebarMetrics.barToName
+        let baseX = Self.leading + indent
+        // An icon (6.1) sits where the name was; the name moves past it.
+        let iconStep: CGFloat = iconView.isHidden ? 0 : SidebarGroupIconView.size + 5
+        iconView.frame = NSRect(x: baseX + SidebarMetrics.labelInset - 1, y: ((bounds.height - SidebarGroupIconView.size) / 2).rounded(),
+                                width: SidebarGroupIconView.size, height: SidebarGroupIconView.size)
+        let textX = baseX + iconStep
+        let barX = baseX + SidebarMetrics.labelInset - SidebarMetrics.barToName
         levelBar.frame = NSRect(x: barX, y: ((bounds.height - SidebarMetrics.barHeight) / 2).rounded(),
                                 width: SidebarMetrics.barWidth, height: SidebarMetrics.barHeight)
         // The arrow's glyph where a header's sits relative to its bar
@@ -647,12 +705,15 @@ final class SidebarLabelCell: NSView, SidebarRowHighlight, SidebarLevelBarCell {
     let levelBar = SidebarLevelBar()
     private let title = NSTextField(labelWithString: "")
     private let count = NSTextField(labelWithString: "")
+    let iconView = SidebarGroupIconView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         count.font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .medium)
         count.textColor = .tertiaryLabelColor
+        iconView.isHidden = true
         addSubview(levelBar)
+        addSubview(iconView)
         addSubview(title)
         addSubview(count)
     }
@@ -698,8 +759,12 @@ final class SidebarLabelCell: NSView, SidebarRowHighlight, SidebarLevelBarCell {
 
     override func layout() {
         super.layout()
-        let x = Self.leading
-        levelBar.frame = NSRect(x: x + SidebarMetrics.labelInset - SidebarMetrics.barToName,
+        let base = Self.leading
+        // An icon (6.1) before the name; the bar stays where it was.
+        iconView.frame = NSRect(x: base + 1, y: ((bounds.height - SidebarGroupIconView.size) / 2).rounded(),
+                                width: SidebarGroupIconView.size, height: SidebarGroupIconView.size)
+        let x = base + (iconView.isHidden ? 0 : SidebarGroupIconView.size + 6)
+        levelBar.frame = NSRect(x: base + SidebarMetrics.labelInset - SidebarMetrics.barToName,
                                 y: ((bounds.height - SidebarMetrics.barHeight) / 2).rounded(),
                                 width: SidebarMetrics.barWidth, height: SidebarMetrics.barHeight)
         let limit = sidebarTextLimit(inset: SidebarMetrics.trailing)
@@ -754,9 +819,21 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     }
 
     private var drawnGroupColors = GroupTree.groupColorsDefault
+    private var drawnBadgeStyle = HostBadgeStyle.coloured
+    private var drawnEnvironmentTags = OptimizationPlan.Feature.environmentTags.defaultOn
     /// Group Colors switched: every visible bar shows or hides at once (no
     /// row moves — the bar has its own place in the gutter).
     func applyGroupColors() {
+        // Host Badges or Environment Tags switched: the visible rows are drawn again.
+        if parent.badgeStyle != drawnBadgeStyle || parent.environmentTags != drawnEnvironmentTags {
+            drawnBadgeStyle = parent.badgeStyle
+            drawnEnvironmentTags = parent.environmentTags
+            if let outline {
+                let rows = outline.rows(in: outline.visibleRect)
+                outline.reloadData(forRowIndexes: IndexSet(integersIn: rows.lowerBound..<rows.upperBound),
+                                   columnIndexes: IndexSet(integer: 0))
+            }
+        }
         guard parent.groupColors != drawnGroupColors else { return }
         drawnGroupColors = parent.groupColors
         outline?.enumerateAvailableRowViews { row, _ in
@@ -1014,8 +1091,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // subgroups reloads it too.
             let drawn = node.kind == .group || node.kind == .subgroup ? node.count : node.children.count
             parts.append("\(depth).\(node.depth)|" + node.id + "|" + (node.host?.name ?? node.title)
-                         + "|" + (node.host?.address ?? "") + "|" + (node.host?.kind.badge ?? "")
-                         + "|" + String(drawn))
+                         + "|" + (node.host?.address ?? "") + "|" + (node.host?.badge ?? "")
+                         + "|" + String(drawn)
+                         // What the row draws besides: a group's icon and colour, a host's tag (6.1).
+                         + "|" + (node.group?.icon?.rawValue ?? "") + (node.group?.iconColor?.rawValue ?? "")
+                         + "|" + (node.host?.environment?.rawValue ?? ""))
             for child in node.children { walk(child, depth: depth + 1) }
         }
         for root in roots { walk(root, depth: 0) }
@@ -1181,6 +1261,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// The level of the group a header or subgroup row stands for, in the
     /// REAL tree (a search header named by its path keeps its own level's
     /// colour); 1 when the group is gone mid-rebuild.
+    /// A group icon's colour: the one picked, else its level bar's.
+    private func iconRGB(_ node: SidebarItem) -> UInt32 {
+        node.group?.iconColor?.rgb ?? GroupTree.levelColor(depth: max(1, groupLevel(node)))
+    }
+
     private func groupLevel(_ node: SidebarItem) -> Int {
         guard let id = node.group?.id else { return 1 }
         return GroupTree.depth(of: id, in: parent.store.groups)
@@ -1194,6 +1279,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         row.activated = (item as? SidebarItem)?.id == activatedID
         let kind = (item as? SidebarItem)?.kind
         row.selectionHighlightStyle = kind == .section ? .none : .regular
+        row.isHeading = kind == .section
         return row
     }
 
@@ -1203,12 +1289,15 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         case .section:
             let cell = labelCell(outlineView)
             cell.configure(title: node.title, count: nil)
+            cell.iconView.configure(icon: nil, rgb: 0)
             cell.levelBar.configure(level: 0, active: barActivity.active, shown: false)
             return cell
         case .group:
             let cell = labelCell(outlineView)
             cell.configure(title: node.title, count: node.count)
-            cell.levelBar.configure(level: groupLevel(node), active: barActivity.active, shown: parent.groupColors)
+            cell.iconView.configure(icon: node.group?.icon, rgb: iconRGB(node))
+            cell.levelBar.configure(level: groupLevel(node), active: barActivity.active, shown: parent.groupColors,
+                                   color: node.group?.iconColor?.rgb)
             return cell
         case .subgroup:
             let cell = outlineView.makeView(withIdentifier: Self.folderID, owner: self) as? SidebarFolderCell
@@ -1216,7 +1305,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             cell.configure(title: node.title, count: node.count,
                            open: node.group.map { parent.openSubgroups.contains($0.id) } ?? false)
             cell.indent = Self.depthStep * CGFloat(node.depth)
-            cell.levelBar.configure(level: groupLevel(node), active: barActivity.active, shown: parent.groupColors)
+            cell.iconView.configure(icon: node.group?.icon, rgb: iconRGB(node))
+            cell.levelBar.configure(level: groupLevel(node), active: barActivity.active, shown: parent.groupColors,
+                                   color: node.group?.iconColor?.rgb)
             return cell
         case .host, .staticRow:
             let cell = hostCell(outlineView)
@@ -1229,12 +1320,12 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                     return cell
                 }
                 cell.configure(
-                    badge: host.kind.badge,
-                    color: NSColor(Theme.kindColor(host.kind)),
+                    badge: host.badge,
+                    color: NSColor(Theme.badgeColor(for: host)),
                     name: isConnectTarget && host.kind == .web ? String(localized: "Open \(host.address)") : host.name,
                     detail: isConnectTarget
                         ? (host.kind == .web ? String(localized: "web tab · press ↩ to open") : String(localized: "port \(String(host.port)) · press ↩ to connect"))
-                        : (host.address.isEmpty ? nil : host.kind == .web ? WebAddress.shortLabel(host.address) : host.address),
+                        : Self.detail(of: host),
                     symbol: host.kind == .web ? "globe" : nil
                 )
             } else {
@@ -1242,6 +1333,14 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             }
             return cell
         }
+    }
+
+    /// A host row's grey line: its address, after its Environment tag
+    /// ("PROD · 10.0.0.1") while Optimization ▸ Environment Tags is on.
+    static func detail(of host: Host) -> String? {
+        let address = host.address.isEmpty ? nil : host.kind == .web ? WebAddress.shortLabel(host.address) : host.address
+        guard let env = host.environment, OptimizationPlan.Feature.isOn(.environmentTags) else { return address }
+        return [env.label, address].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func labelCell(_ outlineView: NSOutlineView) -> SidebarLabelCell {
@@ -1589,8 +1688,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             // A folder row is a group as much as a header is, and gets the
             // same menu.
             guard let id = node.group?.id, let group = parent.store.groups.first(where: { $0.id == id }) else { return nil }
-            add(menu, String(localized: "Export Group…")) { [weak self] in self?.parent.onExportGroup(group) }
-            add(menu, String(localized: "Share Link…")) { [weak self] in self?.parent.onShareGroup(group) }
+            // Adding first (6.1): the reason most right-clicks happen.
             add(menu, String(localized: "Add Host…")) { [weak self] in self?.parent.onAddHost(group) }
             add(menu, String(localized: "Add Hosts…")) { [weak self] in self?.parent.onAddHosts(group) }
             // Not while a search is on: `buildRoots` hides a group with no
@@ -1602,7 +1700,20 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 add(menu, String(localized: "Add Subgroup…")) { [weak self] in self?.parent.onNewSubgroup(group) }
                 menu.items.last?.isEnabled = GroupTree.canAddChild(to: group.id, in: parent.store.groups)
             }
+            menu.addItem(.separator())
             add(menu, String(localized: "Set Credential for Group…")) { [weak self] in self?.parent.onSetGroupCredential(group) }
+            add(menu, String(localized: "Group Icon…")) { [weak self] in self?.parent.model.groupIconTarget = group }
+            // Every host in it and its subgroups, as one grid (6.1 (3)).
+            let all = parent.store.subtreeHosts(of: group.id).map(\.host)
+            if all.count >= 2 {
+                add(menu, String(localized: "Open All in Split")) { [weak self] in
+                    self?.openSeveral(all) { $0.openInSplit(hosts: $1) }
+                }
+                menu.items.last?.toolTip = String(localized: "One tab, the hosts side by side")
+            }
+            if let via = viaJumpServerSubmenu(for: group) { menu.addItem(via) }
+            add(menu, String(localized: "Export Group…")) { [weak self] in self?.parent.onExportGroup(group) }
+            add(menu, String(localized: "Share Link…")) { [weak self] in self?.parent.onShareGroup(group) }
             menu.addItem(.separator())
             add(menu, String(localized: "Rename Group…")) { [weak self] in self?.parent.onRenameGroup(group) }
             if let move = groupMoveSubmenu(for: [group.id]) { menu.addItem(move) }
@@ -1617,9 +1728,28 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 self?.parent.model.open(host: host)
                 self?.parent.model.collapseSidebar()
             }
-            add(menu, String(localized: "Open in Split")) { [weak self] in
-                self?.parent.model.openInSplit(host: host)
-                self?.parent.model.collapseSidebar()
+            // A side to pick (6.0 (56)), each with its picture, so the menu
+            // says what a drag onto a pane edge does.
+            // Only with a pane to split beside (Home or no tab: Connect does it).
+            if parent.model.selectedID != nil {
+            let split = NSMenuItem(title: String(localized: "Open in Split"), action: nil, keyEquivalent: "")
+            let sides = NSMenu()
+            for (title, side, symbol) in [(String(localized: "Right"), PaneDirection.right, "rectangle.righthalf.filled"),
+                                          (String(localized: "Below"), .down, "rectangle.bottomhalf.filled"),
+                                          (String(localized: "Left"), .left, "rectangle.lefthalf.filled"),
+                                          (String(localized: "Above"), .up, "rectangle.tophalf.filled")] {
+                let item = MenuAction(title: title) { [weak self] in
+                    self?.parent.model.openInSplit(host: host, side: side)
+                    self?.parent.model.collapseSidebar()
+                }
+                item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+                item.toolTip = String(localized: "Or drag the host onto the edge of a pane")
+                item.isEnabled = parent.model.canOpenInSplit(side)
+                sides.addItem(item)
+            }
+            sides.autoenablesItems = false
+            split.submenu = sides
+            menu.addItem(split)
             }
             if host.kind == .ssh {
                 add(menu, String(localized: "Open File")) { [weak self] in
@@ -1634,6 +1764,10 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 }
             }
             add(menu, String(localized: "Edit Host…")) { [weak self] in self?.parent.onEditHost(host) }
+            // A new host beside this one (6.1): the form opened on its group.
+            if let group = parent.store.groups.first(where: { $0.hosts.contains { $0.id == host.id } }) {
+                add(menu, String(localized: "Add Host Here…")) { [weak self] in self?.parent.onAddHost(group) }
+            }
             if let move = hostMoveSubmenu(for: [host.id]) {
                 menu.addItem(.separator())
                 menu.addItem(move)
@@ -1667,6 +1801,46 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             }
         }
         return menu.items.isEmpty ? nil : menu
+    }
+
+    /// A group's Via Jump Server ▸ (6.1): None or one of the saved Jump
+    /// Servers, the current one ticked — the same setting as the Jump
+    /// Server's Reaches row. nil when there is no Jump Server to pick.
+    private func viaJumpServerSubmenu(for group: HostGroup) -> NSMenuItem? {
+        let servers = JumpTarget.jumpServers(in: parent.store.groups)
+        guard OptimizationPlan.Feature.isOn(.jumpServers), !servers.isEmpty || group.jumpHostID != nil else { return nil }
+        let item = NSMenuItem(title: String(localized: "Via Jump Server"), action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let store = parent.store
+        let none = MenuAction(title: String(localized: "None"), run: { store.setJumpServer(nil, forGroup: group.id) })
+        none.state = group.jumpHostID == nil ? .on : .off
+        submenu.addItem(none)
+        submenu.addItem(.separator())
+        for server in servers {
+            let entry = MenuAction(title: server.name, run: { store.setJumpServer(server.id, forGroup: group.id) })
+            entry.state = group.jumpHostID == server.id ? .on : .off
+            submenu.addItem(entry)
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    /// Right-click on empty space (6.1): the same menu as the bar's ≡, built
+    /// by `SidebarAddMenu` (≡ adds Reorder Groups…).
+    func emptySpaceMenu() -> NSMenu {
+        let groups = parent.store.groups
+        let topLevel = Set(GroupTree.children(of: nil, in: groups).map(\.id))
+        let allFolded = !topLevel.isEmpty && topLevel.isSubset(of: parent.collapsedGroups) && parent.openSubgroups.isEmpty
+        return SidebarAddMenu.build(model: parent.model, groups: groups, allFolded: allFolded, reorder: nil) { [weak self] fold in
+            guard let self else { return }
+            if fold {
+                self.parent.collapsedGroups = topLevel
+                self.parent.openSubgroups = []
+            } else {
+                self.parent.collapsedGroups = []
+                self.parent.openSubgroups = Set(groups.filter { $0.parentID != nil }.map(\.id))
+            }
+        }
     }
 
     /// Several groups selected: move them together, reorder, or delete —
@@ -1704,6 +1878,15 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     private func multiHostMenu(_ hosts: [Host]) -> NSMenu {
         let menu = NSMenu()
         let ids = hosts.map(\.id)
+        // Several at once (6.1 (3)): each in its own tab, or one tab as a grid.
+        add(menu, String(localized: "Connect \(hosts.count) Hosts")) { [weak self] in
+            self?.openSeveral(hosts) { $0.connect(hosts: $1) }
+        }
+        add(menu, String(localized: "Open in Split")) { [weak self] in
+            self?.openSeveral(hosts) { $0.openInSplit(hosts: $1) }
+        }
+        menu.items.last?.toolTip = String(localized: "One tab, the hosts side by side")
+        menu.addItem(.separator())
         if let move = hostMoveSubmenu(for: ids) { menu.addItem(move) }
         menu.addItem(.separator())
         add(menu, String(localized: "Delete \(hosts.count) Hosts")) { [weak self] in
@@ -1725,6 +1908,20 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             self.parent.store.removeHosts(withIDs: hosts.map(\.id))
         }
         return menu
+    }
+
+    /// Opening many hosts from one click: past a full grid (nine) it asks
+    /// first — each is a connection, and the rest open as tabs of their own.
+    private func openSeveral(_ hosts: [Host], _ run: (AppModel, [Host]) -> Void) {
+        if hosts.count > PaneLayout.maxPanes {
+            let alert = SheepAlert()
+            alert.messageText = String(localized: "Open \(hosts.count) hosts?")
+            alert.informativeText = String(localized: "Each one connects. A tab holds nine side by side; the rest open in tabs of their own.")
+            alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
+            alert.addButton(withTitle: String(localized: "Open"))
+            guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
+        }
+        run(parent.model, hosts)
     }
 
     private func add(_ menu: NSMenu, _ title: String, action: @escaping () -> Void) {
@@ -2154,4 +2351,34 @@ final class MenuAction: NSMenuItem {
     }
 
     nonisolated required init(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The sidebar's adding menu (6.1), ONE builder for both ways in: right-click
+/// on empty space and the bar's ≡ — so the two never drift apart again. Only
+/// the ≡ passes `reorder`. `fold(true)` folds everything, `fold(false)` opens it.
+@MainActor enum SidebarAddMenu {
+    static func build(model: AppModel, groups: [HostGroup], allFolded: Bool,
+                      reorder: (() -> Void)?, fold: @escaping (Bool) -> Void) -> NSMenu {
+        let menu = NSMenu()
+        func add(_ to: NSMenu, _ title: String, _ run: @escaping () -> Void) {
+            to.addItem(MenuAction(title: title, run: run))
+        }
+        add(menu, String(localized: "Add Host…")) { model.openAddHost() }
+        add(menu, String(localized: "Add Hosts…")) { model.showAddHosts() }
+        add(menu, String(localized: "New Group")) { model.requestNewGroup() }
+        menu.addItem(.separator())
+        let importItem = NSMenuItem(title: String(localized: "Import"), action: nil, keyEquivalent: "")
+        let importMenu = NSMenu()
+        add(importMenu, String(localized: "Import Group…")) { model.importGroupViaPanel() }
+        add(importMenu, String(localized: "Import from Link…")) { model.showImportLink() }
+        add(importMenu, String(localized: "Import Hosts File…")) { model.showAddHosts(importFile: true) }
+        importItem.submenu = importMenu
+        menu.addItem(importItem)
+        if !groups.isEmpty {
+            menu.addItem(.separator())
+            if let reorder { add(menu, String(localized: "Reorder Groups…"), reorder) }
+            add(menu, allFolded ? String(localized: "Expand All") : String(localized: "Collapse All")) { fold(!allFolded) }
+        }
+        return menu
+    }
 }

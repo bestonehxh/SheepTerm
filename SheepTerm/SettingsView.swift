@@ -8,9 +8,15 @@ import UniformTypeIdentifiers
 /// only the one pane — the chrome, sidebar, connection, backup and library
 /// sections.
 struct SettingsView: View {
-    private enum Tab: Hashable { case general, ai }
+    private enum Tab: Hashable { case general, optimization, ai }
+    /// Set right before Settings opens to land on Optimization once.
+    static var openOnOptimization = false
+    /// Posted with it, for a Settings window already open (Fable round 4:
+    /// `onAppear` does not run again, so it stayed on General).
+    static let showOptimization = Notification.Name("SheepTerm.showOptimization")
     /// Always opens on General (the window keeps its view between openings).
     @State private var tab = Tab.general
+    @State private var shown = false
     @ObservedObject private var aiChrome = AIPanelChrome.shared
 
     var body: some View {
@@ -20,6 +26,11 @@ struct SettingsView: View {
                 .frame(width: 700, height: 500)
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(Tab.general)
+            // 6.1: every switch that shapes the app, with role presets.
+            OptimizationSettingsView()
+                .frame(width: 700, height: 500)
+                .tabItem { Label("Optimization", systemImage: "slider.horizontal.3") }
+                .tag(Tab.optimization)
             // AI sizes to its content. Gone with View ▸ AI Assistant off.
             if aiChrome.enabled {
                 AISettingsView()
@@ -29,8 +40,19 @@ struct SettingsView: View {
                     .tag(Tab.ai)
             }
         }
-        .onAppear { tab = .general }
-        .onDisappear { tab = .general }
+        // What's New ▸ Start Optimize opens straight on Optimization (6.0 (48)).
+        // Either may run first on a fresh window (Fable round 5): neither
+        // ever sends it back to General; the flag is cleared once the window
+        // is up, so it never carries over to a later opening.
+        .onAppear {
+            shown = true
+            if Self.openOnOptimization { tab = .optimization; Self.openOnOptimization = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Self.showOptimization)) { _ in
+            tab = .optimization
+            if shown { Self.openOnOptimization = false }
+        }
+        .onDisappear { tab = .general; shown = false }
     }
 }
 
@@ -39,11 +61,6 @@ struct GeneralSettingsView: View {
     @State private var appLanguage = AppLanguage.current()
     private let originalLanguage = AppLanguage.launchLanguage
     @ObservedObject private var model = AppModel.shared
-    @AppStorage("showRecents") private var showRecents = true
-    @AppStorage(SidebarLaunch.key) private var sidebarAtLaunch = false
-    @AppStorage(SidebarKeepOpen.key) private var sidebarStaysOpen = false
-    @AppStorage(GroupTree.groupColorsKey) private var groupColors = GroupTree.groupColorsDefault
-    @AppStorage("recentsShown") private var recentsShown = 5
     @AppStorage(ChromeStyle.storageKey) private var chromeStyle = ChromeStyle.glass
     @AppStorage(SessionTerminalHost.clipboardWriteKey) private var allowClipboardWrite = false
     @AppStorage(UpdateCore.autoCheckKey) private var checkForUpdatesAutomatically = true
@@ -118,30 +135,6 @@ struct GeneralSettingsView: View {
                         .help("macOS 27 hides MAC addresses and the ARP table from commands in a local tab. On: ifconfig, arp, ndp, netstat and networksetup run through launchd and show the real values. Applies to new local tabs.")
                 }
                 Text("Applied to every open tab immediately; the grid re-measures, so columns and rows change with it. Also in View → Terminal Font, with ⌘+ / ⌘− for the size. On a display running a scaled resolution (the 13″ Air's stock 1470 × 956 is one) the whole screen is resampled before it reaches the eye, and a larger or heavier face survives that better than a thin one; Termius draws roughly 14 pt Semibold. Font smoothing is macOS's stroke thickening: on it makes light-on-dark text bolder with a soft grey edge, off (the default) draws thinner, cleaner stems — the same edge the Claude app's text has.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Sidebar") {
-                Toggle("Show Sidebar at Launch", isOn: $sidebarAtLaunch)
-                Toggle("Keep Sidebar Open", isOn: $sidebarStaysOpen)
-                Toggle("Group Colors", isOn: $groupColors)
-                Toggle("Show Recent", isOn: $showRecents)
-                Stepper(value: $recentsShown, in: 1...HostStore.maxRecents) {
-                    LabeledContent("Recent entries shown") {
-                        Text("\(recentsShown)")
-                            .font(.system(size: 12, design: .monospaced))
-                    }
-                }
-                .disabled(!showRecents)
-                Text("Hides the whole Recent section — header included. SheepTerm remembers at most \(HostStore.maxRecents) recent connections, so that is the ceiling here too.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Connection") {
-                Toggle("Auto-reconnect dropped sessions", isOn: $model.autoReconnect)
-                Text("When a session that had been working drops, reconnect automatically (3 tries: 2 s / 5 s / 10 s). Serial counts: a console cable on a rebooting switch drops exactly the way an SSH session does. SSH sessions also send a keepalive every 60 s to survive device idle-timeouts.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

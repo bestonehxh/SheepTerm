@@ -33,6 +33,8 @@ nonisolated enum Vendor: String, Codable, CaseIterable, Identifiable, Sendable {
     case fortios
     case gaia
     case linux
+    /// Containers / Kubernetes (6.1): `kubectl` / `docker` status words.
+    case containers
 
     var id: String { rawValue }
 
@@ -60,6 +62,7 @@ nonisolated enum Vendor: String, Codable, CaseIterable, Identifiable, Sendable {
         case .fortios: return "Fortinet FortiOS"
         case .gaia: return "Check Point Gaia"
         case .linux: return "Linux / server"
+        case .containers: return "Containers / Kubernetes"
         }
     }
 
@@ -79,6 +82,7 @@ nonisolated enum Vendor: String, Codable, CaseIterable, Identifiable, Sendable {
         case .fortios: return 8
         case .gaia: return 9
         case .linux: return 10
+        case .containers: return 11
         }
     }
 
@@ -91,7 +95,7 @@ nonisolated enum Vendor: String, Codable, CaseIterable, Identifiable, Sendable {
     /// without touching the box.
     var disablePagingCommand: String? {
         switch self {
-        case .auto, .linux, .fortios: return nil
+        case .auto, .linux, .containers, .fortios: return nil
         case .cisco: return "terminal length 0"
         case .arubaCX, .arubaOS: return "no page"
         case .huawei: return "screen-length 0 temporary"
@@ -116,6 +120,7 @@ nonisolated enum Vendor: String, Codable, CaseIterable, Identifiable, Sendable {
         case .fortios: return "FortiOS"
         case .gaia: return "Gaia"
         case .linux: return "Linux"
+        case .containers: return "K8s"
         }
     }
 }

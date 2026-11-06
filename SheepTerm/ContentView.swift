@@ -29,11 +29,17 @@ struct ContentView: View {
                     .transition(.move(edge: .leading))
             }
             VStack(spacing: 0) {
+                // In FRONT of the pane below (the user, 6.1 (2): on Home the
+                // top bar's buttons took no clicks — Home's scroll view
+                // reaches up into the titlebar row like the sidebar's does,
+                // and as the later sibling it was hit first).
                 TopBarView()
+                    .zIndex(1)
                 Rectangle()
                     .fill(Theme.chromeLine)
                     .frame(height: 1)
                 DetailPane()
+                    .clipped()
             }
         }
     }
@@ -246,11 +252,14 @@ struct DetailPane: View {
                         .padding(.top, inset.top)
                         .id(workspace.id)
                 } else {
-                    EmptyPaneView()
+                    // 6.1: no tab open = Home (its own empty state included).
+                    HomeView()
                 }
                 // A USB serial cable just plugged in (6.0 (14)): bottom right of
                 // the terminal area — above the status bar, left of the AI panel.
                 SerialArrivalCardOverlay()
+                // A tab's stopwatch, Rack Fill: only when opened (6.1 (9)).
+                FloatingToolsOverlay()
             }
             .aiPanel()
             if model.showStatusBar
@@ -272,7 +281,7 @@ struct DetailPane: View {
         .sheet(item: $model.quickConnect) { request in
             if request.addOnly {
                 AddHostSheet(kind: request.kind, webPrefill: request.webPrefill, sshPrefill: request.sshPrefill,
-                             groupName: request.groupName)
+                             groupName: request.groupName, startsOnJump: request.jumpServer, jumpVia: request.jumpVia)
             } else {
                 QuickConnectSheet(kind: request.kind, addOnly: request.addOnly)
             }
@@ -282,6 +291,9 @@ struct DetailPane: View {
         }
         .sheet(isPresented: $model.showTransferLog) {
             TransferLogView()
+        }
+        .sheet(isPresented: $model.showAddingHosts) {
+            AddingHostsSheet()
         }
         .sheet(isPresented: $model.showWhatsNew) {
             WhatsNewView()
@@ -350,6 +362,28 @@ struct TopBarView: View {
     /// back in the middle of fullscreen.
     @State private var hostWindow: NSWindow?
     @State private var plusAnchor = MenuAnchorBox()
+    /// Settings ▸ Optimization ▸ New Tab Button (6.1).
+    @AppStorage(OptimizationPlan.newTabButtonKey) private var newTabButton = OptimizationPlan.NewTabButton.afterLastTab
+    @AppStorage(OptimizationPlan.showHomeButtonKey) private var showHomeButton = true
+    @AppStorage(OptimizationPlan.showSearchButtonKey) private var showSearchButton = true
+    @AppStorage(OptimizationPlan.homePlaceKey) private var homePlace = OptimizationPlan.HomePlace.tabStrip
+
+    // A Button that pops an NSMenu, not a borderless SwiftUI Menu: the
+    // Menu's own control was smaller than the 26×24 hover box, so a click
+    // near the box's edge lit it and then did nothing (the user, 5.0 (58):
+    // "sometimes it does not click"). No key equivalents here: ⌘T and the
+    // rest belong to the File menu.
+    private var plusButton: some View {
+        Button {
+            NewItemMenu.pop(from: plusAnchor.view, model: model)
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .medium))
+        }
+        .buttonStyle(ChromeIconButtonStyle())
+        .background(MenuAnchorView(box: plusAnchor))
+        .accessibilityLabel("New")
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -373,44 +407,65 @@ struct TopBarView: View {
                 .buttonStyle(ChromeIconButtonStyle())
                 .accessibilityLabel("Toggle Sidebar")
 
-                Button {
-                    model.showQuickSearch = true
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 13))
+                // Optimization ▸ Tab Bar (6.0 (40)): Search can go — ⌘K still
+                // opens Quick Connect, from a hair-thin anchor in its place.
+                Group {
+                    if showSearchButton {
+                        Button {
+                            model.showQuickSearch = true
+                        } label: {
+                            ChromeSymbol("magnifyingglass")
+                        }
+                        .buttonStyle(ChromeIconButtonStyle())
+                        .accessibilityLabel("Search")
+                    } else {
+                        Color.clear.frame(width: 1, height: 24)
+                    }
                 }
-                .buttonStyle(ChromeIconButtonStyle())
-                .accessibilityLabel("Search")
                 // On the magnifier itself, so the arrow points at it (on the
                 // group it pointed between the two buttons).
                 .popover(isPresented: $model.showQuickSearch, arrowEdge: .bottom) {
                     QuickSearchView()
                         .environmentObject(model)
                 }
+
+                // Home in the top bar instead of the strip (Optimization).
+                if showHomeButton, homePlace == .topBar {
+                    Button {
+                        model.showHome()
+                    } label: {
+                        ChromeSymbol(model.isShowingHome ? "house.fill" : "house")
+                    }
+                    .buttonStyle(ChromeIconButtonStyle(tint: model.isShowingHome ? Theme.accent : nil))
+                    .help("Home (⇧⌘0)")
+                    .accessibilityLabel("Home")
+                }
             }
 
-            TabStripView(compensateWindowBorder: !isFullScreen)
+            // The window-border point is made up for on the whole row below,
+            // so the icons and the chips share one centre line (6.1 (10)).
+            TabStripView(compensateWindowBorder: false,
+                         trailing: newTabButton == .afterLastTab ? AnyView(plusButton) : nil)
+                // Home as the strip's first chip sits the icon row's 4 pt from
+                // Search, not the 8 pt the row puts before the tabs (6.1 (10),
+                // the owner: "ดูระยะห่างด้วย").
+                .padding(.leading, showHomeButton && homePlace == .tabStrip ? -4 : 0)
 
             Spacer(minLength: 8)
 
-            // A Button that pops an NSMenu, not a borderless SwiftUI Menu: the
-            // Menu's own control was smaller than the 26×24 hover box, so a
-            // click near the box's edge lit it and then did nothing (the user,
-            // 5.0 (58): "sometimes it does not click"). No key equivalents
-            // here: ⌘T and the rest belong to the File menu.
-            Button {
-                NewItemMenu.pop(from: plusAnchor.view, model: model)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .buttonStyle(ChromeIconButtonStyle())
-            .background(MenuAnchorView(box: plusAnchor))
-            .accessibilityLabel("New")
+            if newTabButton == .farRight { plusButton }
+
+            // Optimize ▸ Tab Bar: Stopwatch / Rack Fill buttons, off by default (6.1 (9)).
+            ToolBarButtons(place: .topBar)
 
             AIPanelToggleButton()
         }
         .padding(.horizontal, 8)
+        // The bar's first point is under the window's border, so centring in
+        // the frame reads one point high (measured against the traffic
+        // lights; it was the strip's own 2 pt until 6.1 (10), which left the
+        // sidebar / Search icons a point above the Home chip and the tabs).
+        .padding(.top, isFullScreen ? 0 : 2)
         .frame(height: 30)
         .background {
             ChromeBackground(zone: .topBar).gesture(WindowDragGesture())
@@ -488,28 +543,58 @@ extension TopBarView {
 
 /// Line-art sheep in the icon-D style: scalloped wool ring with the ❯_ face,
 /// strokes only — no background tile.
-/// The ＋ menu (top bar). Built fresh per click; items are `MenuAction`s.
+/// The ＋ menu (top bar), and the same list as Right-click ▸ New Tab on the
+/// tab strip — ONE list (`entries`), so the two never drift apart.
 @MainActor enum NewItemMenu {
+    struct Entry {
+        let title: String
+        let run: () -> Void
+    }
+
+    /// nil = a separator.
+    static func entries(model: AppModel) -> [Entry?] {
+        func item(_ title: String.LocalizationValue, _ run: @escaping () -> Void) -> Entry? {
+            Entry(title: String(localized: title), run: run)
+        }
+        // Settings ▸ Optimization ▸ Features: a kind switched off is not offered.
+        func on(_ feature: OptimizationPlan.Feature) -> Bool { OptimizationPlan.Feature.isOn(feature) }
+        return [
+            item("New Terminal Tab") { model.newLocalTab() },
+            nil,
+            item("New SSH Tab…") { model.openQuickConnect(.ssh) },
+        ] + [
+            on(.serial) ? item("New Serial Tab…") { model.openQuickConnect(.serial) } : nil,
+            // Telnet under Jump Server (the user, 6.0 (56)).
+            on(.jumpServers) ? item("New Jump Server…") { model.openAddHost(jumpServer: true) } : nil,
+            on(.telnet) ? item("New Telnet Tab…") { model.openQuickConnect(.telnet) } : nil,
+        ].compactMap { $0 }.map(Optional.some) + [
+            nil,
+            item("New Web Tab") { model.newWebTab() },
+            item("New Ping Tab") { model.openPing(inNewTab: true) },
+            // Only what opens a TAB: the client is a Files tab; the server is a
+            // popover with its own place (status bar, File menu).
+            item("Transfer Client…") { model.showFileTransfer = true },
+        ]
+    }
+
     static func pop(from anchor: NSView?, model: AppModel) {
         guard let anchor else { return }
         let menu = NSMenu()
-        func add(_ title: String.LocalizationValue, _ run: @escaping () -> Void) {
-            menu.addItem(MenuAction(title: String(localized: title), run: run))
+        for entry in entries(model: model) {
+            if let entry { menu.addItem(MenuAction(title: entry.title, run: entry.run)) } else { menu.addItem(.separator()) }
         }
-        add("New Terminal Tab") { model.newLocalTab() }
-        menu.addItem(.separator())
-        add("New SSH Connection…") { model.openQuickConnect(.ssh) }
-        add("New Telnet Session…") { model.openQuickConnect(.telnet) }
-        add("New Serial Console…") { model.openQuickConnect(.serial) }
-        add("New Web Tab") { model.newWebTab() }
-        menu.addItem(.separator())
-        add("New Ping Tab") { model.openPing(inNewTab: true) }
-        menu.addItem(.separator())
-        add("Open File…") { model.showFileTransfer = true }
-        add("Serve File…") { FileServerModel.shared.popoverShown = true }
-        menu.addItem(.separator())
-        add("Passwords…") { model.showCredentials = true }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
+    }
+}
+
+/// Right-click ▸ New Tab (6.0 (27), as on Windows): the ＋ menu's entries.
+struct NewTabSubmenu: View {
+    var body: some View {
+        Menu("New Tab") {
+            ForEach(Array(NewItemMenu.entries(model: AppModel.shared).enumerated()), id: \.offset) { _, entry in
+                if let entry { Button(entry.title, action: entry.run) } else { Divider() }
+            }
+        }
     }
 }
 

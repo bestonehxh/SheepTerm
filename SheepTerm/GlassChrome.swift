@@ -154,23 +154,91 @@ extension View {
     }
 }
 
-/// Add Host's SSH | Web switch, centred above the form.
-struct HostKindSwitch: View {
+/// Add Host's type (6.1 (10), the owner: "ขอเป็น Tab แบบอันเก่า"): the
+/// segmented tabs under the title, as before 6.0 (28) — SSH, Jump, Telnet,
+/// Web, the real kinds of host. Server / Docker / Cloud are not here: they
+/// are only an SSH host's badge (`HostKindSwitch`, in the Name row).
+struct HostKindTabs: View {
     @Binding var kind: ConnectionKind
+    /// The Jump tab, right after SSH: an SSH host saved as a Jump Server.
+    /// nil = no Jump tab.
+    var jump: Binding<Bool>? = nil
+
+    private var choice: Binding<HostType> {
+        Binding(get: { HostKindSwitch.type(kind: kind, jump: jump?.wrappedValue ?? false, badge: nil) },
+                set: { type in
+                    jump?.wrappedValue = type == .jump
+                    kind = type.kind
+                })
+    }
 
     var body: some View {
         HStack {
             Spacer(minLength: 0)
-            Picker("", selection: $kind) {
-                Text("SSH").tag(ConnectionKind.ssh)
-                Text("Telnet").tag(ConnectionKind.telnet)
-                Text("Web").tag(ConnectionKind.web)
+            Picker("", selection: choice) {
+                ForEach(HostType.formTypes(jump: jump != nil)) { type in
+                    Text(HostTypeMenu.label(type)).tag(type)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
             Spacer(minLength: 0)
         }
+    }
+}
+
+/// The badge in front of Add Host's Name: an SSH host's label with a ▾
+/// (SSH / Server / Docker / Cloud — all plain SSH, only the badge differs);
+/// any other kind shows its own badge, fixed (6.1 (10)).
+struct HostKindSwitch: View {
+    let kind: ConnectionKind
+    var jump = false
+    /// Add Host's SSH label (6.0 (35)), set by `AddHostSheet` through the
+    /// environment. nil binding = no labels here.
+    @Environment(\.sshBadgeSwitch) private var sshBadge
+
+    static func type(kind: ConnectionKind, jump: Bool, badge: SSHBadge?) -> HostType {
+        switch kind {
+        case .telnet: return .telnet
+        case .serial: return .serial
+        case .web: return .web
+        default:
+            if jump { return .jump }
+            switch badge {
+            case .server: return .server
+            case .docker: return .docker
+            case .cloud: return .cloud
+            case nil: return .ssh
+            }
+        }
+    }
+
+    private var labels: [HostType] {
+        guard kind == .ssh, !jump, let sshBadge else { return [] }
+        return HostType.sshLabels(keeping: sshBadge.wrappedValue)
+    }
+
+    var body: some View {
+        let current = Self.type(kind: kind, jump: jump, badge: sshBadge?.wrappedValue)
+        if labels.count > 1 {
+            HostTypeMenu(selection: Binding(get: { current },
+                                            set: { sshBadge?.wrappedValue = $0.sshBadge }),
+                         types: labels)
+        } else {
+            HostTypeBadge(type: current)
+        }
+    }
+}
+
+private struct SSHBadgeSwitchKey: EnvironmentKey {
+    static let defaultValue: Binding<SSHBadge?>? = nil
+}
+
+extension EnvironmentValues {
+    var sshBadgeSwitch: Binding<SSHBadge?>? {
+        get { self[SSHBadgeSwitchKey.self] }
+        set { self[SSHBadgeSwitchKey.self] = newValue }
     }
 }
 

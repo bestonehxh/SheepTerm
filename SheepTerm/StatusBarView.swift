@@ -64,6 +64,7 @@ struct StatusBarView: View {
                                          starting: false, popoverOpen: false) {
                 FileServerStatusButton()
             }
+            ToolBarButtons(place: .bottomBar)
             if model.statusShowClock {
                 ClockText()
             }
@@ -224,6 +225,8 @@ struct SessionStatusText: View {
     /// remote controls (state sheep + vendor picker) show regardless.
     var showText: Bool = true
     var indicator: ConnectionIndicator = .sheep
+    /// Settings ▸ Optimization ▸ Features ▸ Device Families.
+    @AppStorage(OptimizationPlan.Feature.deviceFamilies.key) private var familiesOn = true
     var onVendorChange: (Vendor) -> Void = { _ in }
     var onBaudChange: (Int) -> Void = { _ in }
     /// A local forward's "Open in Web Tab".
@@ -346,7 +349,7 @@ struct SessionStatusText: View {
                     EmptyView()
                 }
             }
-            if isRemote {
+            if isRemote, familiesOn {
                 // The pack this session colours with, and a one-click way to
                 // correct it: a serial console does not announce its vendor,
                 // so the first thing you learn about a box is often that it

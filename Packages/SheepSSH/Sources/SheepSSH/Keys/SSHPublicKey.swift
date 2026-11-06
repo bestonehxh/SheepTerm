@@ -53,6 +53,25 @@ public struct SSHPublicKey: Sendable, Hashable {
     /// use these, never a re-encoding.
     public let blob: [UInt8]
     public let kind: Kind
+    /// Set only for a certificate (`SSHCertificate.swift`). Boxed: the info
+    /// holds the CA's key, an `SSHPublicKey` itself.
+    let certificateBox: CertificateBox?
+
+    final class CertificateBox: Sendable, Hashable {
+        let info: SSHCertificateInfo
+        init(_ info: SSHCertificateInfo) { self.info = info }
+        static func == (a: CertificateBox, b: CertificateBox) -> Bool { a.info == b.info }
+        func hash(into hasher: inout Hasher) { hasher.combine(info) }
+    }
+
+    var certificateInfo: SSHCertificateInfo? { certificateBox?.info }
+
+    init(keyType: String, blob: [UInt8], kind: Kind, certificate: SSHCertificateInfo) {
+        self.keyType = keyType
+        self.blob = blob
+        self.kind = kind
+        self.certificateBox = CertificateBox(certificate)
+    }
 
     /// OpenSSH's SSH_RSA_MAXIMUM_MODULUS_SIZE. The bignum code is slow on
     /// purpose-built giant numbers, and a server chooses what it sends.
@@ -102,6 +121,7 @@ public struct SSHPublicKey: Sendable, Hashable {
             self.keyType = type
             self.blob = blob
             self.kind = kind
+            self.certificateBox = nil
         } catch let error as SSHKeyError {
             throw error
         } catch {

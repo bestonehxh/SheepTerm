@@ -278,6 +278,11 @@ final class CredentialStore: ObservableObject {
         return credentials.first { $0.id == id }
     }
 
+    /// The credential's SSH key, or nil (no key, or the vault cannot be read).
+    func key(for credential: Credential) -> StoredKey? {
+        credential.publicKey == nil ? nil : Keychain.key(for: credential.id)
+    }
+
     func password(for credential: Credential) -> String? {
         Keychain.password(for: credential.id)
     }
@@ -307,7 +312,9 @@ final class CredentialStore: ObservableObject {
         }
         // If the Keychain refuses (locked, denied), the item would otherwise
         // stay forever with nothing left that can name it — so say so.
-        if !Keychain.deletePassword(for: credential.id) {
+        // The key (6.1) goes with it; one report covers both.
+        let keyGone = credential.publicKey == nil || Keychain.deleteKey(for: credential.id)
+        if !Keychain.deletePassword(for: credential.id) || !keyGone {
             Self.reportKeychainDeleteFailure(for: credential)
         }
         return true
@@ -362,5 +369,43 @@ enum Keychain {
     @discardableResult
     static func deletePassword(for id: UUID) -> Bool {
         vault.remove(id.uuidString, interactive: true)
+    }
+
+    // MARK: SSH keys (6.1)
+    //
+    // A credential's private key + passphrase (`StoredKey`, JSON) in the same
+    // vault, under `key.<uuid>` — a name no password entry (a bare uuid) or
+    // Sync session (`sheepsync.`) can take. Same prompt rules as passwords.
+
+    static func keyEntry(for id: UUID) -> String { "key." + id.uuidString }
+
+    @discardableResult
+    static func setKey(_ key: StoredKey, for id: UUID) -> Bool {
+        guard let data = try? JSONEncoder().encode(key) else { return false }
+        return vault.set(data, for: keyEntry(for: id), interactive: true)
+    }
+
+    static func key(for id: UUID) -> StoredKey? {
+        vault.value(for: keyEntry(for: id), interactive: true).flatMap { try? JSONDecoder().decode(StoredKey.self, from: $0) }
+    }
+
+    /// Sync: the entry's raw bytes, never a prompt (nil = none or unknown).
+    static func keyDataWithoutPrompt(for id: UUID) -> Data? {
+        vault.value(for: keyEntry(for: id), interactive: false)
+    }
+
+    /// Sync's write: only bytes that decode as a key are stored.
+    static func setKeyDataWithoutPrompt(_ data: Data, for id: UUID) -> Bool {
+        guard (try? JSONDecoder().decode(StoredKey.self, from: data)) != nil else { return false }
+        return vault.set(data, for: keyEntry(for: id), interactive: false)
+    }
+
+    static func deleteKeyWithoutPrompt(for id: UUID) -> Bool {
+        vault.remove(keyEntry(for: id), interactive: false)
+    }
+
+    @discardableResult
+    static func deleteKey(for id: UUID) -> Bool {
+        vault.remove(keyEntry(for: id), interactive: true)
     }
 }

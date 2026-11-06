@@ -30,6 +30,8 @@ struct AddHostsSheet: View {
     /// clicking "−" or a Paste item takes it away and "the row you are in" is
     /// exactly what those two need to know.
     @State private var activeRowID: UUID?
+    /// The examples popover beside Import… (6.1 (9)).
+    @State private var showExamples = false
     /// Set to a row id to scroll it into view once (a fresh UUID every time,
     /// so the change always lands).
     @State private var scrollTarget: UUID?
@@ -85,6 +87,9 @@ struct AddHostsSheet: View {
         /// the group. Per ROW — two rows of one paste can name two
         /// headings — and a name that does not exist yet creates it.
         var sectionText = ""
+        /// SSH, Jump, Telnet, Serial or Web (6.0 (28)) — the Type cell's menu,
+        /// or a Type field of a paste / CSV.
+        var type: HostType = .ssh
         /// The credential chosen from the cell's MENU, by id. Names are not
         /// unique, so the text alone cannot say which "core" was meant; the
         /// pick can.
@@ -102,6 +107,8 @@ struct AddHostsSheet: View {
 
         /// Nothing typed or pasted into it yet — the rows a paste fills first.
         var isBlank: Bool {
+            // The Type cell alone is not content: a row with only a type has
+            // nothing to add, so a paste may still fill it (Fable).
             name.isEmpty && address.isEmpty && credentialText.isEmpty && sectionText.isEmpty
         }
     }
@@ -165,10 +172,19 @@ struct AddHostsSheet: View {
                 Button {
                     importFromFile()
                 } label: {
-                    Label("Import CSV…", systemImage: "doc.text")
+                    Label("Import…", systemImage: "doc.text")
                 }
                 .fixedSize()
-                .help("Read a .csv / .tsv / .txt file — the same rules as a paste")
+                .help("CSV, JSON or an OpenSSH config file — the rows land here to look over before Add")
+                // What each type and each file looks like (6.1 (9), the owner: tips with an example per type).
+                Button { showExamples = true } label: {
+                    Image(systemName: "questionmark.circle").font(.system(size: 13))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.dimText)
+                .help("Examples: each type, and each file Import… reads")
+                .accessibilityLabel("Examples")
+                .popover(isPresented: $showExamples, arrowEdge: .bottom) { ImportExamples() }
                 Spacer()
                 Button {
                     addRow()
@@ -248,7 +264,7 @@ struct AddHostsSheet: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text(status ?? String(localized: "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import CSV…. A header row must use these names: Name, Host / IP, Credential, Group. A host may be written admin@host:2222."))
+                Text(status ?? String(localized: "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import… (CSV, JSON or an OpenSSH config). A header row must use these names: Name, Host / IP, Credential, Group. A host may be written admin@host:2222."))
                     .font(.system(size: 10))
                     .foregroundStyle(status == nil ? .secondary : .primary)
                 Spacer()
@@ -278,6 +294,13 @@ struct AddHostsSheet: View {
             pasteBlock(text)
         }
         .task {
+            // Import ▸ Hosts File… (6.0 (57)): the panel over the sheet, once it is up.
+            if request.importFile {
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                importFromFile()
+                return
+            }
             // Straight into the first cell — unless there is no group yet, in
             // which case the group's name has to be typed first.
             //
@@ -317,7 +340,10 @@ struct AddHostsSheet: View {
     /// ONE layout for the header and for every row. A label cannot drift off
     /// its field if both are placed by the same function — which is exactly
     /// what had happened to "Section".
-    private func gridLine<A: View, B: View, C: View, D: View, E: View>(
+    private static let typeWidth: CGFloat = 46
+
+    private func gridLine<T: View, A: View, B: View, C: View, D: View, E: View>(
+        @ViewBuilder type: () -> T,
         @ViewBuilder name: () -> A,
         @ViewBuilder address: () -> B,
         @ViewBuilder credential: () -> C,
@@ -325,6 +351,8 @@ struct AddHostsSheet: View {
         @ViewBuilder trailing: () -> E
     ) -> some View {
         HStack(spacing: Self.columnGap) {
+            type()
+                .frame(width: Self.typeWidth, alignment: .leading)
             name()
                 .frame(minWidth: Self.nameMinWidth, maxWidth: .infinity, alignment: .leading)
             // A host is longer than its name (`admin@10.0.0.1:2222`), so this
@@ -348,6 +376,8 @@ struct AddHostsSheet: View {
 
     private var header: some View {
         gridLine {
+            Text("Type").help("SSH, Server, Docker, Cloud, Jump, Telnet or Web — a CSV or paste may carry a Type column")
+        } name: {
             Text("Name")
         } address: {
             Text("Host / IP")
@@ -425,6 +455,8 @@ struct AddHostsSheet: View {
         let id = row.wrappedValue.id
         let meaning = meaning(of: row.wrappedValue)
         return gridLine {
+            HostTypeMenu(selection: row.type, types: HostType.bulkTypes)
+        } name: {
             // No placeholder text in any cell: an example in every empty cell
             // reads as content, and forty of them read as a filled table.
             TextField("", text: row.name)
@@ -612,6 +644,7 @@ struct AddHostsSheet: View {
         case .address: return String(localized: "Host / IP")
         case .credential: return String(localized: "Credential")
         case .section: return String(localized: "Subgroup")
+        case .type: return String(localized: "Type")
         }
     }
 
@@ -648,6 +681,11 @@ struct AddHostsSheet: View {
             // trims its payload: the cap can land on a space, and the store
             // trims one away — the cell has to hold the stored spelling.
             row.sectionText = BulkHostParser.storedCellValue(value, column: .section)
+        case .type:
+            // A word that is not a type leaves the row as it was (SSH unless
+            // picked) — never a guess at what was meant. A BLANK cell too
+            // (Fable round 4: "" reads as SSH and reset a Telnet/Jump row).
+            if !trimmed.isEmpty, let type = HostType(word: trimmed) { row.type = type }
         }
     }
 
@@ -717,6 +755,7 @@ struct AddHostsSheet: View {
             case .address: rows[anchor].address = text
             case .credential: rows[anchor].credentialText = text
             case .section: rows[anchor].sectionText = text
+            case .type: break
             }
             return
         case .single(let cell):
@@ -821,6 +860,7 @@ struct AddHostsSheet: View {
         case .address: return row.address
         case .credential: return row.credentialText
         case .section: return row.sectionText
+        case .type: return row.type == .ssh ? "" : row.type.rawValue
         }
     }
 
@@ -963,7 +1003,8 @@ struct AddHostsSheet: View {
 
     private func importFromFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .plainText]
+        // An OpenSSH config has no extension: any data file, read by its text.
+        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .plainText, .json, .data]
         panel.allowsMultipleSelection = false
         panel.prompt = String(localized: "Import")
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -1017,11 +1058,39 @@ struct AddHostsSheet: View {
             status = String(localized: "\(name) is too large to be a host list.")
             return
         }
-        guard let text = Self.readText(at: url) else {
+        guard let fileText = Self.readText(at: url) else {
             // Said in the status line, not an alert: the sheet is already on
             // screen and a modal over a sheet for "wrong file" is a lot.
             status = String(localized: "Could not read \(name)")
             return
+        }
+        // JSON or an OpenSSH config becomes the table a paste would be
+        // (`HostListCodec.sheetText`), then the same path (6.0 (57)).
+        var text = fileText
+        var extra = ""
+        switch HostListCodec.detect(text) {
+        case .json:
+            guard let entries = HostListCodec.entries(fromJSON: text), !entries.isEmpty else {
+                status = String(localized: "Nothing in \(name) looked like a host.")
+                return
+            }
+            text = HostListCodec.sheetText(entries)
+            extra = Self.jumpNote(entries)
+        case .sshConfig:
+            let read = HostListCodec.entries(fromSSHConfig: text)
+            // ssh refuses the whole file for it, so do we (Fable round 16).
+            if let line = read.invalidLine {
+                status = String(localized: "\(name), line \(line): a quote is not closed.")
+                return
+            }
+            guard !read.entries.isEmpty else {
+                status = String(localized: "Nothing in \(name) looked like a host.")
+                return
+            }
+            text = HostListCodec.sheetText(read.entries)
+            extra = Self.jumpNote(read.entries)
+        case .csv:
+            break
         }
         let parsed = BulkHostParser.block(from: text)
         if let refused = parsed.rejectedHeader {
@@ -1044,7 +1113,13 @@ struct AddHostsSheet: View {
         }
         let (limited, note) = capped(parsed)
         status = String(localized: "\(describe(placeBlock(limited), imported: true)) from \(name)")
-            + note + headerHint(limited)
+            + note + headerHint(limited) + extra
+    }
+
+    /// A jump host in the file is not a column here: said, not dropped silently.
+    private static func jumpNote(_ entries: [HostListCodec.Entry]) -> String {
+        let count = entries.filter { $0.jump != nil }.count
+        return count == 0 ? "" : " " + String(localized: "\(count) jump hosts were not imported — set them with Via Jump Server.")
     }
 
     /// The file's bytes as text — `BulkHostParser.decodeImport` decides the
@@ -1184,7 +1259,8 @@ struct AddHostsSheet: View {
                 credentialUsername: chosen?.username,
                 pastedUsername: typedUsername,
                 section: label.isEmpty ? nil : label,
-                noLog: noLog
+                noLog: noLog,
+                type: row.type
             ) else {
                 skipped += 1
                 continue
@@ -1334,5 +1410,54 @@ struct AddHostsSheet: View {
             alert.addButton(withTitle: String(localized: "OK"))
             alert.sheepStyled().runModal()
         }
+    }
+}
+
+/// Add Hosts ▸ ⓘ (6.1 (9)): an example for every type and every file
+/// Import… reads — written the way the parser takes them (`HostType(word:)`,
+/// `BulkHostParser`, `HostListCodec`).
+struct ImportExamples: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                section("Types") {
+                    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
+                        ForEach(Array(HostListCodec.Examples.types.enumerated()), id: \.offset) { _, row in
+                            GridRow {
+                                Text(row.type.badge)
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(Theme.badgeColor(row.type))
+                                    .frame(width: 32, height: 16)
+                                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.badgeColor(row.type).opacity(0.18)))
+                                Text(row.name).font(.system(size: 11))
+                                Text(row.host).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.dimText)
+                                Text(row.words).font(.system(size: 10)).foregroundStyle(Theme.dimText)
+                            }
+                        }
+                    }
+                }
+                section("CSV") { code(HostListCodec.Examples.csv) }
+                section("JSON") { code(HostListCodec.Examples.json) }
+                section("OpenSSH config") { code(HostListCodec.Examples.sshConfig) }
+            }
+            .padding(14)
+        }
+        .frame(width: 520, height: 470)
+    }
+
+    private func section(_ title: LocalizedStringKey, @ViewBuilder _ content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            content()
+        }
+    }
+
+    private func code(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .textSelection(.enabled)
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25)))
     }
 }

@@ -113,6 +113,8 @@ final class SSHTerminalController: NSObject {
     /// The password the session starts with (a saved credential or the
     /// session cache); handed to the worker once and not kept after that.
     private var password: String?
+    /// The credential keys (6.1), handed to the worker once like `password`.
+    private var keys: SessionKeys
     /// The failure card's Try Again: AppModel reconnects this tab from the
     /// start. The argument names the login the server refused (its password
     /// is asked again, never reused), nil for a failure of another kind.
@@ -179,11 +181,12 @@ final class SSHTerminalController: NSObject {
     private let jump: JumpHop?
     private let jumpUnresolved: Bool
 
-    init(host: Host, password: String?, jump: JumpHop? = nil, jumpUnresolved: Bool = false,
+    init(host: Host, password: String?, keys: SessionKeys = SessionKeys(), jump: JumpHop? = nil, jumpUnresolved: Bool = false,
          reusingLogger: SessionLogger? = nil) {
         highlightProvider = VendorHighlightProvider(vendor: host.highlightVendor)
         self.host = host
         self.password = password
+        self.keys = keys
         self.jump = jump
         self.jumpUnresolved = jumpUnresolved
         let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -661,6 +664,8 @@ final class SSHTerminalController: NSObject {
             }
             return
         }
+        let keys = self.keys
+        self.keys = SessionKeys()
         worker.start(SSHConfig(
             host: host.address,
             port: host.port,
@@ -671,7 +676,13 @@ final class SSHTerminalController: NSObject {
             initialRows: terminalView.rows,
             agentForward: host.agentForward ?? false,
             jump: jump,
-            forwards: forwardRules()
+            forwards: forwardRules(),
+            identity: keys.target?.key,
+            identityName: keys.target?.name ?? "",
+            jumpIdentity: keys.jump?.key,
+            jumpIdentityName: keys.jump?.name ?? "",
+            authMethod: host.authMethod ?? .automatic,
+            jumpAuthMethod: keys.jumpAuthMethod
         ))
     }
 

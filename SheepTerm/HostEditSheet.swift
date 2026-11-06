@@ -35,6 +35,30 @@ struct HostEditSheet: View {
     /// The Advanced settings are shown. Starts open when the host already
     /// has one set (`Host.hasAdvancedSettings`).
     @State private var showAdvanced: Bool
+    @State private var authMethod: SSHAuthMethod
+    @State private var isJumpServer: Bool
+    /// A Jump Server's Reaches (6.1), written to the groups on Save.
+    @State private var reaches: Set<UUID>
+    /// Reaches ▸ New Host… (6.0 (28)): a new Add Host opens behind it after Save.
+    @State private var addBehind = false
+    @State private var environment: HostEnvironment?
+    @State private var sshBadge: SSHBadge?
+    /// The SSH label in the badge menu (6.0 (35)): SSH / Server / Docker / Cloud.
+    private var badgeChoice: Binding<HostType> {
+        Binding(get: { HostKindSwitch.type(kind: .ssh, jump: false, badge: sshBadge) },
+                set: { sshBadge = $0.sshBadge })
+    }
+    /// The SSH | Jump tabs under the title (6.1 (10), as in Add Host): shown
+    /// while Jump Servers is on (or the host already is one). One hop only
+    /// (Fable round 5): a host that itself goes through a jump host cannot
+    /// be one — every host it reached would fail.
+    private var offersJump: Bool {
+        original.kind == .ssh
+            && ((OptimizationPlan.Feature.isOn(.jumpServers) && jumpHostID == nil && jumpText.isEmpty) || isJumpServer)
+    }
+    private var kindTab: Binding<HostType> {
+        Binding(get: { isJumpServer ? .jump : .ssh }, set: { isJumpServer = $0 == .jump })
+    }
     /// Whether the Port field has been typed in during this edit. See
     /// `parsedPort`.
     @State private var portEdited = false
@@ -69,6 +93,11 @@ struct HostEditSheet: View {
             host.credentialID.flatMap { id in
                 AppModel.shared.credentialStore.credential(for: id) == nil ? nil : id
             })
+        _authMethod = State(initialValue: host.authMethod ?? .automatic)
+        _isJumpServer = State(initialValue: host.isJumpServer == true)
+        _environment = State(initialValue: host.environment)
+        _sshBadge = State(initialValue: host.sshBadge)
+        _reaches = State(initialValue: AppModel.shared.store.reaches(of: host.id))
         _cipherMode = State(initialValue: host.cipherMode ?? .auto)
         _agentForward = State(initialValue: host.agentForward ?? false)
         _disablePaging = State(initialValue: host.disablePaging ?? false)
@@ -115,11 +144,33 @@ struct HostEditSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Edit Host")
                 .font(.headline)
+            if offersJump {
+                HStack {
+                    Spacer(minLength: 0)
+                    Picker("", selection: kindTab) {
+                        Text(HostTypeMenu.label(.ssh)).tag(HostType.ssh)
+                        Text(HostTypeMenu.label(.jump)).tag(HostType.jump)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer(minLength: 0)
+                }
+            }
 
             // Explanations are tooltips (`.help`), not captions under the
             // controls: the user found the form cluttered (2026-10-08).
             Form {
-                TextField("Name", text: $name)
+                HStack(spacing: 8) {
+                    // An SSH host's badge (6.0 (35)): SSH / SRV / DCK / CLD, same menu as Add Host;
+                    // a Jump Server's JMP, fixed (its tab is above).
+                    if original.kind == .ssh, isJumpServer {
+                        HostTypeBadge(type: .jump)
+                    } else if original.kind == .ssh, HostType.sshLabels(keeping: sshBadge).count > 1 {
+                        HostTypeMenu(selection: badgeChoice, types: HostType.sshLabels(keeping: sshBadge))
+                    }
+                    TextField("Name", text: $name)
+                }
                     .formRow("Name")
                 if hasTCPEndpoint {
                     TextField("Host / IP", text: $address)
@@ -139,12 +190,37 @@ struct HostEditSheet: View {
                     }
                 }
                 if original.kind == .ssh {
-                    FormPopup(selection: $credentialSelection,
-                              items: [.option(String(localized: "None (enter manually)"), nil)] + model.credentialStore.credentials.map {
-                                  .option("\($0.name) (\($0.username))", $0.id)
-                              })
-                        .formRow("Credential")
-                    if let credential = selectedCredential {
+                    AuthMethodRow(method: $authMethod)
+                        .onChange(of: authMethod) { _, method in
+                            if method == .agent { credentialSelection = nil }
+                            if method == .key, let id = credentialSelection,
+                               model.credentialStore.credential(for: id)?.publicKey == nil { credentialSelection = nil }
+                            // Key with nothing picked: the first credential that has one
+                            // (6.0 (46), Fable: a blank popup saved a host that could not log in).
+                            if method == .key, credentialSelection == nil {
+                                credentialSelection = AuthMethodRow.credentials(model.credentialStore.credentials, for: .key).first?.id
+                            }
+                        }
+                    if authMethod != .agent {
+                        FormPopup(selection: $credentialSelection,
+                                  items: (authMethod == .key ? [] : [.option(String(localized: "None (enter manually)"), nil)])
+                                      + AuthMethodRow.credentials(model.credentialStore.credentials, for: authMethod).map {
+                                      .option("\($0.name) (\($0.username))", $0.id)
+                                  })
+                            .formRow("Credential")
+                        if authMethod == .key, AuthMethodRow.credentials(model.credentialStore.credentials, for: .key).isEmpty {
+                            Text("No credential has a key yet — Hosts ▸ Credentials…")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.destructive)
+                        }
+                    }
+                    if authMethod == .agent {
+                        TextField("Username", text: $username)
+                            .formRow("Username")
+                            .onChange(of: username) { usernameEdited = true }
+                    } else if authMethod == .key {
+                        EmptyView()
+                    } else if let credential = selectedCredential {
                         // Shown, not hidden. While this field was hidden the
                         // form saved the host's OLD username beside the NEW
                         // credential — a host called `admin` connecting as
@@ -175,16 +251,24 @@ struct HostEditSheet: View {
                     FormPopup(selection: $baud, items: baudChoices.map { .option(String($0), $0) })
                         .formRow("Baud rate")
                 }
+                if original.kind == .ssh, isJumpServer {
+                    ReachesRow(reaches: $reaches, groups: model.store.groups, addBehind: $addBehind)
+                } else if OptimizationPlan.Feature.isOn(.deviceFamilies) {
                 FormPopup(selection: $vendor, items: Vendor.allCases.map { .option($0.localizedLabel, $0) })
                     .formRow("Device family")
                     .help("Picks the highlight rules. Auto colours only what every device shares — addresses, masks, MACs, VLAN ids, up/down. Naming the family adds its port names and reads its state words the way that platform means them.")
+                }
+                // Shown while the Feature is on, or to clear a tag already set.
+                if OptimizationPlan.Feature.isOn(.environmentTags) || environment != nil {
+                    EnvironmentRow(environment: $environment)
+                }
                 Toggle("Don't Log", isOn: $noLog)
                     .help("This host never writes a session log, even with Log Sessions to File on.")
                 if original.kind == .ssh {
                     // Shown only for a family with a pager-off command
                     // (5.0 (59), the user: a greyed row under Auto or FortiOS
                     // was clutter). A saved `true` is kept either way.
-                    if vendor.disablePagingCommand != nil {
+                    if vendor.disablePagingCommand != nil, !isJumpServer {
                         Toggle("No Paging", isOn: $disablePaging)
                             .help(disablePagingCaption)
                     }
@@ -198,9 +282,13 @@ struct HostEditSheet: View {
                             .formRow("Cipher mode")
                         Toggle("Forward SSH agent", isOn: $agentForward)
                             .help("Lets this host use your local ssh-agent keys to hop onward. Only enable it for hosts you trust — root there can use the socket while you are connected.")
-                        JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
-                                    candidates: jumpCandidates,
-                                    render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                        // 6.1: the path is set on the Jump Server or a group;
+                        // a host's own one shows only so it can be changed.
+                        if jumpHostID != nil || !jumpText.isEmpty {
+                            JumpHostRow(text: $jumpText, jumpHostID: $jumpHostID,
+                                        candidates: jumpCandidates,
+                                        render: { JumpHostRow.text(for: $0, credentials: credentialStore) })
+                        }
                         if let jumpError {
                             Text(jumpError)
                                 .font(.system(size: 10))
@@ -359,6 +447,8 @@ struct HostEditSheet: View {
         if hasTCPEndpoint, parsedPort == nil || addressError != nil { return false }
         if original.kind == .ssh, forwardError != nil { return false }
         if original.kind == .ssh, JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID) { return false }
+        // Authentication ▸ Key logs in with a credential's key: none = no Save.
+        if original.kind == .ssh, authMethod == .key, credentialSelection == nil { return false }
         return true
     }
 
@@ -376,6 +466,7 @@ struct HostEditSheet: View {
         // host another entry's family the next time it is opened as a target.
         host.vendor = vendor
         host.noLog = noLog ? true : nil
+        host.environment = environment
         switch original.kind {
         case .ssh:
             // isValid already guarantees a parsed in-range port; the
@@ -396,6 +487,9 @@ struct HostEditSheet: View {
             host.jumpSpec = JumpTarget.storedSpec(text: jumpText, jumpHostID: jumpHostID)
             // A valid forward typed but not added with + is saved too.
             host.forwards = PortForwardSpec.stored(forwards, draft: forwardDraft)
+            host.authMethod = authMethod == .automatic ? nil : authMethod
+            host.isJumpServer = isJumpServer ? true : nil
+            host.sshBadge = isJumpServer ? nil : sshBadge
             // `selectedCredential`, not `credentialSelection`: the same
             // question the form asked when it decided to show the password
             // field at all. A host pointing at a deleted credential shows it,
@@ -425,7 +519,16 @@ struct HostEditSheet: View {
             model.forgetCachedPassword(for: old)
         }
         model.store.updateHost(host)
+        // Reaches (6.1): a Jump Server's groups; one that stops being a Jump
+        // Server reaches nothing any more.
+        if original.kind == .ssh, isJumpServer || original.isJumpServer == true {
+            model.store.setReaches(isJumpServer ? reaches : [], for: host.id)
+        }
         dismiss()
+        if isJumpServer, addBehind {
+            let id = host.id
+            DispatchQueue.main.async { AppModel.shared.openAddHost(via: id) }
+        }
     }
 }
 
@@ -461,7 +564,7 @@ extension HostEditSheet {
     /// One hop only: a host that is itself behind a jump host (saved or
     /// typed) cannot be one.
     var jumpCandidates: [Host] {
-        model.store.groups.flatMap(\.hosts).filter { $0.id != original.id && JumpTarget.canBeBastion($0) }
+        model.store.groups.flatMap(\.hosts).filter { $0.id != original.id && JumpTarget.canBeBastion($0, groups: model.store.groups) }
     }
 
     /// The red line under "Via jump host" (see `JumpTarget.fieldError`).

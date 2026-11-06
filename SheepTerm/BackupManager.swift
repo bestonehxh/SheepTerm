@@ -72,6 +72,14 @@ enum BackupManager {
         // the user had (3.0 (26)).
         "terminalFontFamily", "terminalFontSize", "terminalFontWeight",
         "terminalFontSmoothing", "scrollbackLines",
+        // 6.1: Settings ▸ Optimization and the Home board (Fable round 2: a
+        // restore brought none of them back).
+        "homeWidgets", "homeColumns", "hostBadgeStyle", "newTabButtonPosition", "launchTab",
+        "showHomeButton", "showSearchButton", "homeButtonPlace", "optimizationPresets", "optimizationBuiltIns",
+        // 6.1 (8): Rack Fill's top scores (the game in progress is not kept).
+        "rackFillTop",
+        "feature.keyFirst", "feature.jumpServers", "feature.forwardsInAddHost", "feature.telnet", "feature.serial",
+        "feature.environmentTags", "feature.cloudDocker", "feature.deviceFamilies", "feature.broadcast",
         "TSMLanguageIndicatorEnabled",
         // Settings → Updates (`UpdateCore.autoCheckKey`).
         "checkForUpdatesAutomatically",
@@ -93,6 +101,9 @@ enum BackupManager {
         case double(Double)
         case string(String)
         case strings([String])
+        /// Raw bytes — the Home board (`HomePlan.storageKey`, Fable round 4:
+        /// it was on the list but never written, being neither number nor text).
+        case data(Data)
 
         private enum CodingKeys: String, CodingKey { case type, value }
 
@@ -104,6 +115,7 @@ enum BackupManager {
             case "double": self = .double(try container.decode(Double.self, forKey: .value))
             case "string": self = .string(try container.decode(String.self, forKey: .value))
             case "strings": self = .strings(try container.decode([String].self, forKey: .value))
+            case "data": self = .data(try container.decode(Data.self, forKey: .value))
             default:
                 throw DecodingError.dataCorruptedError(forKey: .type, in: container,
                                                        debugDescription: "unknown setting type")
@@ -123,6 +135,8 @@ enum BackupManager {
                 try container.encode("string", forKey: .type); try container.encode(value, forKey: .value)
             case .strings(let value):
                 try container.encode("strings", forKey: .type); try container.encode(value, forKey: .value)
+            case .data(let value):
+                try container.encode("data", forKey: .type); try container.encode(value, forKey: .value)
             }
         }
 
@@ -133,6 +147,7 @@ enum BackupManager {
             case .double(let value): return value
             case .string(let value): return value
             case .strings(let value): return value
+            case .data(let value): return value
             }
         }
 
@@ -402,6 +417,8 @@ enum BackupManager {
                 settings[key] = .string(text)
             case let list as [String]:
                 settings[key] = .strings(list)
+            case let bytes as Data:
+                settings[key] = .data(bytes)
             default:
                 continue
             }
@@ -544,15 +561,12 @@ enum BackupManager {
     /// each credential would put plaintext secrets into Application Support,
     /// which is exactly the thing this whole file exists not to do. Checking
     /// the keys by name is what closes that; a `Codable` round-trip cannot.
-    private static let credentialKeys: Set<String> = ["id", "name", "username"]
-
     private static func checkCredentialsCarryNoSecrets(_ data: Data) throws {
-        guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+        guard let unexpectedPerEntry = CredentialFileKeys.unexpected(in: data) else {
             throw BackupError.invalidFile(name: "credentials.json",
                                           reason: String(localized: "it is not a list of credentials."))
         }
-        for entry in entries {
-            let unexpected = Set(entry.keys).subtracting(credentialKeys).sorted()
+        for unexpected in unexpectedPerEntry {
             guard unexpected.isEmpty else {
                 throw BackupError.invalidFile(
                     name: "credentials.json",
