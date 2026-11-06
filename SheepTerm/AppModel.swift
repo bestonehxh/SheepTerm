@@ -174,6 +174,8 @@ final class AppModel: ObservableObject {
     }
     /// The tab `selectedID` was in when it last changed.
     private var chipPick = ChipPick()
+    /// `OptimizationPlan.settlePins` on every defaults change (6.1 (12)).
+    private var pinSettler: NSObjectProtocol?
     /// Split panes (4.2 (7)): which sessions share a tab and how they are
     /// laid out. `tabs` stays the flat list of sessions; this is the tab
     /// strip's view of them.
@@ -529,6 +531,11 @@ final class AppModel: ObservableObject {
         // An updater keeps what it had where it never chose (6.1 (4)): pinned
         // BEFORE the bottom bar and the launch tab are read.
         OptimizationPlan.pinLaunchTabIfUpdating(.standard, usedBefore: Self.usedBefore(.standard))
+        // A pinned value is unpinned the moment it changes (6.1 (12)) — on every
+        // write, not Sync's debounced read, so on-then-off quickly still counts.
+        pinSettler = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { _ in
+            OptimizationPlan.settlePins(.standard)
+        }
         // Session text (device IP + username), shortcut hints and This-Mac IP:
         // a new Mac starts as the app ships, `OptimizationPlan.Settings()` —
         // shown, as in Minimal (the owner, 6.1 (3); they started hidden before,

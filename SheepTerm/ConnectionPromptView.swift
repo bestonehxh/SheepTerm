@@ -943,9 +943,15 @@ struct StageTrack: View {
         let fill: Color = isCurrent ? (failed ? Color(nsColor: SheepAlert.destructiveRed) : Self.frost)
             : index < current ? Self.frost.opacity(0.45) : .clear
         let glow: Color = isCurrent ? (failed ? Color(nsColor: SheepAlert.destructiveRed).opacity(0.45) : Color.white.opacity(0.25)) : .clear
+        // 6.1 (12), the owner: "ทำไมรูปทรงไม่กลมเหมือนกันและขนาดไม่เท่ากัน" — every
+        // glyph is fitted into one box (`glyph`), and a stage without its label
+        // is a circle of one size (`dot`), whatever the symbol's own width.
         return HStack(spacing: 6) {
             Image(systemName: stage.symbol)
-                .font(.system(size: 12, weight: .semibold))
+                .resizable()
+                .scaledToFit()
+                .fontWeight(.semibold)
+                .frame(width: Self.glyph, height: Self.glyph)
                 .foregroundStyle(index <= current ? Color.white : Theme.dimText)
             if isCurrent {
                 Text(stage.label)
@@ -954,10 +960,15 @@ struct StageTrack: View {
                     .fixedSize()
             }
         }
-        .padding(.horizontal, 9).padding(.vertical, 5)
+        .padding(.horizontal, isCurrent ? 10 : 0)
+        .frame(minWidth: Self.dot, minHeight: Self.dot)
         .background(Capsule().fill(fill).shadow(color: glow, radius: 4))
         .help(stage.label)
     }
+
+    /// Every stage glyph's box, and the diameter of a stage shown without its label.
+    static let glyph: CGFloat = 13
+    static let dot: CGFloat = 26
 }
 
 /// The window-centred form of the card, for a pane too small to hold it

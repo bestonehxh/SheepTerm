@@ -140,6 +140,17 @@ nonisolated enum OptimizationPlan {
         d.set(pinned, forKey: pinnedKey)
     }
 
+    /// A pinned value that has changed — by hand, a preset or Sync — is the
+    /// user's from then on, for good, even if it later goes back to the same
+    /// value (6.1 (12), the Windows port's Fable review: Session on then off
+    /// again read as pinned, so the "off" never synced). `AppModel` runs this
+    /// on every defaults change, before Sync's debounced read.
+    static func settlePins(_ d: UserDefaults) {
+        guard let pinned = d.dictionary(forKey: pinnedKey) as? [String: String], !pinned.isEmpty else { return }
+        let kept = pinned.filter { key, _ in d.object(forKey: key) == nil || isPinned(key, d) }
+        if kept.count != pinned.count { d.set(kept, forKey: pinnedKey) }
+    }
+
     /// A value this build pinned for an updater and nobody has changed since.
     /// Not the user's: it never counts as touched, never goes to Sync (Fable
     /// round 19: it beat another Mac's own answer there), and never makes a

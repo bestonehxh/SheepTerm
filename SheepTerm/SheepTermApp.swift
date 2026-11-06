@@ -516,6 +516,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         cell(ChromeSymbol("square.grid.3x3.square"))
                     }
                     TopBarView().frame(width: 420)
+                    ForEach(ConnectionStage.allCases, id: \.rawValue) { stage in
+                        StageTrack(current: stage, failed: false).fixedSize()
+                    }
                 }
                 .padding(12).background(Theme.tabActive).environment(\.colorScheme, .dark)
                 .environmentObject(AppModel.shared)
