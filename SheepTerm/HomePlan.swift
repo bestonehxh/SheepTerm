@@ -220,21 +220,20 @@ enum HomePlan {
     /// every render until the first edit saves it, and a fresh UUID each time
     /// lost "Show all", the picked row and that first edit.
     /// 6.1 (8), the owner: few tiles, not cluttered — Recent, Clock, Console,
-    /// Sessions, each top-level group, and Rack Fill to play. Ping, File
-    /// Server, Snippets, Logs and Note wait in Add Widget.
+    /// Sessions and each top-level group. Ping, File Server, Snippets, Logs,
+    /// Note and Rack Fill wait in Add Widget (6.1 (13), the owner: Rack Fill
+    /// off the default board).
     static func defaultWidgets(groups: [HostGroup]) -> [Widget] {
         [Widget(id: recentWidgetID, source: .recent, width: 3, size: .large),
          Widget(id: clockWidgetID, source: .clock, size: .small),
          Widget(id: consoleWidgetID, source: .cables, size: .small),
          Widget(id: sessionsWidgetID, source: .sessions, size: .medium)]
             + GroupTree.children(of: nil, in: groups).map { Widget(id: $0.id, source: .group($0.id), size: .medium) }
-            + [Widget(id: rackFillWidgetID, source: .rackFill, size: .large)]
     }
     static let recentWidgetID = UUID(uuidString: "00000000-0000-4000-8000-0000000000E1")!
     static let clockWidgetID = UUID(uuidString: "00000000-0000-4000-8000-0000000000E2")!
     static let consoleWidgetID = UUID(uuidString: "00000000-0000-4000-8000-0000000000E3")!
     static let sessionsWidgetID = UUID(uuidString: "00000000-0000-4000-8000-0000000000E4")!
-    static let rackFillWidgetID = UUID(uuidString: "00000000-0000-4000-8000-0000000000E5")!
 
     static func load(_ data: Data?, groups: [HostGroup] = []) -> [Widget] {
         guard let data, let widgets = try? JSONDecoder().decode([Widget].self, from: data) else {

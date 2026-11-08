@@ -101,6 +101,10 @@ struct HomeView: View {
             }
             .background(MenuAnchorView(box: importAnchor))
             Spacer()
+            // 6.1 (13), the owner: the pencil beside the search was hard to
+            // find — here, an icon and a word like the rest of the row.
+            HomeAction(symbol: editing ? "checkmark" : "pencil", title: editing ? "Done" : "Edit Home",
+                       active: editing) { editing.toggle() }
         }
     }
 
@@ -120,15 +124,6 @@ struct HomeView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Button { editing.toggle() } label: {
-                Image(systemName: editing ? "checkmark" : "pencil").font(.system(size: 13))
-                    .frame(width: 34, height: 34)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(editing ? Theme.accent.opacity(0.25) : Theme.controlFill))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(editing ? Theme.accent : Theme.dimText)
-            .help(editing ? Text("Done") : Text("Edit Home"))
-            .accessibilityLabel(editing ? Text("Done") : Text("Edit Home"))
         }
     }
 
@@ -181,6 +176,8 @@ struct HomeView: View {
         let fit = HomePlan.fit(all.count, in: size)
         let list = Array(all.prefix(fit.shown))
         return VStack(alignment: .leading, spacing: 0) {
+            // 18 tall: Edit Home's 22 pt boxes stand 2 pt over it each way —
+            // a taller header would cost a medium tile a row (`tileChrome`).
             header(widget, count: all.count, size: size)
                 .frame(height: 18)
                 .padding(.bottom, 4)
@@ -235,6 +232,8 @@ struct HomeView: View {
         .overlay(RoundedRectangle(cornerRadius: 16)
             .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             .opacity(dragging == widget.id ? 1 : 0))
+        // Right-click any tile: Edit Home / Done (6.1 (13)); a host row's own menu wins on the row.
+        .contextMenu { Button(editing ? "Done" : "Edit Home") { editing.toggle() } }
         .popover(isPresented: Binding(get: { expanded == widget.id }, set: { if !$0 { expanded = nil } }), arrowEdge: .bottom) {
             allHosts(widget, all)
         }
@@ -292,8 +291,11 @@ struct HomeView: View {
             }
             if editing {
                 widgetMenu(widget)
+                // A filled box like the other buttons, the whole box clickable
+                // (6.1 (13), the owner: the bare 10 pt glyph often missed — a
+                // press that moved a little dragged the tile instead).
                 Button { update(widgets.filter { $0.id != widget.id }) } label: {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).tileEditBox()
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.dimText)
@@ -368,7 +370,7 @@ struct HomeView: View {
                 }
             }
         } label: {
-            Image(systemName: "slider.horizontal.3").font(.system(size: 11))
+            Image(systemName: "slider.horizontal.3").font(.system(size: 11)).tileEditBox()
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -569,6 +571,8 @@ private struct WidgetDropDelegate: DropDelegate {
 private struct HomeAction: View {
     let symbol: String
     let title: LocalizedStringKey
+    /// Edit Home while editing: the accent, filled.
+    var active = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -578,11 +582,12 @@ private struct HomeAction: View {
                 .font(.system(size: 12))
                 .padding(.horizontal, 10)
                 .frame(height: 28)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(hovering ? 0.07 : 0)))
+                .background(RoundedRectangle(cornerRadius: 7)
+                    .fill(active ? Theme.accent.opacity(0.25) : Color.white.opacity(hovering ? 0.07 : 0)))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(hovering ? Theme.tabText : Theme.dimText)
+        .foregroundStyle(active ? Theme.accent : (hovering ? Theme.tabText : Theme.dimText))
         .onHover { hovering = $0 }
     }
 }
@@ -618,5 +623,15 @@ private struct BoardGridLayout: Layout {
                                  y: bounds.minY + CGFloat(spot.row) * (HomePlan.unitHeight + HomePlan.gap))
             view.place(at: origin, anchor: .topLeading, proposal: ProposedViewSize(width: w, height: size.height))
         }
+    }
+}
+
+/// Edit Home's × and size buttons on a tile: a 22 pt filled box like the
+/// other buttons, all of it clickable (6.1 (13)).
+private extension View {
+    func tileEditBox() -> some View {
+        frame(width: 22, height: 22)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.controlFill))
+            .contentShape(Rectangle())
     }
 }
