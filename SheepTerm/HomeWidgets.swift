@@ -24,6 +24,7 @@ struct HomeWidgetBody: View {
         case .note: NoteTile(saved: widget.note ?? "") { text in var w = widget; w.note = text; update(w) }
         // The board needs two rows of height: large plays in the tile, the rest open it (Fable: wide was cut).
         case .rackFill: RackFillView(compact: size != .large)
+        case .workspace(let id): WorkspaceTile(workspace: id, size: size)
         default: EmptyView()
         }
     }
@@ -469,5 +470,162 @@ struct NoteTile: View {
                         .padding(.leading, 5).allowsHitTesting(false)
                 }
             }
+    }
+}
+
+/// A workspace as folders (6.1 (33), `HomePlan.workspaceLevel`): its
+/// top-level groups; a click goes into one — its subgroups as folders, its
+/// hosts as rows (two clicks open one, as everywhere on Home). The line on
+/// top is the way back. Where it is is not saved: the tile opens at the top.
+struct WorkspaceTile: View {
+    let workspace: UUID
+    let size: HomePlan.Size
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var store = AppModel.shared.store
+    @AppStorage(WorkspacePlan.storageKey) private var workspaceData: Data?
+    @State private var group: UUID?
+    @State private var picked: UUID?
+
+    /// `start`: the group it opens in — nil (the top) everywhere but the DEBUG render.
+    init(workspace: UUID, size: HomePlan.Size, start: UUID? = nil) {
+        self.workspace = workspace
+        self.size = size
+        _group = State(initialValue: start)
+    }
+
+    private var level: HomePlan.WorkspaceLevel {
+        HomePlan.workspaceLevel(workspace, at: group, plan: WorkspacePlan.load(workspaceData), groups: store.groups)
+    }
+
+    var body: some View {
+        let level = level
+        if size == .small {
+            HomeBigNumber(value: "\(level.folders.reduce(0) { $0 + HomePlan.folderCount($1.id, groups: store.groups) })",
+                          caption: String(localized: "hosts"))
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                if !level.crumbs.isEmpty { crumbs(level.crumbs) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !level.folders.isEmpty {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)], spacing: 6) {
+                                ForEach(level.folders) { folder in
+                                    WorkspaceFolder(group: folder, depth: level.crumbs.count + 1,
+                                                    count: HomePlan.folderCount(folder.id, groups: store.groups)) {
+                                        self.group = folder.id
+                                        picked = nil
+                                    }
+                                }
+                            }
+                        }
+                        VStack(spacing: 0) {
+                            ForEach(level.hosts) { host in
+                                WorkspaceHostRow(host: host, picked: picked == host.id) { picked = host.id } open: { model.open(host: host) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// "‹ Bangkok › DC 1": the arrow goes up one, a name goes to that group.
+    private func crumbs(_ crumbs: [HostGroup]) -> some View {
+        HStack(spacing: 4) {
+            Button { group = crumbs.dropLast().last?.id; picked = nil } label: {
+                Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
+                    .frame(width: 18, height: 18)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Theme.controlFill))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Back")
+            .accessibilityLabel("Back")
+            ForEach(Array(crumbs.enumerated()), id: \.element.id) { index, crumb in
+                if index > 0 { Text("›").font(.system(size: 11)).foregroundStyle(Theme.dimText) }
+                if index == crumbs.count - 1 {
+                    Text(crumb.name).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                } else {
+                    Button(crumb.name) { group = crumb.id; picked = nil }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.dimText)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 18)
+    }
+}
+
+/// One folder of a Workspace tile: the group's icon (a folder when it has
+/// none) in its colour, its name, and the hosts under it.
+private struct WorkspaceFolder: View {
+    let group: HostGroup
+    let depth: Int
+    let count: Int
+    let open: () -> Void
+    @State private var hovering = false
+
+    private var color: Color {
+        GroupIconSheet.color(group.iconColor?.rgb ?? GroupTree.levelColor(depth: max(1, depth)))
+    }
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 0) {
+                    if let icon = group.icon {
+                        GroupIconView(icon: icon, size: 16, color: color)
+                    } else {
+                        Image(systemName: "folder").font(.system(size: 14)).foregroundStyle(color)
+                    }
+                    Spacer(minLength: 4)
+                    Text("\(count)").font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.dimText)
+                }
+                .frame(height: 16)
+                Text(group.name).font(.system(size: 12)).lineLimit(1)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering ? 0.09 : 0.05)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(group.name)
+    }
+}
+
+/// A host of the group a Workspace tile is in: Home's row — one click picks, two open.
+private struct WorkspaceHostRow: View {
+    let host: Host
+    let picked: Bool
+    let pick: () -> Void
+    let open: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(host.badge)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(Theme.badgeColor(for: host))
+                .frame(width: 32, height: 16)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.badgeColor(for: host).opacity(0.18)))
+            Text(host.name).font(.system(size: 12)).lineLimit(1)
+            Spacer(minLength: 6)
+            Text(SidebarOutlineCoordinator.detail(of: host) ?? "")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.dimText)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(picked ? 0.1 : hovering ? 0.05 : 0)))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(count: 2) { pick(); open() }
+        .simultaneousGesture(TapGesture().onEnded { pick() })
     }
 }

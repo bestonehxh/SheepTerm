@@ -27,8 +27,30 @@ struct SidebarView: View {
     @State private var openSubgroups: Set<UUID> = Self.loadOpenSubgroups()
     @State private var menuAnchor = MenuAnchorBox()
     /// The group an "Add Subgroup…" from a group's menu makes a subgroup in.
+    /// Workspaces (6.1 (16)): the plan (synced) and which one this Mac shows.
+    @AppStorage(WorkspacePlan.storageKey) private var workspaceData: Data?
+    @AppStorage(WorkspacePlan.selectionKey) private var selectedWorkspace = ""
+    @State private var workspacePrompt: WorkspacePrompt?
     @AppStorage("showRecents") private var showRecents = true
     @AppStorage("recentsShown") private var recentsShown = 5
+
+    /// What a workspace name prompt is for.
+    enum WorkspacePrompt: Identifiable {
+        /// A new workspace; the top-level group (id) it was asked from moves there.
+        case new(groupID: UUID?)
+        /// Manage Workspaces…: every workspace's name and abbreviation, New, Delete.
+        case manage
+        var id: String {
+            switch self {
+            case .new(let group): return "new-\(group?.uuidString ?? "")"
+            case .manage: return "manage"
+            }
+        }
+    }
+
+    private var workspacePlan: WorkspacePlan { WorkspacePlan.load(workspaceData) }
+    /// nil = All Workspaces.
+    private var workspaceSelection: UUID? { workspacePlan.selection(selectedWorkspace) }
 
     private static let collapsedKey = "collapsedGroups"
     private static let openSubgroupsKey = "openSubgroups"
@@ -101,6 +123,10 @@ struct SidebarView: View {
         }
         // The icon and colour picked in the prompt (6.0 (44)).
         if icon != nil || color != nil { store.setIcon(icon, color: color, forGroup: created) }
+        // A new top-level group goes in the workspace being shown, so it does not vanish.
+        if parent == nil, let shown = workspaceSelection, shown != WorkspacePlan.defaultID {
+            WorkspaceDefaults.update { $0.assign(root: created, to: shown) }
+        }
         // A new subgroup is put where it can be seen.
         if let parent {
             collapsedGroups.remove(parent.id)
@@ -114,8 +140,9 @@ struct SidebarView: View {
     static func deleteDetail(hosts: Int, subgroups: Int) -> String {
         switch (hosts, subgroups) {
         case (0, 0): return String(localized: "The group is empty.")
-        case (_, 0): return String(localized: "\(hosts) hosts go with it. This cannot be undone.")
-        default: return String(localized: "\(hosts) hosts and \(subgroups) subgroups go with it. This cannot be undone.")
+        // Until 6.1 (28) these ended "…cannot be undone": a delete is kept 30 days now.
+        case (_, 0): return String(localized: "\(hosts) hosts go with it.") + " " + String(localized: "Kept in Recently Deleted for 30 days.")
+        default: return String(localized: "\(hosts) hosts and \(subgroups) subgroups go with it.") + " " + String(localized: "Kept in Recently Deleted for 30 days.")
         }
     }
 
@@ -196,7 +223,10 @@ struct SidebarView: View {
             openSubgroups: $openSubgroups,
             onEditHost: { host in
                 // A kind this build does not know is kept, never rewritten.
-                if host.kind == .unsupported { model.refuseUnsupported(host) } else { editTarget = host }
+                // A saved split has a name and nothing else to edit.
+                if host.kind == .unsupported { model.refuseUnsupported(host) }
+                else if host.kind == .split { model.renameSplitTarget = host }
+                else { editTarget = host }
             },
             onRenameGroup: { renameTarget = firstGroup(withID: $0.id) },
             onReorderGroups: { model.showReorderGroups = true },
@@ -236,7 +266,11 @@ struct SidebarView: View {
             groupColors: groupColors,
             badgeStyle: badgeStyle,
             environmentTags: environmentTags,
-            keyBridge: keyBridge
+            keyBridge: keyBridge,
+            visibleRoots: visibleRoots,
+            workspacePlan: workspacePlan,
+            onMoveToWorkspace: moveToWorkspace,
+            onNewWorkspace: askNewWorkspace
         )
         // Not only on appear: a Remove Section (or a rename) leaves its key
         // behind, and making a heading with that name again brought it back
@@ -286,6 +320,20 @@ struct SidebarView: View {
             // field keeps the same small top gap everywhere.
             VStack(spacing: 4) {
                 Color.clear.frame(height: topGap)
+                // The workspace lives IN the search field, as its scope
+                // (6.1 (24), design B — the owner's pick after a title in the
+                // traffic lights' row read badly in full screen), with a
+                // small caption over it saying what it is. Always there,
+                // General alone included (6.1 (57), the owner: "ให้ขึ้นไว้เลย"
+                // — was: only once there was more than General), so the
+                // first workspace can be made from its Manage Workspaces….
+                Text("Workspace")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, SidebarMetrics.boxInset + 4)
+                    .padding(.bottom, -1)
+                    .accessibilityHidden(true)
                 searchField
             }
             .padding(.bottom, 4)
@@ -312,6 +360,7 @@ struct SidebarView: View {
                 createGroup(named: rawName, in: parent, icon: icon, color: color)
             }
         }
+        .sheet(item: $workspacePrompt, content: workspacePromptSheet)
         .sheet(item: $renameTarget) { group in
             NamePromptSheet(title: "Rename Group", initialName: group.name) { rawName in
                 // Cleaned first, for the same reason as New Group above.
@@ -398,12 +447,111 @@ struct SidebarView: View {
         return image
     }()
 
+    /// The workspace picker above the search field (6.1 (16)): the chosen
+    /// one's name; the menu switches, makes, renames and deletes. Deleting
+    /// puts its groups back in General — no host or group is touched.
+    /// The workspace as a chip at the head of the search field: its name
+    /// and a small arrow on a lighter pill (6.1 (24), design B). The list has
+    /// every workspace, All, then Manage Workspaces… (`WorkspacesSheet`). The chip shows the SHORT form (`WorkspacePlan.label`:
+    /// the user's own abbreviation, else one made from the name; at most 4 letters) at one fixed width, so the field's typing room
+    /// never changes with the name (6.1 (25), the owner); the full name is
+    /// the tooltip and what the list shows.
+    /// Four wide capitals, the arrow and the chip's own padding.
+    static let workspaceChipWidth: CGFloat = 58
+
+    private var workspacePicker: some View {
+        let plan = workspacePlan
+        let selection = workspaceSelection
+        let current = selection.flatMap { id in plan.workspaces.first { $0.id == id } }
+        let title = current?.name ?? String(localized: "All Workspaces")
+        let chipLabel = current.map(WorkspacePlan.label) ?? WorkspacePlan.short(String(localized: "All"))
+        return Menu {
+            ForEach(plan.workspaces) { workspace in
+                Toggle(workspace.name, isOn: Binding(get: { selection == workspace.id },
+                                                     set: { if $0 { selectedWorkspace = workspace.id.uuidString } }))
+            }
+            Toggle("All Workspaces", isOn: Binding(get: { selection == nil },
+                                                   set: { if $0 { selectedWorkspace = WorkspacePlan.allValue } }))
+            Divider()
+            // New, Rename and Delete are one sheet in the middle of the
+            // window (6.1 (27), the owner), not three lines here.
+            Button("Manage Workspaces…") { workspacePrompt = .manage }
+        } label: {
+            HStack(spacing: 3) {
+                Text(chipLabel)
+                    .font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .frame(width: Self.workspaceChipWidth, height: 20)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.10)))
+            .contentShape(Rectangle())
+        }
+        // A plain button, not `.borderlessButton`: that style lays the label
+        // out itself (the arrow first).
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(title)
+        .accessibilityLabel("Workspace")
+    }
+
+    private var visibleRoots: Set<UUID>? { workspacePlan.visibleRoots(workspaceSelection, groups: store.groups) }
+
+    private func moveToWorkspace(_ root: UUID, _ workspace: UUID) {
+        WorkspaceDefaults.update { $0.assign(root: root, to: workspace) }
+    }
+
+    private func askNewWorkspace(_ groupID: UUID?) { workspacePrompt = .new(groupID: groupID) }
+
+    @ViewBuilder private func workspacePromptSheet(_ prompt: WorkspacePrompt) -> some View {
+        switch prompt {
+        case .new(let groupID):
+            WorkspaceNameSheet(title: "New Workspace", confirmLabel: "Create") { rawName, code in
+                var made: UUID?
+                WorkspaceDefaults.update { plan in
+                    guard let id = plan.add(named: rawName, code: code) else { return false }
+                    made = id
+                    if let groupID { plan.assign(root: groupID, to: id) }
+                    return true
+                }
+                if let made { selectedWorkspace = made.uuidString } else { reportWorkspaceName(rawName) }
+            }
+        case .manage:
+            WorkspacesSheet(plan: workspacePlan) { drafts, opened in
+                // Applied to the plan as it is NOW, not as it was when the
+                // sheet opened: a group filed meanwhile (Sync, an import)
+                // keeps its place.
+                WorkspaceDefaults.update { plan in
+                    guard let saved = plan.applying(drafts, opened: opened), saved != plan else { return false }
+                    plan = saved
+                    return true
+                }
+            }
+        }
+    }
+
+    private func reportWorkspaceName(_ raw: String) {
+        let name = HostStore.cleanGroupName(raw)
+        reportRenameProblem(name.isEmpty ? String(localized: "The name has no usable characters.")
+                                         : String(localized: "A workspace named “\(name)” already exists."),
+                            title: String(localized: "The workspace was not saved."))
+    }
+
     private var searchField: some View {
         HStack(spacing: 6) {
+            workspacePicker
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("Search or user@host", text: $searchText)
+            // "Search" only (6.1 (54), the owner: "233 แต่เป็น Search พอ"):
+            // the longer hint was cut at the edge in a narrow sidebar.
+            // user@host still connects from here (`searchConnectTarget`).
+            TextField("Search", text: $searchText)
                 .focused($searchFocused)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
@@ -438,8 +586,10 @@ struct SidebarView: View {
                 .accessibilityLabel("Clear Search")
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        // The field is 3 pt from the chip on three sides.
+        .padding(.leading, 3)
+        .padding(.trailing, 8)
+        .padding(.vertical, 3)
         .background { ControlFill(zone: .sidebar) }
         .padding(.horizontal, 10)
     }

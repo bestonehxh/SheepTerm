@@ -136,7 +136,9 @@ final class ShareLinks: ObservableObject {
             throw ShareLinkPlan.PlanError.passwordNotKept
         }
         group = ShareLinkPlan.attach(logins, credentialIDs: ids, to: group)
+        let roots = Set(GroupTree.children(of: nil, in: model.store.groups).map(\.id))
         let stats = model.store.applyImport(group, action: .createNew, replace: [:])
+        WorkspaceDefaults.adoptNewRoots(since: roots, groups: model.store.groups)
         return Imported(name: stats.groupName ?? group.name, hostCount: stats.addedHosts, loginCount: ids.count)
     }
 

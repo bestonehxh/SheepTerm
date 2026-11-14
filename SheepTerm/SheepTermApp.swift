@@ -398,11 +398,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .init(source: .group(bldg.id), size: .small), .init(source: .group(floor.id), size: .small),
                     .init(source: .group(bldg.id), size: .medium),
                 ]
+                // The board goes into the ARGUMENT domain — read first, never
+                // saved: a scratch home does not move the preferences, and
+                // this hook used to write the sample board over the user's own.
+                var volatile = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
                 // SHEEPTERM_DEBUG_HOME_DEFAULT=1: the board a new Mac gets, not the sample one.
-                if env["SHEEPTERM_DEBUG_HOME_DEFAULT"] == "1" {
-                    UserDefaults.standard.removeObject(forKey: HomePlan.storageKey)
+                // SHEEPTERM_DEBUG_HOME_WORKSPACE=1: a Workspace tile (6.1 (33)); "<path>-inside.png" = the tile inside a group.
+                if env["SHEEPTERM_DEBUG_HOME_WORKSPACE"] == "1" {
+                    let sample: [HomePlan.Widget] = [.init(source: .workspace(WorkspacePlan.defaultID), size: .large),
+                                                     .init(source: .recent, size: .large),
+                                                     .init(source: .workspace(WorkspacePlan.defaultID), size: .wide)]
+                    volatile[HomePlan.storageKey] = HomePlan.save(sample)
+                    volatile[HomePlan.newerKey] = HomePlan.saveNewer(sample)
+                    volatile[WorkspacePlan.storageKey] = WorkspacePlan.save(WorkspacePlan())
+                    volatile[WorkspacePlan.selectionKey] = WorkspacePlan.allValue
+                } else if env["SHEEPTERM_DEBUG_HOME_DEFAULT"] == "1" {
+                    volatile[HomePlan.storageKey] = HomePlan.save(HomePlan.defaultWidgets(groups: store.groups))
                 } else {
-                    UserDefaults.standard.set(HomePlan.save(board), forKey: HomePlan.storageKey)
+                    volatile[HomePlan.storageKey] = HomePlan.save(board)
+                }
+                UserDefaults.standard.setVolatileDomain(volatile, forName: UserDefaults.argumentDomain)
+                if env["SHEEPTERM_DEBUG_HOME_WORKSPACE"] == "1" {
+                    let inside = WorkspaceTile(workspace: WorkspacePlan.defaultID, size: .large, start: bldg.id)
+                        .environmentObject(AppModel.shared)
+                        .padding(12).frame(width: 340, height: HomePlan.Size.large.height, alignment: .topLeading)
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Theme.chrome))
+                        .padding(16).background(Theme.tabActive).environment(\.colorScheme, .dark)
+                    let tileHost = NSHostingView(rootView: inside)
+                    tileHost.appearance = NSAppearance(named: .darkAqua)
+                    tileHost.frame = NSRect(origin: .zero, size: tileHost.fittingSize)
+                    let tileWindow = NSWindow(contentRect: NSRect(x: -6000, y: -4000, width: tileHost.frame.width, height: tileHost.frame.height),
+                                              styleMask: .borderless, backing: .buffered, defer: false)
+                    tileWindow.appearance = NSAppearance(named: .darkAqua)
+                    tileWindow.contentView = tileHost
+                    tileWindow.orderFront(nil)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        if let rep = tileHost.bitmapImageRepForCachingDisplay(in: tileHost.bounds) {
+                            tileHost.cacheDisplay(in: tileHost.bounds, to: rep)
+                            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path + "-inside.png"))
+                        }
+                        tileWindow.orderOut(nil)
+                    }
                 }
                 let width = CGFloat(Double(env["SHEEPTERM_DEBUG_HOME_WIDTH"] ?? "") ?? 900)
                 let view = HomeView().environmentObject(AppModel.shared).frame(width: width, height: 980)
@@ -416,6 +452,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 window.contentView = host
                 window.orderFront(nil)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_BROADCAST_PNG=<path>: the Broadcast sheet with several
+        // lines in its box (6.1 (51)), rendered off screen. Scratch runs only.
+        if let path = env["SHEEPTERM_DEBUG_BROADCAST_PNG"], PasswordVault.usesMemoryKeychain {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let view = BroadcastSheet(text: "configure terminal\nvlan 10\n   name users\nvlan 20\n   name servers\nend\nshow vlan")
+                    .background(Theme.tabActive).environmentObject(AppModel.shared).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    host.frame.size = host.fittingSize
+                    window.setContentSize(host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
                     if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                         host.cacheDisplay(in: host.bounds, to: rep)
                         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
@@ -455,6 +517,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     host.frame.size = host.fittingSize
                     window.setContentSize(host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_SEARCHROW_PNG=<path>: the sidebar's search row beside the
+        // workspace chip at 200, 232 and 233 pt (6.1 (54)). Scratch runs only.
+        if let path = env["SHEEPTERM_DEBUG_SEARCHROW_PNG"], PasswordVault.usesMemoryKeychain {
+            var volatile = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+            // General alone: the chip shows anyway (6.1 (57)).
+            volatile[WorkspacePlan.storageKey] = WorkspacePlan.save(WorkspacePlan())
+            volatile[WorkspacePlan.selectionKey] = WorkspacePlan.defaultID.uuidString
+            UserDefaults.standard.setVolatileDomain(volatile, forName: UserDefaults.argumentDomain)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let store = AppModel.shared.store
+                let view = HStack(alignment: .top, spacing: 16) {
+                    ForEach([200.0, 232.0, 233.0], id: \.self) { width in
+                        SidebarView(store: store).frame(width: width, height: 110)
+                    }
+                }
+                .padding(16).background(Theme.tabActive).environmentObject(AppModel.shared).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    window.orderOut(nil)
+                }
+            }
+        }
+        // SHEEPTERM_DEBUG_WORKSPACE_PNG=<path>: 6.1 (16)–(18) — the sidebar of the
+        // scratch HOME's hosts.json at the width its tree asks for (seven
+        // levels, the workspace picker), and an Add Hosts preview. Scratch runs only.
+        if let path = env["SHEEPTERM_DEBUG_WORKSPACE_PNG"], PasswordVault.usesMemoryKeychain {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let store = AppModel.shared.store
+                let groups = store.groups
+                let rows: [AddHostsPreview.Row] = [
+                    .init(id: UUID(), name: "fw-02", address: "10.0.1.2", port: 22, kind: .ssh, section: "DC 1/Rack A"),
+                    .init(id: UUID(), name: "ap-floor2", address: "10.0.2.1", port: 22, kind: .ssh, section: "DC 1/Rack B"),
+                    .init(id: UUID(), name: "dup-core", address: groups.first?.hosts.first?.address ?? "10.0.0.1", port: 22, kind: .ssh, section: ""),
+                ]
+                let top = AddHostsPreview.tree(rows: rows, root: groups.first?.id, newName: "", groups: groups)
+                let paste = "Name\tHost / IP\tGroup\tType\nfw-02\tadmin@10.0.1.2\tDC 1/Rack A\tssh\nap-floor2\t10.0.2.1\tDC 1/Rack B\tssh\ndup-core\t\(groups.first?.hosts.first?.address ?? "10.0.0.1")\t\tssh\nconsole\t10.0.0.50:2001\tDC 1\ttelnet"
+                let sheet = AddHostsSheet(request: AddHostsRequest(groupID: groups.first?.id, debugPaste: paste, debugReview: env["SHEEPTERM_DEBUG_ADDHOSTS_REVIEW"] == "1"))
+                    .environmentObject(AppModel.shared).environment(\.colorScheme, .dark)
+                let sheetHost = NSHostingView(rootView: sheet)
+                sheetHost.appearance = NSAppearance(named: .darkAqua)
+                sheetHost.frame.size = sheetHost.fittingSize
+                let sheetWindow = NSWindow(contentRect: NSRect(x: -6000, y: -4000, width: sheetHost.frame.width, height: sheetHost.frame.height),
+                                           styleMask: .borderless, backing: .buffered, defer: false)
+                sheetWindow.appearance = NSAppearance(named: .darkAqua)
+                sheetWindow.contentView = sheetHost
+                sheetWindow.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    sheetHost.layoutSubtreeIfNeeded()
+                    if let rep = sheetHost.bitmapImageRepForCachingDisplay(in: sheetHost.bounds) {
+                        sheetHost.cacheDisplay(in: sheetHost.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-addhosts.png")))
+                    }
+                    sheetWindow.orderOut(nil)
+                }
+                let view = HStack(alignment: .top, spacing: 20) {
+                    SidebarSlot(store: store).frame(height: 640)
+                    AddHostsPreviewNode(node: top, all: AddHostsSheet.flatten(top), active: nil, move: { _, _ in }, select: { _ in })
+                        .padding(8).frame(width: 230, alignment: .topLeading)
+                        .background { ControlFill(zone: .sheet, cornerRadius: 6) }
+                }
+                .padding(24).background(Theme.tabActive).environmentObject(AppModel.shared).environment(\.colorScheme, .dark)
+                let host = NSHostingView(rootView: view)
+                host.appearance = NSAppearance(named: .darkAqua)
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     host.layoutSubtreeIfNeeded()
                     if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                         host.cacheDisplay(in: host.bounds, to: rep)
@@ -1371,9 +1524,12 @@ struct SheepTermCommands: Commands {
             // have no line to put one on.
             Button("Send Break") { model.sendBreak() }
                 .keyboardShortcut("b", modifiers: [.control, .option])
-                .disabled(!model.canSendBreak)
+                // Not from Logs / Guide / Settings: with one of those in
+                // front, ⌃⌥B still put a BREAK on the console behind it —
+                // on a router that can mean ROMMON (review 2026-11-11).
+                .disabled(!model.canSendBreak || !mainWindowKey.isKey)
             Button("Send File via XMODEM…") { model.sendFileViaXModem() }
-                .disabled(!model.canSendFileViaXModem)
+                .disabled(!model.canSendFileViaXModem || !mainWindowKey.isKey)
             Divider()
             // Search in the scrollback. SheepVT owns the engine and the
             // find bar itself — these items only forward the standard
@@ -1381,16 +1537,16 @@ struct SheepTermCommands: Commands {
             // AppModel.sendFinderAction).
             Button("Find…") { model.showFind() }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(model.selectedTab == nil)
+                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
             Button("Find Next") { model.findNextMatch() }
                 .keyboardShortcut("g", modifiers: .command)
-                .disabled(model.selectedTab == nil)
+                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
             Button("Find Previous") { model.findPreviousMatch() }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(model.selectedTab == nil)
+                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
             Button("Use Selection for Find") { model.useSelectionForFind() }
                 .keyboardShortcut("e", modifiers: .command)
-                .disabled(model.selectedTab == nil)
+                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
         }
 
         // View (6.0 (12)): grouped into submenus — the order and every
@@ -1665,7 +1821,7 @@ struct SheepTermCommands: Commands {
             }
             .disabled(model.selectedID.map { model.splitCandidates(for: $0).isEmpty } ?? true || !mainWindowKey.isKey)
             Button("Close Pane") { model.closeCurrentTab() }
-                .disabled(model.selectedTab == nil)
+                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
             // Also by dragging the pane's header onto the empty tab strip.
             // Plain names (6.0 (56), the user: the split menu was hard to read).
             // 6.1 (9): the focused pane's stopwatch.
@@ -1687,28 +1843,33 @@ struct SheepTermCommands: Commands {
                 Button("Down") { model.focusPane(.down) }
                     .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             }
-            .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
+            .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2 || !mainWindowKey.isKey)
             Button("Maximize Pane") { model.toggleZoomFocusedPane() }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
+                .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2 || !mainWindowKey.isKey)
             Button("Equal Sizes") { model.evenOutCurrentPanes() }
-                .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2)
+                .disabled((model.selectedWorkspace?.paneCount ?? 1) < 2 || !mainWindowKey.isKey)
             Divider()
             Button("Next Tab") { model.selectAdjacentTab(offset: 1) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
+                .disabled(!mainWindowKey.isKey)
             Button("Previous Tab") { model.selectAdjacentTab(offset: -1) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
+                .disabled(!mainWindowKey.isKey)
             Divider()
             // ⌃⌘ arrows, not ⇧⌘: ⇧⌘←/→ is select-to-line-edge in every text
             // field (sidebar search, Quick Connect) and the menu would win.
             Button("Move Tab Left") { model.moveSelectedTab(right: false) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                .disabled(!mainWindowKey.isKey)
             Button("Move Tab Right") { model.moveSelectedTab(right: true) }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                .disabled(!mainWindowKey.isKey)
             Divider()
             ForEach(1..<10, id: \.self) { number in
                 Button("Tab \(number)") { model.selectTab(number: number) }
                     .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
+                    .disabled(!mainWindowKey.isKey)
             }
         }
     }

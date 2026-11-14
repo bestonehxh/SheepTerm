@@ -98,6 +98,16 @@ struct SidebarOutline: NSViewRepresentable {
     /// The search field's ↑/↓/Return reach the outline through this (the
     /// caret never leaves the field); the coordinator fills it in.
     var keyBridge = SidebarKeyBridge()
+    /// The top-level groups the chosen workspace shows (6.1 (16)); nil = All
+    /// Workspaces, every group (`WorkspacePlan.visibleRoots`).
+    var visibleRoots: Set<UUID>? = nil
+    /// The workspaces, for a top-level group's "Move to Workspace ▸".
+    var workspacePlan = WorkspacePlan()
+    /// Moves a top-level group (id) to a workspace (id).
+    var onMoveToWorkspace: (UUID, UUID) -> Void = { _, _ in }
+    /// "New Workspace…": named in a prompt only SwiftUI can show; the group
+    /// (id) it was asked from moves there.
+    var onNewWorkspace: (UUID?) -> Void = { _ in }
 
     func makeCoordinator() -> SidebarOutlineCoordinator {
         SidebarOutlineCoordinator(self)
@@ -185,8 +195,10 @@ final class SidebarOutlineView: NSOutlineView {
     /// Design G (6.0 (12)) keeps both where they were — triangle glyph at
     /// 9.5, name at `SidebarMetrics.nameX` (22.5) — and puts the level bar
     /// in the gutter in front of the triangle, so the bar costs no width.
-    static let triangleShift: CGFloat = 6
-    static let headerShift: CGFloat = 6
+    /// 6.1 (22): 5.5 pt more, so the triangle sits INSIDE the highlight box
+    /// (`SidebarMetrics.arrowX`), not on its edge.
+    static let triangleShift: CGFloat = 6 + SidebarMetrics.shift
+    static let headerShift: CGFloat = 6 + SidebarMetrics.shift
 
     private func isHeader(_ row: Int) -> Bool {
         (item(atRow: row) as? SidebarItem)?.kind == .group
@@ -347,12 +359,12 @@ final class SidebarRowView: NSTableRowView {
     private func fillBox(_ color: NSColor?) {
         guard let color else { return }
         color.setFill()
-        // 6 pt on the right; on the left it starts past the level bar (6.0
-        // (45), the user: the box ate the colour bar) — the bar ends at
-        // `barX + barWidth`, the box 2.5 pt after it. A group header's
+        // `boxInset` on both sides, the search field's own. A top-level
+        // bar stays left of it (6.0 (45), the user: the box ate the colour
+        // bar): the bar ends at 8, the box starts at 10. A group header's
         // triangle is moved INTO the box (`SidebarOutlineView.frameOfOutlineCell`).
-        let left = SidebarMetrics.barX + SidebarMetrics.barWidth + 2.5
-        let box = NSRect(x: bounds.minX + left, y: bounds.minY + 1, width: bounds.width - left - 6, height: bounds.height - 2)
+        let left = SidebarMetrics.boxInset
+        let box = NSRect(x: bounds.minX + left, y: bounds.minY + 1, width: bounds.width - left * 2, height: bounds.height - 2)
         NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6).fill()
     }
 
@@ -414,20 +426,33 @@ protocol SidebarRowHighlight: AnyObject {
 /// This Mac / Recent's hosts too. Every row's text stops `trailing` short of
 /// the row's right edge. The highlight box keeps its own 6 pt inset.
 enum SidebarMetrics {
-    static let barX: CGFloat = 4.5
+    /// The highlight box's inset, the SAME left and right and the search
+    /// field's own (6.1 (22), the owner: "เงาคลุมไม่ครบ ลูกศรมันชิดล้นไป แล้วทำให้
+    /// สมดุลซ้ายขวา ของทุกอันเลย" — the box began at the arrow and was 14 / 10).
+    /// A top-level bar stays in the gutter left of the box; arrow, name and
+    /// badges sit `shift` further in than before, so the arrow has 5 pt of box
+    /// before it.
+    static let boxInset: CGFloat = 10
+    static let shift: CGFloat = 5.5
+    static let barX: CGFloat = 5
     static let barWidth: CGFloat = 3
     static let barHeight: CGFloat = 14
-    static let step: CGFloat = 14
+    /// 10 since 6.1 (22) (was 14): seven levels cost 60 pt, not 84.
+    static let step: CGFloat = 10
     /// The header triangle's glyph (AppKit's, shifted `headerShift`).
-    static let arrowX: CGFloat = 9.5
+    static let arrowX: CGFloat = 9.5 + shift
     /// A top-level group's name.
-    static let nameX: CGFloat = 22.5
+    static let nameX: CGFloat = 22.5 + shift
     /// A top-level group's hosts' badges (and This Mac / Recent's): 6 pt past
     /// the arrow (6.0 (39), the user: "hosts sit a little too far left").
-    static let hostX: CGFloat = 16
-    static let trailing: CGFloat = 9
-    /// From a group's name back to its bar.
+    static let hostX: CGFloat = 16 + shift
+    static let trailing: CGFloat = boxInset + 4
+    /// From a top-level group's name back to its bar (the box's edge is between them).
     static let barToName: CGFloat = nameX - barX
+    /// A subgroup's bar is inside the box, right before its arrow: 5 pt
+    /// from bar to arrow glyph, 13 from arrow to name.
+    static let folderBarToArrow: CGFloat = 5
+    static let folderBarToName: CGFloat = 18
     /// A label field draws its text this far in from its frame (measured on
     /// screen); the places above are where the TEXT starts.
     static let labelInset: CGFloat = 2.5
@@ -630,9 +655,11 @@ final class SidebarFolderCell: NSView, SidebarRowHighlight, SidebarLevelBarCell 
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        // A host name's size and weight, not a header's: the bold top-level
-        // header is the only bold row, so a subgroup never reads as one.
-        title.font = .systemFont(ofSize: 12.5, weight: .medium)
+        // Lighter than a header and no bigger (6.1 (22), the owner: with
+        // seven levels the sidebar was a staircase of heavy names): the bold
+        // top-level header is the only bold row, a subgroup is plain and a
+        // shade quieter.
+        title.font = .systemFont(ofSize: 11.5, weight: .regular)
         title.lineBreakMode = .byTruncatingTail
         count.font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .medium)
         for view in [levelBar, arrow, iconView, title, count] { addSubview(view) }
@@ -646,16 +673,20 @@ final class SidebarFolderCell: NSView, SidebarRowHighlight, SidebarLevelBarCell 
 
     func setRowSelected(_ selected: Bool) {
         rowSelected = selected
-        title.textColor = selected ? .white : .labelColor
+        title.textColor = selected ? .white : Self.nameColor
         count.textColor = selected ? NSColor.white.withAlphaComponent(0.6) : .tertiaryLabelColor
         arrow.contentTintColor = selected ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
     }
+
+    static let nameColor = NSColor.labelColor.withAlphaComponent(0.82)
 
     func configure(title text: String, count number: Int, open: Bool) {
         arrow.image = NSImage(systemSymbolName: open ? "chevron.down" : "chevron.right", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 9, weight: .bold))
         title.stringValue = text
-        count.stringValue = String(number)
+        // An open subgroup shows its hosts; the number is for a shut one
+        // (6.1 (22): a "1" on every level of a deep tree was noise).
+        count.stringValue = open ? "" : String(number)
         setAccessibilityLabel(String(localized: "\(text), \(number) hosts"))
         setRowSelected(rowSelected)
         needsLayout = true
@@ -676,12 +707,12 @@ final class SidebarFolderCell: NSView, SidebarRowHighlight, SidebarLevelBarCell 
         iconView.frame = NSRect(x: baseX + SidebarMetrics.labelInset - 1, y: ((bounds.height - SidebarGroupIconView.size) / 2).rounded(),
                                 width: SidebarGroupIconView.size, height: SidebarGroupIconView.size)
         let textX = baseX + iconStep
-        let barX = baseX + SidebarMetrics.labelInset - SidebarMetrics.barToName
+        let barX = baseX + SidebarMetrics.labelInset - SidebarMetrics.folderBarToName
         levelBar.frame = NSRect(x: barX, y: ((bounds.height - SidebarMetrics.barHeight) / 2).rounded(),
                                 width: SidebarMetrics.barWidth, height: SidebarMetrics.barHeight)
         // The arrow's glyph where a header's sits relative to its bar
         // (`SidebarMetrics.arrowX`); the 12 pt frame centres a 7.5 pt glyph.
-        let arrowX = barX + (SidebarMetrics.arrowX - SidebarMetrics.barX) - 2.25
+        let arrowX = barX + SidebarMetrics.folderBarToArrow - 2.25
         arrow.frame = NSRect(x: arrowX, y: (bounds.height - 12) / 2, width: 12, height: 12)
         // Measured from the text, not the field: a reused cell's field still
         // has the previous row's size here.
@@ -958,6 +989,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         var recentsShown: Int
         var collapsed: Set<UUID>
         var open: Set<UUID>
+        var visibleRoots: Set<UUID>?
     }
     private var lastStamp: InputStamp?
 
@@ -981,11 +1013,16 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             local.children = [shell]
             result.append(local)
 
-            if parent.showRecents && parent.searchText.isEmpty && !parent.store.recents.isEmpty {
+            if parent.showRecents && parent.searchText.isEmpty
+                && parent.store.recents.contains(where: { WorkspacePlan.shows($0, visible: parent.visibleRoots, groups: parent.store.groups) }) {
                 let recent = item(id: "section-recent", kind: .section)
                 recent.title = String(localized: "Recent")
                 let shown = min(max(parent.recentsShown, 1), HostStore.maxRecents)
-                recent.children = parent.store.recents.prefix(shown).map { host in
+                // The chosen workspace's recents (a typed connection always shows).
+                let recents = parent.store.recents.filter {
+                    WorkspacePlan.shows($0, visible: parent.visibleRoots, groups: parent.store.groups)
+                }
+                recent.children = recents.prefix(shown).map { host in
                     let row = item(id: "recent-\(host.id.uuidString)", kind: .staticRow)
                     row.host = host
                     return row
@@ -1045,8 +1082,11 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             }
             return out
         }
+        // Only the chosen workspace's top-level groups and what is under them.
+        let visible = parent.visibleRoots
+        func inWorkspace(_ id: UUID) -> Bool { visible.map { $0.contains(WorkspacePlan.root(of: id, in: all)) } ?? true }
         if searching {
-            for entry in GroupTree.preorder(all) {
+            for entry in GroupTree.preorder(all) where inWorkspace(entry.group.id) {
                 let hosts = shown[entry.group.id] ?? []
                 guard !hosts.isEmpty else { continue }
                 let node = item(id: "group-\(entry.group.id.uuidString)", kind: .group)
@@ -1057,7 +1097,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 result.append(node)
             }
         } else {
-            for group in GroupTree.children(of: nil, in: all) {
+            for group in GroupTree.children(of: nil, in: all) where visible?.contains(group.id) ?? true {
                 let node = item(id: "group-\(group.id.uuidString)", kind: .group)
                 node.group = group
                 node.title = group.name
@@ -1133,7 +1173,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                                showRecents: parent.showRecents,
                                recentsShown: parent.recentsShown,
                                collapsed: parent.collapsedGroups,
-                               open: parent.openSubgroups)
+                               open: parent.openSubgroups,
+                               visibleRoots: parent.visibleRoots)
         if !force, stamp == lastStamp { return }
         lastStamp = stamp
 
@@ -1649,7 +1690,13 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         let submenu = NSMenu()
         if !allTopLevel {
             add(submenu, String(localized: "Top Level")) { [weak self] in
-                self?.parent.store.moveGroups(withIDs: ids, toParent: nil, atIndex: .max)
+                guard let self else { return }
+                let store = self.parent.store
+                let roots = Set(GroupTree.children(of: nil, in: store.groups).map(\.id))
+                store.moveGroups(withIDs: ids, toParent: nil, atIndex: .max)
+                // Now a top-level group: in the workspace being shown, or it
+                // would vanish from the sidebar as it lands.
+                WorkspaceDefaults.adoptNewRoots(since: roots, groups: store.groups)
             }
             if !targets.isEmpty { submenu.addItem(.separator()) }
         }
@@ -1659,6 +1706,23 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             }
             submenu.items.last?.indentationLevel = target.depth - 1
         }
+        item.submenu = submenu
+        return item
+    }
+
+    /// "Move to Workspace ▸" for a top-level group (6.1 (16)): every
+    /// workspace, the one it is in ticked, then New Workspace….
+    private func workspaceSubmenu(for root: UUID) -> NSMenuItem {
+        let item = NSMenuItem(title: String(localized: "Move to Workspace"), action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let plan = parent.workspacePlan
+        let current = plan.workspace(for: root)
+        for workspace in plan.workspaces {
+            add(submenu, workspace.name) { [weak self] in self?.parent.onMoveToWorkspace(root, workspace.id) }
+            submenu.items.last?.state = workspace.id == current ? .on : .off
+        }
+        submenu.addItem(.separator())
+        add(submenu, String(localized: "New Workspace…")) { [weak self] in self?.parent.onNewWorkspace(root) }
         item.submenu = submenu
         return item
     }
@@ -1718,6 +1782,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             add(menu, String(localized: "Rename Group…")) { [weak self] in self?.parent.onRenameGroup(group) }
             if let move = groupMoveSubmenu(for: [group.id]) { menu.addItem(move) }
             if group.parentID == nil {
+                menu.addItem(workspaceSubmenu(for: group.id))
                 add(menu, String(localized: "Reorder Groups…")) { [weak self] in self?.parent.onReorderGroups() }
             }
             menu.addItem(.separator())
@@ -1778,7 +1843,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                 let alert = SheepAlert()
                 alert.alertStyle = .warning
                 alert.messageText = String(localized: "Remove “\(host.name)”?")
-                alert.informativeText = String(localized: "This cannot be undone.")
+                alert.informativeText = String(localized: "Kept in Recently Deleted for 30 days.")
                 alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
                 alert.addButton(withTitle: String(localized: "Remove"))
                 guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
@@ -1861,8 +1926,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             alert.alertStyle = .warning
             alert.messageText = String(localized: "Delete \(groups.count) groups?")
             alert.informativeText = subgroups == 0
-                ? String(localized: "\(hostCount) hosts go with them. This cannot be undone.")
-                : String(localized: "\(hostCount) hosts and \(subgroups) subgroups go with them. This cannot be undone.")
+                ? String(localized: "\(hostCount) hosts go with them.") + " " + String(localized: "Kept in Recently Deleted for 30 days.")
+                : String(localized: "\(hostCount) hosts and \(subgroups) subgroups go with them.") + " " + String(localized: "Kept in Recently Deleted for 30 days.")
             alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
             alert.addButton(withTitle: String(localized: "Delete"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
@@ -1899,8 +1964,8 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             let named = hosts.prefix(2).map(\.name).joined(separator: ", ")
             let more = hosts.count - 2
             alert.informativeText = more > 0
-                ? String(localized: "\(named) and \(more) more. This cannot be undone.")
-                : String(localized: "\(named). This cannot be undone.")
+                ? String(localized: "\(named) and \(more) more.") + " " + String(localized: "Kept in Recently Deleted for 30 days.")
+                : named + ". " + String(localized: "Kept in Recently Deleted for 30 days.")
             alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
             alert.addButton(withTitle: String(localized: "Remove"))
             guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
@@ -2187,7 +2252,14 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
                     parent.openSubgroups = SidebarLayout.toggledOpen(into, in: parent.openSubgroups, groups: parent.store.groups)
                 }
             }
-            parent.store.moveGroups(withIDs: live, toParent: drop.parent, atIndex: drop.slot)
+            // Among the top-level groups the slot counts the groups SHOWN;
+            // the store counts all of them (`WorkspacePlan.topLevelIndex`).
+            let all = parent.store.groups
+            let slot = drop.parent == nil ? WorkspacePlan.topLevelIndex(shownSlot: drop.slot, shown: parent.visibleRoots, groups: all) : drop.slot
+            let rootsBefore = Set(GroupTree.children(of: nil, in: all).map(\.id))
+            parent.store.moveGroups(withIDs: live, toParent: drop.parent, atIndex: slot)
+            // A subgroup dragged out to the top level joins the workspace shown.
+            if drop.parent == nil { WorkspaceDefaults.adoptNewRoots(since: rootsBefore, groups: parent.store.groups) }
         case .hosts(let ids):
             // Resolved the same way validateDrop resolved it, from the node
             // AppKit hands back.
@@ -2378,6 +2450,12 @@ final class MenuAction: NSMenuItem {
             menu.addItem(.separator())
             if let reorder { add(menu, String(localized: "Reorder Groups…"), reorder) }
             add(menu, allFolded ? String(localized: "Expand All") : String(localized: "Collapse All")) { fold(!allFolded) }
+        }
+        // What was deleted in the last 30 days (6.1 (28)); there only while
+        // there is something to put back (clean UI).
+        if !model.store.trash.isEmpty {
+            menu.addItem(.separator())
+            add(menu, String(localized: "Recently Deleted…")) { model.showRecentlyDeleted = true }
         }
         return menu
     }

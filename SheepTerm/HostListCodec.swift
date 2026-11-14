@@ -63,7 +63,10 @@ nonisolated enum HostListCodec {
                                   type: host.hostType?.rawValue ?? "ssh", group: path, id: host.id)
                 switch JumpTarget.resolve(host: host, saved: all, groups: groups) {
                 case .saved(let bastion): entry.jump = bastion.name; entry.jumpID = bastion.id
-                case .spec(let bastion): entry.jump = target(Entry(name: "", address: bastion.address, port: bastion.port, user: bastion.username))
+                case .spec(let bastion):
+                    // A typed list (6.1 (34)) goes out whole, hop by hop.
+                    let hops = host.jumpSpecValue.flatMap(JumpTarget.parseChain) ?? [bastion]
+                    entry.jump = hops.map { target(Entry(name: "", address: $0.address, port: $0.port, user: $0.username)) }.joined(separator: ",")
                 case .none, .invalid: break
                 }
                 return entry
@@ -326,6 +329,43 @@ nonisolated enum HostListCodec {
         var lines = ["Name\tHost / IP\tGroup\tType"]
         for e in entries { lines.append([e.name, target(e), e.group, e.type].map(cell).joined(separator: "\t")) }
         return lines.joined(separator: "\n")
+    }
+
+    /// Add Hosts ▸ Examples ▸ Save Template (6.1 (17), the owner: a form to
+    /// fill in): a file with the headings Import accepts and two rows to copy,
+    /// opened in Excel / Numbers, filled in and imported back. The CSV uses
+    /// only `BulkHostParser.headingColumns` (anything else is refused); a
+    /// Group path goes as deep as the user may make subgroups.
+    enum Templates {
+        static let csv = """
+        Name,Host / IP,Type,Credential,Group
+        Core-SW1,admin@10.0.0.1,ssh,,Head Office/Building A
+        Console-Server,10.0.0.50:2001,telnet,,Lab
+        """
+
+        static let json = """
+        [
+          {"name": "Core-SW1", "host": "10.0.0.1", "port": 22, "user": "admin",
+           "type": "ssh", "group": "Head Office/Building A"},
+          {"name": "Console-Server", "host": "10.0.0.50", "port": 2001, "type": "telnet", "group": "Lab"}
+        ]
+        """
+
+        static func text(_ format: Format) -> String? {
+            switch format {
+            case .csv: csv + "\n"
+            case .json: json + "\n"
+            case .sshConfig: nil
+            }
+        }
+
+        static func fileName(_ format: Format) -> String {
+            switch format {
+            case .csv: "SheepTerm Hosts Template.csv"
+            case .json: "SheepTerm Hosts Template.json"
+            case .sshConfig: "config"
+            }
+        }
     }
 
     /// The Add Hosts examples (6.1 (9)): kept here, beside the reader they

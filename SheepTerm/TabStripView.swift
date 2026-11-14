@@ -638,9 +638,17 @@ struct TabItemView: View {
                 Button("Split Together") { model.splitTogether(picked, focus: tab.id) }
                     .help("The ⌘-clicked tabs in one, side by side")
             }
+            // Several panes: the tab as a row in the sidebar (6.1 (36)).
+            if AppModel.shared.canSaveSplit(of: tab.id) {
+                Button("Save Split…") { AppModel.shared.requestSaveSplit(of: tab.id) }
+            }
             Divider()
             switch tab.content {
             case .ssh, .serial:
+                // Panes brought back at launch, all at once (6.1 (35)).
+                if AppModel.shared.hasTabsAwaitingConnect {
+                    Button("Connect All") { AppModel.shared.connectAllWaiting() }
+                }
                 Button("Reconnect") { onReconnect() }
                 if case .ssh = tab.content {
                     Button("Duplicate") { onDuplicate() }

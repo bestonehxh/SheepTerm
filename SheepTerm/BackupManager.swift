@@ -74,10 +74,14 @@ enum BackupManager {
         "terminalFontSmoothing", "scrollbackLines",
         // 6.1: Settings ▸ Optimization and the Home board (Fable round 2: a
         // restore brought none of them back).
-        "homeWidgets", "homeColumns", "hostBadgeStyle", "newTabButtonPosition", "launchTab",
+        "homeWidgets", "homeWidgetsNewer", "homeColumns", "hostBadgeStyle", "newTabButtonPosition", "launchTab",
         "showHomeButton", "showSearchButton", "homeButtonPlace", "optimizationPresets", "optimizationBuiltIns",
         // 6.1 (8): Rack Fill's top scores (the game in progress is not kept).
         "rackFillTop",
+        // 6.1 (14): the workspaces and which top-level group is in which
+        // (`WorkspacePlan.storageKey`). Listed — so synced, backed up and
+        // never read as deleted — a release before anything makes one.
+        "hostWorkspaces",
         "feature.keyFirst", "feature.jumpServers", "feature.forwardsInAddHost", "feature.telnet", "feature.serial",
         "feature.environmentTags", "feature.cloudDocker", "feature.deviceFamilies", "feature.broadcast",
         "TSMLanguageIndicatorEnabled",

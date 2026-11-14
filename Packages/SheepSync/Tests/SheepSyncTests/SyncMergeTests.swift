@@ -18,6 +18,23 @@ final class SyncMergeTests: XCTestCase {
          ShadowEntry(stamp: stamp(t, dev), deleted: false, digest: digest(id, d(value))))
     }
 
+    /// SheepTerm 6.1 (14): a record a NEWER build made (a setting this build
+    /// does not list) is applied, not seen again, and must not come back as a
+    /// deletion — the app marks the family unavailable by prefix.
+    func testARecordThisBuildCannotSeeUnderAnUnavailablePrefixIsNeverDeleted() {
+        let (r, s) = synced("setting:hostWorkspaces", "{}", 500)
+        let snapshot = SyncSnapshot(records: ["setting:theme": d("dark")], unavailable: [], unavailablePrefixes: ["setting:"])
+        let p = SyncMerge.plan(snapshot: snapshot, shadow: ["setting:hostWorkspaces": s], remote: [r.id: r],
+                               now: 1000, device: "A", digest: digest)
+        XCTAssertEqual(p.merged["setting:hostWorkspaces"], r, "the cloud's copy stays")
+        XCTAssertNil(p.apply["setting:hostWorkspaces"] ?? nil)
+        XCTAssertFalse(p.merged["setting:hostWorkspaces"]?.deleted ?? true)
+        // Without the prefix the same state WAS a deletion (what older builds did).
+        let old = SyncMerge.plan(snapshot: SyncSnapshot(records: ["setting:theme": d("dark")], unavailable: []),
+                                 shadow: ["setting:hostWorkspaces": s], remote: [r.id: r], now: 1000, device: "A", digest: digest)
+        XCTAssertEqual(old.merged["setting:hostWorkspaces"]?.deleted, true)
+    }
+
     func testFirstJoinTakesTheCloudAndUploadsOnlyWhatTheCloudLacks() {
         let remote = SyncRecord(id: "hosts", stamp: stamp(500), payload: d("cloud"))
         let p = plan(["hosts": "fresh-mac-default", "snippets": "local only"], shadow: nil, remote: [remote])

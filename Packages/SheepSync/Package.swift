@@ -17,7 +17,10 @@ import PackageDescription
 // PBKDF2 from CommonCrypto) sit behind `#if` seams. macOS is unchanged.
 #if os(Windows) || os(Linux)
 let portableDependencies: [Package.Dependency] = [
-    .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
+    // 4.5.2 at least: in 3.x `SymmetricKey` is not Sendable and this package
+    // stops compiling (a fresh resolve on Windows picked 3.8.0); 4.5.2 is what
+    // the Windows release pins.
+    .package(url: "https://github.com/apple/swift-crypto.git", "4.5.2"..<"5.0.0"),
 ]
 let portableTargetDependencies: [Target.Dependency] = [.product(name: "Crypto", package: "swift-crypto")]
 #else

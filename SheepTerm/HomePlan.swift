@@ -104,6 +104,11 @@ enum HomePlan {
         case note
         /// Rack Fill: a turn-based block puzzle for a quiet minute.
         case rackFill
+        /// A workspace as folders (6.1 (33), the owner: "ก้อนใหญ่ๆ อย่าง
+        /// Workspace และก้อนในเป็น Group … เป็นแค่โฟลเดอร์ก่อนแล้วเปิดเข้าไปอีกตอนกด"):
+        /// its top-level groups; a click goes into one — its subgroups as
+        /// folders, its hosts as rows (`workspaceLevel`).
+        case workspace(UUID)
 
         /// A host list (Recent, a group, by type, via a Jump Server): rows of hosts, +N more.
         var isHostList: Bool {
@@ -130,7 +135,7 @@ enum HomePlan {
     static func defaultSize(_ source: Source) -> Size {
         switch source {
         case .clock, .cables: return .small
-        case .rackFill, .note: return .large
+        case .rackFill, .note, .workspace: return .large
         case .fileServer, .sessions, .ping, .snippets, .logs: return .medium
         default: return .medium
         }
@@ -235,14 +240,55 @@ enum HomePlan {
     static let consoleWidgetID = UUID(uuidString: "00000000-0000-4000-8000-0000000000E3")!
     static let sessionsWidgetID = UUID(uuidString: "00000000-0000-4000-8000-0000000000E4")!
 
-    static func load(_ data: Data?, groups: [HostGroup] = []) -> [Widget] {
-        guard let data, let widgets = try? JSONDecoder().decode([Widget].self, from: data) else {
-            return defaultWidgets(groups: groups)
+    /// Tiles a build before 6.1 (33) cannot read (a Workspace tile) live
+    /// under their own key with their place on the board (6.1 (48)): such a
+    /// build decodes `homeWidgets` whole, so ONE tile it does not know reset
+    /// its board to the default — and its next edit synced that back here.
+    static let newerKey = "homeWidgetsNewer"
+
+    struct Placed: Codable, Equatable {
+        var at: Int
+        var widget: Widget
+    }
+
+    /// One tile this build cannot read is left out, not the whole board.
+    private struct Lossy: Decodable {
+        var widget: Widget?
+        init(from decoder: Decoder) throws { widget = try? Widget(from: decoder) }
+    }
+    private struct LossyPlaced: Decodable {
+        var placed: Placed?
+        init(from decoder: Decoder) throws { placed = try? Placed(from: decoder) }
+    }
+
+    static func load(_ data: Data?, newer: Data? = nil, groups: [HostGroup] = []) -> [Widget] {
+        let placed = (newer.flatMap { try? JSONDecoder().decode([LossyPlaced].self, from: $0) } ?? []).compactMap(\.placed).sorted { $0.at < $1.at }
+        guard let data, let read = try? JSONDecoder().decode([Lossy].self, from: data) else {
+            return defaultWidgets(groups: groups) + placed.map(\.widget)
+        }
+        var widgets = read.compactMap(\.widget)
+        for tile in placed where !widgets.contains(where: { $0.id == tile.widget.id }) {
+            widgets.insert(tile.widget, at: min(max(tile.at, 0), widgets.count))
         }
         return widgets
     }
 
-    static func save(_ widgets: [Widget]) -> Data? { try? JSONEncoder().encode(widgets) }
+    private static func isNewer(_ widget: Widget) -> Bool {
+        if case .workspace = widget.source { return true }
+        return false
+    }
+
+    /// The board for `storageKey`: every tile an older build reads.
+    static func save(_ widgets: [Widget]) -> Data? { try? JSONEncoder().encode(widgets.filter { !isNewer($0) }) }
+
+    /// The rest, for `newerKey`. None is an EMPTY list, never a removed
+    /// key: Sync does not carry a removal (a missing setting is "unknown"),
+    /// so the last Workspace tile taken off here stayed on the other Mac
+    /// and came back with its next edit. Only Reset Home removes the key.
+    static func saveNewer(_ widgets: [Widget]) -> Data? {
+        let placed = widgets.enumerated().filter { isNewer($0.element) }.map { Placed(at: $0.offset, widget: $0.element) }
+        return try? JSONEncoder().encode(placed)
+    }
 
     /// The types a Source filters on, as `HostType`s.
     static func types(of source: Source) -> [HostType] {
@@ -270,15 +316,47 @@ enum HomePlan {
                 if case .saved(let bastion) = JumpTarget.resolve(host: $0, saved: all, groups: groups) { return bastion.id == id }
                 return false
             }
-        case .clock, .sessions, .ping, .cables, .snippets, .logs, .fileServer, .note, .rackFill:
+        case .clock, .sessions, .ping, .cables, .snippets, .logs, .fileServer, .note, .rackFill, .workspace:
             return []
         }
     }
 
+    // MARK: A workspace as folders (6.1 (33))
+
+    /// One level of a Workspace tile: where it is (`crumbs`, outermost
+    /// first; empty = the workspace itself), the folders to go into and the
+    /// hosts of the group it is in.
+    struct WorkspaceLevel: Equatable {
+        var crumbs: [HostGroup] = []
+        var folders: [HostGroup] = []
+        var hosts: [Host] = []
+    }
+
+    /// The level at `group` (nil = the workspace's own: its top-level
+    /// groups). A group that is gone, or that has moved to another
+    /// workspace since, reads as the top — the tile never shows what its
+    /// workspace no longer holds.
+    static func workspaceLevel(_ workspace: UUID, at group: UUID?, plan: WorkspacePlan, groups: [HostGroup]) -> WorkspaceLevel {
+        let roots = GroupTree.children(of: nil, in: groups).filter { plan.workspace(for: $0.id) == workspace }
+        guard let group, let here = groups.first(where: { $0.id == group }),
+              roots.contains(where: { $0.id == WorkspacePlan.root(of: group, in: groups) }) else {
+            return WorkspaceLevel(folders: roots)
+        }
+        return WorkspaceLevel(crumbs: GroupTree.ancestors(of: group, in: groups) + [here],
+                              folders: GroupTree.children(of: group, in: groups), hosts: here.hosts)
+    }
+
+    /// The hosts in a folder, its subgroups' included: the number on it.
+    static func folderCount(_ group: UUID, groups: [HostGroup]) -> Int {
+        hosts(for: .group(group), groups: groups, recents: []).count
+    }
+
     /// A widget whose group or Jump Server is gone is dropped, not shown empty.
-    static func live(_ widgets: [Widget], groups: [HostGroup]) -> [Widget] {
+    /// `workspaces` (when given): a Workspace tile whose workspace was deleted goes too.
+    static func live(_ widgets: [Widget], groups: [HostGroup], workspaces: Set<UUID>? = nil) -> [Widget] {
         widgets.filter { widget in
             switch widget.source {
+            case .workspace(let id): return workspaces?.contains(id) ?? true
             case .recent, .type, .types: return true
             case .group(let id): return groups.contains { $0.id == id }
             case .jumpServer(let id): return groups.contains { $0.hosts.contains { $0.id == id } }

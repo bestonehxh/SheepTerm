@@ -376,6 +376,28 @@ nonisolated struct WorkspaceBook: Equatable, Sendable {
         return fresh
     }
 
+    /// Reopen Last Tabs (6.1 (35)): the sessions of `layout` — each still in
+    /// a tab of its own, just opened — become ONE tab laid out as given, in
+    /// the place of the first. nil — nothing changes — unless every leaf is
+    /// alone in its tab.
+    @discardableResult
+    mutating func arrange(_ layout: PaneLayout, focus: UUID? = nil) -> WorkspaceState? {
+        let take = layout.leaves
+        guard take.count >= 2, take.count <= PaneLayout.maxPanes, Set(take).count == take.count,
+              take.allSatisfy({ workspace(containing: $0)?.paneCount == 1 }),
+              let first = index(ofWorkspaceContaining: take[0]) else { return nil }
+        let taking = Set(take)
+        let place = workspaces[..<first].filter { !taking.contains($0.focused) }.count
+        var book = self
+        book.workspaces.removeAll { $0.paneCount == 1 && taking.contains($0.focused) }
+        var fresh = WorkspaceState(session: take[0])
+        fresh.layout = layout
+        fresh.focused = focus.flatMap { taking.contains($0) ? $0 : nil } ?? take[0]
+        book.workspaces.insert(fresh, at: min(place, book.workspaces.count))
+        self = book
+        return fresh
+    }
+
     /// Closing a whole tab of several panes asks first (the owner, 2026-10-28):
     /// the number of panes it would close, nil = close without asking (one
     /// pane, or a tab that is not here). Closing ONE pane never asks.

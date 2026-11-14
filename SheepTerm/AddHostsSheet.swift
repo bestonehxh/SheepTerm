@@ -48,6 +48,12 @@ struct AddHostsSheet: View {
     /// One box for the whole batch (no CSV column): every host added/imported
     /// here gets `Host.noLog`.
     @State private var noLog = false
+    /// The row under the pointer: its × shows (6.1 (17)).
+    @State private var hoveredRowID: UUID?
+    /// The second step (6.1 (22), the owner: "ต้อง add แล้วให้ preview ก่อนค่อย
+    /// okay อีกที"): Add shows where every row lands; OK saves, Back returns
+    /// to the grid. Nothing is saved before OK.
+    @State private var reviewing = false
 
     /// Which group the hosts land in. An enum rather than `UUID?`, because
     /// nil would have to mean both "create a new one" and "nothing picked".
@@ -175,7 +181,7 @@ struct AddHostsSheet: View {
                     Label("Import…", systemImage: "doc.text")
                 }
                 .fixedSize()
-                .help("CSV, JSON or an OpenSSH config file — the rows land here to look over before Add")
+                .help("CSV, JSON, an OpenSSH config, or sessions from PuTTY, SecureCRT or MobaXterm — the rows land here to look over before Add")
                 // What each type and each file looks like (6.1 (9), the owner: tips with an example per type).
                 Button { showExamples = true } label: {
                     Image(systemName: "questionmark.circle").font(.system(size: 13))
@@ -207,6 +213,7 @@ struct AddHostsSheet: View {
                 .accessibilityLabel("Remove row")
             }
 
+            HStack(alignment: .top, spacing: 12) {
             VStack(spacing: 0) {
                 header
                 Divider()
@@ -221,8 +228,9 @@ struct AddHostsSheet: View {
                             // `firstIndex(of:)` inside each row would be a
                             // scan per row on a 2,000-row grid.
                             let numbers = rowNumbers
+                            let warnings = rowWarnings
                             ForEach($rows) { $row in
-                                gridRow($row, number: numbers[row.id] ?? 0)
+                                gridRow($row, number: numbers[row.id] ?? 0, warnings: warnings)
                                     .id(row.id)
                                 Divider().opacity(0.3)
                             }
@@ -262,19 +270,33 @@ struct AddHostsSheet: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.primary.opacity(0.12))
             }
+            }
+            // Step two covers the grid: where every row lands, as the
+            // sidebar will show it. The grid stays underneath, as it was.
+            // (Disabled while covered: Tab must not walk into cells nobody sees.)
+            .disabled(reviewing)
+            .overlay { if reviewing { previewPanel.disabled(false) } }
 
             HStack(alignment: .firstTextBaseline) {
-                Text(status ?? String(localized: "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import… (CSV, JSON or an OpenSSH config). A header row must use these names: Name, Host / IP, Credential, Group. A host may be written admin@host:2222."))
+                Text(reviewing ? "" : status ?? String(localized: "Type into the grid (Tab moves on, Return adds a row), ⌘V a block from a spreadsheet into a cell — it spreads out from there — or Import… (CSV, JSON or an OpenSSH config). A header row must use these names: Name, Host / IP, Credential, Group. A host may be written admin@host:2222."))
                     .font(.system(size: 10))
                     .foregroundStyle(status == nil ? .secondary : .primary)
                 Spacer()
                 Toggle("Don't Log", isOn: $noLog)
                     .help("Hosts added here never write a session log, even with Log Sessions to File on.")
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(addLabel) { add() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!isValid)
+                if reviewing {
+                    Button("Back") { reviewing = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button("OK") { add() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!isValid)
+                } else {
+                    Button("Cancel") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                    Button(addLabel) { focus = nil; reviewing = true }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!isValid)
+                }
             }
         }
         .padding(20)
@@ -290,10 +312,12 @@ struct AddHostsSheet: View {
         // path Import CSV… uses. A cell that HAS the keyboard never gets here:
         // its field editor handles ⌘V first, and `spreadIfPasted` spreads it.
         .onPasteCommand(of: [.plainText]) { _ in
-            guard let text = NSPasteboard.general.string(forType: .string) else { return }
+            // Not into a grid the preview covers: nothing would show.
+            guard !reviewing, let text = NSPasteboard.general.string(forType: .string) else { return }
             pasteBlock(text)
         }
         .task {
+            if let text = request.debugPaste { pasteBlock(text); reviewing = request.debugReview; return }
             // Import ▸ Hosts File… (6.0 (57)): the panel over the sheet, once it is up.
             if request.importFile {
                 try? await Task.sleep(for: .milliseconds(150))
@@ -445,13 +469,73 @@ struct AddHostsSheet: View {
 
     /// id → 1-based row number, for the accessibility labels. A cell that
     /// reads as just "Name" is useless in a grid of forty of them.
+    // MARK: Preview (6.1 (17))
+
+    /// The rows as the preview reads them: the connection each makes (or
+    /// none — skipped at Add), and its Subgroup cell.
+    private var previewRows: [AddHostsPreview.Row] {
+        usableRows.map { row in
+            // Built as Add builds it, so the username — part of what makes
+            // a connection — is the one that will be saved.
+            let (chosen, typedUsername) = resolved(row)
+            let host = BulkHostParser.makeHost(name: row.name, address: row.address, credentialID: chosen?.id,
+                                               credentialUsername: chosen?.username, pastedUsername: typedUsername, section: nil,
+                                               noLog: false, type: row.type)
+            return AddHostsPreview.Row(id: row.id, name: host?.name ?? (row.name.isEmpty ? row.address : row.name),
+                                       address: host?.address ?? row.address, port: host?.port ?? 0,
+                                       kind: host?.kind ?? .ssh, username: host?.username ?? "", section: row.sectionText, valid: host != nil)
+        }
+    }
+
+    private var previewRoot: UUID? {
+        if case .existing(let id) = groupChoice { return id }
+        return nil
+    }
+
+    private var previewPanel: some View {
+        let top = AddHostsPreview.tree(rows: previewRows, root: previewRoot,
+                                       newName: newGroupName.isEmpty ? String(localized: "New Group") : newGroupName,
+                                       groups: model.store.groups)
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                AddHostsPreviewNode(node: top, all: Self.flatten(top), active: activeRowID,
+                                    move: moveRow, select: { id in activeRowID = id; scrollTarget = id })
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { ControlFill(zone: .sheet, cornerRadius: 6) }
+        .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.12)) }
+    }
+
+    /// Each row's warning, as the preview files it — the grid's state column.
+    private var rowWarnings: [UUID: AddHostsPreview.Warning] {
+        let top = AddHostsPreview.tree(rows: previewRows, root: previewRoot, newName: newGroupName, groups: model.store.groups)
+        var out: [UUID: AddHostsPreview.Warning] = [:]
+        for node in Self.flatten(top) { for entry in node.rows { if let w = entry.warning { out[entry.row.id] = w } } }
+        return out
+    }
+
+    /// Every node of the preview, for a row's Move to ▸ menu.
+    static func flatten(_ node: AddHostsPreview.Node) -> [AddHostsPreview.Node] {
+        [node] + node.children.flatMap(flatten)
+    }
+
+    /// A drop or Move to ▸ in the preview: the row's Subgroup cell becomes
+    /// that node's path — the grid stays the one thing Add saves.
+    private func moveRow(_ id: UUID, to path: String) {
+        guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
+        rows[index].sectionText = path
+    }
+
     private var rowNumbers: [UUID: Int] {
         var map: [UUID: Int] = [:]
         for (offset, row) in rows.enumerated() { map[row.id] = offset + 1 }
         return map
     }
 
-    private func gridRow(_ row: Binding<DraftHost>, number: Int) -> some View {
+    private func gridRow(_ row: Binding<DraftHost>, number: Int, warnings: [UUID: AddHostsPreview.Warning]) -> some View {
         let id = row.wrappedValue.id
         let meaning = meaning(of: row.wrappedValue)
         return gridLine {
@@ -462,6 +546,8 @@ struct AddHostsSheet: View {
             TextField("", text: row.name)
                 .accessibilityLabel("Name, row \(number)")
                 .focused($focus, equals: .name(id))
+                .textFieldStyle(.plain)
+                .modifier(GridCell(focused: focus == .name(id)))
                 .onSubmit { submit(from: id) }
                 .onChange(of: row.wrappedValue.name) { previous, typed in
                     spreadIfPasted(typed, previous: previous, anchorRow: id, column: .name)
@@ -470,6 +556,8 @@ struct AddHostsSheet: View {
             TextField("", text: row.address)
                 .accessibilityLabel("Host / IP, row \(number)")
                 .focused($focus, equals: .address(id))
+                .textFieldStyle(.plain)
+                .modifier(GridCell(focused: focus == .address(id)))
                 .onSubmit { submit(from: id) }
                 .onChange(of: row.wrappedValue.address) { previous, typed in
                     spreadIfPasted(typed, previous: previous, anchorRow: id, column: .address)
@@ -506,6 +594,8 @@ struct AddHostsSheet: View {
                 TextField("", text: row.credentialText)
                     .accessibilityLabel("Credential, row \(number)")
                     .focused($focus, equals: .credential(id))
+                .textFieldStyle(.plain)
+                .modifier(GridCell(focused: focus == .credential(id)))
                     .onSubmit { submit(from: id) }
                     .onChange(of: row.wrappedValue.credentialText) { previous, typed in
                         // No clearing of the pick here: the resolver already
@@ -531,6 +621,8 @@ struct AddHostsSheet: View {
                 TextField("", text: row.sectionText)
                     .accessibilityLabel("Subgroup, row \(number)")
                     .focused($focus, equals: .section(id))
+                .textFieldStyle(.plain)
+                .modifier(GridCell(focused: focus == .section(id)))
                     .onSubmit { submit(from: id) }
                     .onChange(of: row.wrappedValue.sectionText) { previous, typed in
                         // A BLOCK goes to the spread WHOLE — `write` caps each
@@ -551,17 +643,35 @@ struct AddHostsSheet: View {
                     .help(Self.sectionRules)
             }
         } trailing: {
-            Button {
-                remove(id)
-            } label: {
-                Image(systemName: "xmark.circle")
+            // The row's state (6.1 (17)): a warning the preview found, said in
+            // its tooltip; under the pointer, × instead (clean UI: no column of
+            // buttons on every row). Always a view of its own size: an empty
+            // `if` collapsed the column and shifted the row's cells.
+            ZStack {
+            Color.clear.frame(width: 1, height: 1)
+            if hoveredRowID == id {
+                Button {
+                    remove(id)
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Remove this row")
+                .accessibilityLabel("Remove row \(number)")
+            } else if let warning = warnings[id] {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.warn)
+                    .help(AddHostsPreviewNode.reason(warning) ?? "")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Remove this row")
-            .accessibilityLabel("Remove row \(number)")
+            }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
+        .background(Color.white.opacity(hoveredRowID == id ? 0.04 : 0))
+        .onHover { inside in
+            if inside { hoveredRowID = id } else if hoveredRowID == id { hoveredRowID = nil }
+        }
     }
 
     /// Return: on to the next row, and off the end it makes one — the same
@@ -1068,6 +1178,16 @@ struct AddHostsSheet: View {
         // (`HostListCodec.sheetText`), then the same path (6.0 (57)).
         var text = fileText
         var extra = ""
+        // Another terminal's session list (6.1 (17)): PuTTY, SecureCRT,
+        // MobaXterm, a hosts file — read straight into the same rows.
+        if let source = HostListImporters.detect(text) {
+            let entries = HostListImporters.entries(text, as: source)
+            guard !entries.isEmpty else {
+                status = String(localized: "Nothing in \(name) looked like a host.")
+                return
+            }
+            text = HostListCodec.sheetText(entries)
+        } else {
         switch HostListCodec.detect(text) {
         case .json:
             guard let entries = HostListCodec.entries(fromJSON: text), !entries.isEmpty else {
@@ -1091,6 +1211,7 @@ struct AddHostsSheet: View {
             extra = Self.jumpNote(read.entries)
         case .csv:
             break
+        }
         }
         let parsed = BulkHostParser.block(from: text)
         if let refused = parsed.rejectedHeader {
@@ -1348,6 +1469,7 @@ struct AddHostsSheet: View {
             // afterwards, and a host that was already there stays where it is.
         case .new:
             groupName = trimmedNewGroupName
+            let roots = Set(GroupTree.children(of: nil, in: model.store.groups).map(\.id))
             // A taken name was already refused above, so `uniqueGroupName`
             // inside applyImport has nothing to renumber.
             stats = model.store.applyImport(
@@ -1355,6 +1477,8 @@ struct AddHostsSheet: View {
                 action: .createNew,
                 replace: [:]
             )
+            // The new group goes in the workspace being shown.
+            WorkspaceDefaults.adoptNewRoots(since: roots, groups: model.store.groups)
         }
 
         dismiss()
@@ -1439,10 +1563,23 @@ struct ImportExamples: View {
                 section("CSV") { code(HostListCodec.Examples.csv) }
                 section("JSON") { code(HostListCodec.Examples.json) }
                 section("OpenSSH config") { code(HostListCodec.Examples.sshConfig) }
+                // A form to fill in elsewhere and import back (6.1 (17)).
+                HStack(spacing: 8) {
+                    Button("Save CSV Template…") { Self.saveTemplate(.csv) }
+                    Button("Save JSON Template…") { Self.saveTemplate(.json) }
+                }
             }
             .padding(14)
         }
         .frame(width: 520, height: 470)
+    }
+
+    private static func saveTemplate(_ format: HostListCodec.Format) {
+        guard let text = HostListCodec.Templates.text(format) else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = HostListCodec.Templates.fileName(format)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try text.write(to: url, atomically: true, encoding: .utf8) } catch { NSSound.beep() }
     }
 
     private func section(_ title: LocalizedStringKey, @ViewBuilder _ content: () -> some View) -> some View {
@@ -1459,5 +1596,103 @@ struct ImportExamples: View {
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25)))
+    }
+}
+
+/// One node of the Add Hosts preview: its row (level bar, name, count; dim
+/// when the subgroup exists already and gets nothing new), the new hosts in
+/// it, then its subgroups. A host drags onto any node; its menu moves it too.
+struct AddHostsPreviewNode: View {
+    let node: AddHostsPreview.Node
+    let all: [AddHostsPreview.Node]
+    let active: UUID?
+    let move: (UUID, String) -> Void
+    let select: (UUID) -> Void
+    @State private var targeted = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(GroupIconSheet.color(GroupTree.levelColor(depth: node.depth)))
+                    .frame(width: 3, height: 14)
+                Text(node.name).font(.system(size: 12, weight: node.path.isEmpty ? .semibold : .regular)).lineLimit(1)
+                if node.count > 0 { Text("\(node.count)").font(.system(size: 11)).foregroundStyle(Theme.dimText) }
+                Spacer(minLength: 0)
+            }
+            .frame(height: 22)
+            .padding(.leading, CGFloat(indent) * SidebarMetrics.step)
+            .opacity(node.exists && node.count == 0 ? 0.45 : 1)
+            .background(RoundedRectangle(cornerRadius: 4).fill(Theme.accent.opacity(targeted ? 0.25 : 0)))
+            .onDrop(of: [.plainText], isTargeted: $targeted) { providers in
+                guard let provider = providers.first else { return false }
+                _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+                    guard let text = value as? String, let id = UUID(uuidString: text) else { return }
+                    let path = node.path
+                    DispatchQueue.main.async { move(id, path) }
+                }
+                return true
+            }
+            .help(node.exists ? String(localized: "Saved already") : String(localized: "Made when you press Add"))
+            ForEach(node.rows, id: \.row.id) { entry in
+                hostRow(entry.row, warning: entry.warning)
+            }
+            ForEach(node.children) { child in
+                AddHostsPreviewNode(node: child, all: all, active: active, move: move, select: select)
+            }
+        }
+    }
+
+    /// The top node is not indented; each level below it one sidebar step.
+    private var indent: Int { max(0, node.path.split(separator: GroupTree.separator).count) }
+
+    private func hostRow(_ row: AddHostsPreview.Row, warning: AddHostsPreview.Warning?) -> some View {
+        HStack(spacing: 6) {
+            Text(row.name).font(.system(size: 12)).lineLimit(1)
+                .foregroundStyle(warning == nil ? Theme.tabText : Theme.warn)
+            if warning != nil { Image(systemName: "exclamationmark.triangle").font(.system(size: 10)).foregroundStyle(Theme.warn) }
+            Spacer(minLength: 4)
+            Text(row.address).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.dimText).lineLimit(1)
+        }
+        .frame(height: 20)
+        .padding(.leading, CGFloat(indent + 1) * SidebarMetrics.step)
+        .padding(.trailing, 4)
+        .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(active == row.id ? 0.10 : 0)))
+        .contentShape(Rectangle())
+        .onTapGesture { select(row.id) }
+        .onDrag { NSItemProvider(object: row.id.uuidString as NSString) }
+        .help(Self.reason(warning) ?? row.address)
+        .contextMenu {
+            Menu("Move to") {
+                ForEach(all) { target in
+                    Button(target.path.isEmpty ? target.name : target.path.replacingOccurrences(of: "/", with: " › ")) { move(row.id, target.path) }
+                }
+            }
+        }
+    }
+
+    static func reason(_ warning: AddHostsPreview.Warning?) -> String? {
+        switch warning {
+        case .invalid: String(localized: "Skipped at Add: no usable address")
+        case .alreadySaved: String(localized: "Already saved in this group")
+        case .repeated: String(localized: "In this list twice")
+        case .tooDeep: String(localized: "Its path is deeper than a subgroup may go: filed at the deepest level allowed")
+        case nil: nil
+        }
+    }
+}
+
+/// A grid cell (6.1 (17), the owner: a cleaner, modern table): plain text
+/// until it has the keyboard — then a soft fill and the accent edge — so the
+/// table reads as a list, not a wall of boxes.
+struct GridCell: ViewModifier {
+    let focused: Bool
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 12))
+            .padding(.horizontal, 6)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(focused ? 0.08 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.accent.opacity(focused ? 0.8 : 0), lineWidth: 1))
     }
 }

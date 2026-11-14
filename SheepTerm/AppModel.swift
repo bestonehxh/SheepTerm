@@ -71,6 +71,9 @@ final class SessionTab: ObservableObject, Identifiable {
     var vendorManuallyChosen = false
     var wasConnected = false
     var autoReconnectAttempts = 0
+    /// Brought back at launch (Reopen Last Tabs): not dialled yet, its card
+    /// shows Connect. A reconnect replaces the tab, so this is never cleared.
+    var awaitsConnect = false
     /// Guards the recent-host entry to exactly one write per connect:
     /// password auth notes it via rememberSessionPassword, key-only SSH
     /// and serial note it on the first success status.
@@ -119,6 +122,10 @@ struct AddHostsRequest: Identifiable {
     let groupID: UUID?
     /// Import ▸ Hosts File… (6.0 (57)): the file panel opens with the sheet.
     var importFile = false
+    /// Scratch renders only (SHEEPTERM_DEBUG_WORKSPACE_PNG): rows pasted in on open.
+    var debugPaste: String? = nil
+    /// DEBUG renders: open on the review step.
+    var debugReview = false
 }
 
 /// One showing of the "Set Credential for Group…" sheet, for the group it was
@@ -259,9 +266,11 @@ final class AppModel: ObservableObject {
     // Persisted by the resize handle's drag .onEnded — writing UserDefaults
     // in a didSet here would hit disk on every drag frame.
     @Published var sidebarWidth: CGFloat = {
-        let saved = UserDefaults.standard.double(forKey: "sidebarWidth")
-        return saved == 0 ? 232 : min(max(saved, 200), 320)
+        SidebarWidth.own(stored: UserDefaults.standard.double(forKey: "sidebarWidth"))
     }()
+    /// The least width the tree shown asks for (`SidebarWidth.floor`); the
+    /// resize handle stops there.
+    @Published var sidebarFloor = SidebarWidth.range.lowerBound
     @Published var quickConnect: QuickConnectRequest?
     @Published var showCredentials = false
     /// ＋ / File → Open File… (`FileTransferSheet`).
@@ -310,7 +319,17 @@ final class AppModel: ObservableObject {
     /// sheet presented by ContentView.
     @Published var historyRequest: HistoryRequest?
     @Published var snippetVariables: SnippetVariablesRequest?
+    /// An imported group as a new top-level group, in the workspace being
+    /// shown (in General it would vanish from the sidebar as it arrives).
+    func importAsNewGroup(_ group: HostGroup) {
+        let roots = Set(GroupTree.children(of: nil, in: store.groups).map(\.id))
+        _ = store.applyImport(group, action: .createNew, replace: [:])
+        WorkspaceDefaults.adoptNewRoots(since: roots, groups: store.groups)
+    }
+
     @Published var showReorderGroups = false
+    /// ≡ ▸ Recently Deleted… (`RecentlyDeletedSheet`).
+    @Published var showRecentlyDeleted = false
     /// Hosts ▸ New Group… / the sidebar's menus: the name prompt (SidebarView).
     @Published var showNewGroup = false
     /// Hosts ▸ New Group / Home's New Group (6.0 (41)): the prompt lives on
@@ -582,9 +601,41 @@ final class AppModel: ObservableObject {
         // Settings ▸ Optimization ▸ At Launch (6.1): a terminal tab, or Home
         // (the board shown while no tab is open). Home on a new Mac; an
         // updater keeps its terminal until it answers (6.1 (4)).
-        if OptimizationPlan.launchTab(.standard) != .home {
+        // Reopen Last Tabs (6.1 (35), off unless turned on) comes first:
+        // with tabs brought back, neither Home nor a fresh terminal is added.
+        //
+        // The restore runs one turn AFTER init (6.1 (52)): a restored web
+        // pane's controller reads `AppModel.shared`, and inside this
+        // initializer that is `shared` initialising itself a second time —
+        // a trap at every launch until open-tabs.json was deleted by hand.
+        // Until it has run, a quit keeps open-tabs.json (`launchRestorePending`).
+        if UserDefaults.standard.bool(forKey: TabRestore.settingKey) {
+            launchRestorePending = true
+            DispatchQueue.main.async { [self] in
+                launchRestorePending = false
+                if !restoreTabs(), tabs.isEmpty, OptimizationPlan.launchTab(.standard) != .home { newLocalTab() }
+            }
+        } else if OptimizationPlan.launchTab(.standard) != .home {
             newLocalTab()
         }
+        #if DEBUG
+        // SHEEPTERM_DEBUG_RESTORE_DUMP=<path>: what the launch brought back,
+        // read out of the live tabs two seconds in — "<waiting> <running pings>"
+        // on the first line, then the tabs as `open-tabs.json` would hold
+        // them. Scratch runs only.
+        if let path = ProcessInfo.processInfo.environment["SHEEPTERM_DEBUG_RESTORE_DUMP"], PasswordVault.usesMemoryKeychain {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self else { return }
+                let pinging = self.tabs.reduce(0) { count, tab in
+                    if case .ping(let controller) = tab.content { return count + controller.rows.filter(\.isRunning).count }
+                    return count
+                }
+                let saved = TabRestore.snapshot(self.book.workspaces, selected: self.selectedID, pane: self.restorePane)
+                let head = "\(self.tabs.filter(\.awaitsConnect).count) \(pinging)\n"
+                try? (Data(head.utf8) + (TabRestore.save(saved) ?? Data())).write(to: URL(fileURLWithPath: path))
+            }
+        }
+        #endif
         installKeyMonitor()
         startSerialWatch()
     }
@@ -626,8 +677,7 @@ final class AppModel: ObservableObject {
         statusShowTransfers = defaults.object(forKey: "statusShowTransfers") as? Bool ?? true
         statusConnectionStyle = ConnectionIndicator.stored(defaults.string(forKey: ConnectionIndicator.storageKey),
                                                            legacySheepShown: defaults.object(forKey: "statusShowSheep") as? Bool)
-        let width = defaults.double(forKey: "sidebarWidth")
-        sidebarWidth = width == 0 ? 232 : min(max(width, 200), 320)
+        sidebarWidth = SidebarWidth.own(stored: defaults.double(forKey: "sidebarWidth"))
         if files == nil || files!.contains("hosts.json") { store.reloadFromDisk() }
         if files == nil || files!.contains("credentials.json") { credentialStore.reloadFromDisk() }
         if files == nil || files!.contains("snippets.json") { snippetStore.reloadFromDisk() }
@@ -909,6 +959,8 @@ final class AppModel: ObservableObject {
     /// 35.0 s unbounded, 17.1 s bounded per tab (2 s × tabs in the worst
     /// case), 2.0 s this way. Ten healthy tabs: 0.002 s.
     func shutdownSessionsForQuit() {
+        // Before anything closes: the tabs as they are now, for the next launch.
+        saveOpenTabs()
         // Phase 1 — nothing here waits. See `beginShutdownForQuit`.
         var flushes: [QuitLogFlush] = []
         // Servers stop (each sweeps its upload temps) and Files tabs close
@@ -1105,7 +1157,7 @@ final class AppModel: ObservableObject {
             alert.addButton(withTitle: String(localized: "Import"))
             alert.addButton(withTitle: String(localized: "Cancel"))
             if alert.sheepStyled().runModal() == .alertFirstButtonReturn {
-                _ = store.applyImport(group, action: .createNew, replace: [:])
+                importAsNewGroup(group)
             }
             return
         }
@@ -1135,7 +1187,7 @@ final class AppModel: ObservableObject {
         case .alertFirstButtonReturn:
             resolveImportConflicts(group, into: existing)
         case .alertSecondButtonReturn:
-            _ = store.applyImport(group, action: .createNew, replace: [:])
+            importAsNewGroup(group)
         default:
             break
         }
@@ -1445,7 +1497,7 @@ final class AppModel: ObservableObject {
     /// `ping …` in the connect box) go to the focused Ping tab, else the
     /// last one, else a new one; ＋ / File ▸ New Ping… always opens a new,
     /// empty tab. Nothing pings until a target is added.
-    func openPing(_ targets: [String] = [], inNewTab: Bool = false) {
+    func openPing(_ targets: [String] = [], inNewTab: Bool = false, started: Bool = true) {
         if !inNewTab, !targets.isEmpty {
             let pings = tabs.compactMap { tab -> (SessionTab, PingTabController)? in
                 if case .ping(let controller) = tab.content { return (tab, controller) }
@@ -1486,7 +1538,200 @@ final class AppModel: ObservableObject {
         }
         if attach(tab) { selectedID = tab.id }
         controller.start()
-        controller.add(targets: targets)
+        controller.add(targets: targets, started: started)
+    }
+
+    // MARK: Reopen Last Tabs (6.1 (35), `TabRestore`)
+
+    /// What a pane is, for `open-tabs.json`; nil = not kept (a Files tab, an
+    /// empty Ping tab).
+    private func restorePane(_ id: UUID) -> TabRestore.Pane? {
+        guard let tab = tabs.first(where: { $0.id == id }) else { return nil }
+        // A family the FINGERPRINT chose is not a saved choice (as in `reconnect`).
+        func scrubbed(_ host: Host) -> Host {
+            var host = host
+            if !tab.vendorManuallyChosen && tab.highlightVendor != .auto { host.vendor = .auto }
+            return host
+        }
+        switch tab.content {
+        case .local: return .local
+        case .ssh(let controller): return .host(scrubbed(controller.host))
+        case .serial(let controller): return .host(scrubbed(controller.host))
+        case .web(let controller): return .host(controller.host)
+        case .ping(let controller):
+            let targets = controller.rows.map(\.address)
+            return targets.isEmpty ? nil : .ping(targets)
+        case .files: return nil
+        }
+    }
+
+    /// Written at quit while the setting is on; taken away while it is off
+    /// (turning it on never brings back a window from weeks ago).
+    private func saveOpenTabs() {
+        let url = HostStore.openTabsURL
+        let on = UserDefaults.standard.bool(forKey: TabRestore.settingKey)
+        let saved = on ? TabRestore.snapshot(book.workspaces, selected: selectedID, pane: restorePane) : TabRestore.Saved(tabs: [], selected: nil)
+        switch TabRestore.quitWrite(settingOn: on, restorePending: launchRestorePending, tabsToSave: saved.tabs.count) {
+        case .keep: return
+        case .remove: try? FileManager.default.removeItem(at: url)
+        case .write:
+            guard let data = TabRestore.save(saved) else { try? FileManager.default.removeItem(at: url); return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// The launch's restore is queued and has not run (6.1 (52)): a quit in
+    /// that turn must not write an empty list over last time's tabs.
+    private var launchRestorePending = false
+
+    /// Last time's tabs, in their order and layout. Nothing is dialled: SSH,
+    /// Telnet and console panes wait on their card's Connect, Ping rows come
+    /// back stopped. A console whose cable is gone is left out. False =
+    /// nothing was brought back.
+    private func restoreTabs() -> Bool {
+        guard UserDefaults.standard.bool(forKey: TabRestore.settingKey),
+              let saved = TabRestore.load(try? Data(contentsOf: HostStore.openTabsURL)) else { return false }
+        // A tab opened before the restore ran (a link or a file at launch) keeps the focus.
+        let alreadyOpen = tabs.isEmpty ? nil : selectedID
+        var front: [Int: UUID] = [:]
+        for (index, node) in saved.tabs.enumerated() {
+            if let first = openPanes(node, deferred: true) { front[index] = first }
+        }
+        guard !front.isEmpty else { return false }
+        if let chosen = TabRestore.launchFocus(selected: saved.selected, front: front, alreadyOpen: alreadyOpen) {
+            selectedID = chosen
+        }
+        return true
+    }
+
+    /// One tab of `node`'s panes, laid out as it says; the first pane's
+    /// session, nil when none opened. `deferred` (a launch): nothing is
+    /// dialled; else (a saved split the user opened) every pane connects.
+    @discardableResult
+    private func openPanes(_ node: TabRestore.Node, deferred: Bool) -> UUID? {
+        var opened: [UUID] = []
+        for pane in node.panes {
+            let before = Set(tabs.map(\.id))
+            switch pane {
+            case .local:
+                newLocalTab()
+            case .ping(let targets):
+                openPing(targets, inNewTab: true, started: !deferred)
+            case .host(let host):
+                if host.kind == .serial, !FileManager.default.fileExists(atPath: host.address) { continue }
+                open(host: host, completeness: deferred ? .complete : .needsCompletion, deferred: deferred)
+            }
+            if let new = tabs.map(\.id).first(where: { !before.contains($0) }) { opened.append(new) }
+        }
+        guard let first = opened.first else { return nil }
+        guard opened.count > 1 else { return first }
+        // Every pane came back: the tab as it was. Else what did, as a grid.
+        if opened.count == node.panes.count, let layout = TabRestore.layout(node, sessions: opened),
+           book.arrange(layout) != nil { return first }
+        book.gather(opened)
+        return first
+    }
+
+    // MARK: Save Split… (6.1 (36), `SavedSplit`)
+
+    /// A saved split's row ▸ Edit: its name is all there is to edit.
+    @Published var renameSplitTarget: Host?
+
+    func renameSplit(_ host: Host, to raw: String) {
+        let name = HostStore.cleanGroupName(raw)
+        guard !name.isEmpty, var current = store.groups.flatMap(\.hosts).first(where: { $0.id == host.id }) else { NSSound.beep(); return }
+        current.name = name
+        store.updateHost(current)
+    }
+
+    /// The tab whose panes Tabs ▸ Save Split… is naming.
+    @Published var saveSplitTarget: SaveSplitRequest?
+
+    struct SaveSplitRequest: Identifiable {
+        let id = UUID()
+        let split: SavedSplit
+        /// The group it goes in: the first saved pane's.
+        let groupID: UUID?
+        /// Panes of the tab that a saved split cannot hold (a cable, Files, Ping).
+        let leftOut: Int
+    }
+
+    /// Whether `session`'s tab has a split worth saving (two panes a saved split can hold).
+    func canSaveSplit(of session: UUID) -> Bool { splitRequest(of: session) != nil }
+
+    private func splitRequest(of session: UUID) -> SaveSplitRequest? {
+        guard let workspace = book.workspace(containing: session), workspace.paneCount >= 2,
+              let node = TabRestore.node(workspace.layout.root, pane: restorePane) else { return nil }
+        let saved = store.groups.flatMap(\.hosts)
+        guard let split = TabRestore.savedSplit(node, isSaved: { id in saved.contains { $0.id == id } }) else { return nil }
+        let group = split.panes.compactMap(\.hostID).first.flatMap { id in store.groups.first { $0.hosts.contains { $0.id == id } }?.id }
+        return SaveSplitRequest(split: split, groupID: group, leftOut: workspace.paneCount - split.panes.count)
+    }
+
+    /// Tab menu ▸ Save Split…: asks for a name; nothing is saved until then.
+    func requestSaveSplit(of session: UUID) {
+        guard let request = splitRequest(of: session) else { NSSound.beep(); return }
+        saveSplitTarget = request
+    }
+
+    /// The name given: the split becomes a row — in the group of its first
+    /// saved host, else the first group shown, else a new one.
+    func saveSplit(_ request: SaveSplitRequest, named raw: String) {
+        let name = HostStore.cleanGroupName(raw)
+        guard !name.isEmpty else { NSSound.beep(); return }
+        var host = Host(name: name, kind: .split, address: "", port: 0)
+        host.split = request.split
+        store.noteExplicitUserMutation()
+        let shown = WorkspacePlan.load(UserDefaults.standard.data(forKey: WorkspacePlan.storageKey))
+        let visible = shown.visibleRoots(shown.selection(UserDefaults.standard.string(forKey: WorkspacePlan.selectionKey)), groups: store.groups)
+        let fallback = GroupTree.children(of: nil, in: store.groups).first { visible?.contains($0.id) ?? true }?.id
+        if let index = store.groups.firstIndex(where: { $0.id == (request.groupID ?? fallback) }) {
+            store.groups[index].hosts.append(host)
+        } else {
+            let roots = Set(GroupTree.children(of: nil, in: store.groups).map(\.id))
+            store.groups.append(HostGroup(name: store.uniqueGroupName(base: String(localized: "Splits")), hosts: [host]))
+            WorkspaceDefaults.adoptNewRoots(since: roots, groups: store.groups)
+        }
+        store.save()
+        if request.leftOut > 0 {
+            let alert = SheepAlert()
+            alert.messageText = String(localized: "Split saved")
+            alert.informativeText = String(localized: "A console cable, a Files or a Ping pane is not part of a saved split.")
+            alert.addButton(withTitle: String(localized: "OK"))
+            alert.sheepStyled().runModal()
+        }
+    }
+
+    /// A saved split opened from the sidebar: one new tab, every pane connecting.
+    private func openSavedSplit(_ host: Host) {
+        guard let split = host.split else { refuseUnsupported(host); return }
+        // Always its own tab: beside another pane (Open in Split, a drop on a
+        // pane edge) the saved layout could not be arranged and fell to a grid.
+        pendingPlacement = .newTab
+        let saved = store.groups.flatMap(\.hosts)
+        let node = TabRestore.node(split, saved: { id in saved.first { $0.id == id } }, endpoint: { kind, address, port, username in
+            saved.first { $0.kind == kind && $0.address == address && $0.port == port && $0.username == username }
+        })
+        if let first = openPanes(node, deferred: false) { selectedID = first }
+    }
+
+    /// A pane brought back at launch: its card with Connect, nothing dialled.
+    private func awaitConnect(_ tab: SessionTab, header: ConnectionCardHeader, on terminalHost: SessionTerminalHost) {
+        tab.awaitsConnect = true
+        terminalHost.showConnectionWaiting(header) { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.reconnect(tab: tab)
+        }
+    }
+
+    var hasTabsAwaitingConnect: Bool { tabs.contains { $0.awaitsConnect } }
+
+    /// Tab menu ▸ Connect All: every pane still waiting on its Connect.
+    func connectAllWaiting() {
+        let focus = selectedID
+        for tab in tabs where tab.awaitsConnect { reconnect(tab: tab) }
+        // Each reconnect takes the keyboard; leave it where it was when that pane is still there.
+        if let focus, tabs.contains(where: { $0.id == focus }) { selectedID = focus }
     }
 
     /// File ▸ Open Files / a tab chip: a Files tab for the SSH tab's host.
@@ -1654,6 +1899,20 @@ final class AppModel: ObservableObject {
         return count
     }
 
+    /// Broadcast, several commands (6.1 (46)): the same lines to each tab,
+    /// every tab pacing them against its own device. Returns how many tabs
+    /// started — one that is busy (a paste running, a held Return) is skipped.
+    @discardableResult
+    func broadcastLines(_ lines: [String], to ids: [UUID]) -> Int {
+        var count = 0
+        for id in ids {
+            guard let tab = tabs.first(where: { $0.id == id }) else { continue }
+            if case .local = tab.content { continue }
+            if terminalHost(of: tab)?.sendPacedLines(lines) == true { count += 1 }
+        }
+        return count
+    }
+
     /// The status bar's baud menu on a serial tab (5.0 (39)).
     func setBaud(_ baud: Int, for tab: SessionTab) {
         guard case .serial(let controller) = tab.content else { return }
@@ -1729,6 +1988,8 @@ final class AppModel: ObservableObject {
             case .files(let controller): return controller.busyTransfers > 0
             case .ping: return false
             case .ssh, .serial:
+                // Brought back at launch and never connected: nothing to cut.
+                if tab.awaitsConnect { return false }
                 guard let status = tab.statusInfo else { return true }
                 return !status.hasPrefix("disconnected")
             }
@@ -1800,7 +2061,7 @@ final class AppModel: ObservableObject {
     func open(host: Host, completeness: HostCompleteness = .needsCompletion,
               password overridePassword: String? = nil, serialLog: Bool? = nil,
               reusingLogger: SessionLogger? = nil, promptName carriedPromptName: String? = nil,
-              askPasswordFor refused: RefusedLogin? = nil) {
+              askPasswordFor refused: RefusedLogin? = nil, deferred: Bool = false) {
         if let raw = host.filesProto, let proto = RemoteEndpoint.Proto(rawValue: raw) {
             openFiles(host, proto: proto)
             return
@@ -1816,6 +2077,8 @@ final class AppModel: ObservableObject {
             openWeb(host)
         case .unsupported:
             refuseUnsupported(host)
+        case .split:
+            openSavedSplit(host)
         case .ssh:
             // A target inherits credential/username/cipher/family from the
             // saved host on the same endpoint; an answer is taken as it is.
@@ -1846,35 +2109,11 @@ final class AppModel: ObservableObject {
             // 4.2 (9): or a TYPED bastion (`Host.jumpSpec`) — no credential,
             // so the session cache or the prompt. Precedence and the one-hop
             // rule live in `JumpTarget.resolve` (Models, harness-tested).
+            // 6.1 (34): or several hops — a bastion behind a bastion, a typed
+            // list `a,b` — every one resolved the same way (`JumpTarget.route`,
+            // first hop first); the last is `jump`, the rest ride in `keys`.
             var jump: JumpHop?
             var jumpUnresolved = false
-            switch JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups) {
-            case .none:
-                break
-            case .saved(var bastion):
-                let bastionCredential = bastion.credentialID.flatMap { credentialStore.credential(for: $0) }
-                if let bastionCredential, !bastionCredential.username.isEmpty {
-                    bastion.username = bastionCredential.username
-                }
-                let bastionPassword = refused == .jumpHost ? nil
-                    : bastionCredential.flatMap { credentialStore.password(for: $0) }
-                    ?? passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"]
-                jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
-                               password: bastionPassword,
-                               cipherPolicy: JumpHop.CipherPolicy(rawValue: (bastion.cipherMode ?? .auto).rawValue) ?? .auto)
-            case .spec(let bastion):
-                // An empty username is allowed: the worker's prompt asks, and
-                // `rememberJumpPassword` caches what worked under the name
-                // typed there.
-                jump = JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
-                               password: bastion.username.isEmpty || refused == .jumpHost ? nil
-                                   : passwordCache["\(bastion.username)@\(bastion.address):\(bastion.port)"],
-                               cipherPolicy: .auto)
-            case .invalid:
-                // A deleted or multi-hop saved bastion, or a typed one that
-                // does not parse: reported in the tab, never bypassed.
-                jumpUnresolved = true
-            }
             // The credentials' SSH keys (6.1) ride along; a key is offered
             // before the agent's, and a refused password has nothing to do with it.
             var keys = SessionKeys()
@@ -1882,14 +2121,48 @@ final class AppModel: ObservableObject {
                 key.certificate = credential.certificate
                 keys.target = (key, credential.name)
             }
-            if case .saved(let bastion) = JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups) {
-                keys.jumpAuthMethod = bastion.authMethod ?? .automatic
-            }
-            if case .saved(let bastion) = JumpTarget.resolve(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups),
-               let bastionCredential = bastion.credentialID.flatMap({ credentialStore.credential(for: $0) }),
-               var key = credentialStore.key(for: bastionCredential) {
-                key.certificate = bastionCredential.certificate
-                keys.jump = (key, bastionCredential.name)
+            // Try Again after a refused hop asks for THAT hop's password only.
+            let refusedEndpoint = refusedJumpEndpoint
+            refusedJumpEndpoint = nil
+            var jumpKeys: [String] = []
+            if let route = JumpTarget.route(host: host, saved: store.groups.flatMap(\.hosts), groups: store.groups) {
+                var steps: [JumpStep] = route.map { hop in
+                    var bastion = hop.host
+                    let bastionCredential = hop.saved ? bastion.credentialID.flatMap { credentialStore.credential(for: $0) } : nil
+                    if let bastionCredential, !bastionCredential.username.isEmpty {
+                        bastion.username = bastionCredential.username
+                    }
+                    let cacheKey = "\(bastion.username)@\(bastion.address):\(bastion.port)"
+                    jumpKeys.append(cacheKey)
+                    let asked = refused == .jumpHost && (refusedEndpoint == nil || refusedEndpoint == "\(bastion.address):\(bastion.port)")
+                    // A typed hop with no username: the worker's prompt asks,
+                    // and `rememberJumpPassword` caches what worked under the
+                    // name typed there.
+                    let hopPassword = asked || (!hop.saved && bastion.username.isEmpty) ? nil
+                        : bastionCredential.flatMap { credentialStore.password(for: $0) } ?? passwordCache[cacheKey]
+                    var step = JumpStep(hop: JumpHop(host: bastion.address, port: bastion.port, username: bastion.username,
+                                                     password: hopPassword,
+                                                     cipherPolicy: hop.saved ? JumpHop.CipherPolicy(rawValue: (bastion.cipherMode ?? .auto).rawValue) ?? .auto : .auto))
+                    if hop.saved {
+                        step.authMethod = bastion.authMethod ?? .automatic
+                        if let bastionCredential, var key = credentialStore.key(for: bastionCredential) {
+                            key.certificate = bastionCredential.certificate
+                            step.identity = key
+                            step.identityName = bastionCredential.name
+                        }
+                    }
+                    return step
+                }
+                if let last = steps.popLast() {
+                    jump = last.hop
+                    keys.jumpAuthMethod = last.authMethod
+                    if let key = last.identity { keys.jump = (key, last.identityName) }
+                    keys.earlierJumps = steps
+                }
+            } else {
+                // A deleted saved bastion, a typed one that does not parse, a
+                // route that loops or is too long: reported in the tab, never bypassed.
+                jumpUnresolved = true
             }
             let controller = SSHTerminalController(host: host, password: password, keys: keys, jump: jump,
                                                    jumpUnresolved: jumpUnresolved, reusingLogger: reusingLogger)
@@ -1897,19 +2170,24 @@ final class AppModel: ObservableObject {
             // cache (a saved credential is the user's to edit — never
             // rewritten here). The key is the one it was looked up under.
             let targetKey = "\(host.username)@\(host.address):\(host.port)"
-            let jumpKey = jump.map { "\($0.username)@\($0.host):\($0.port)" }
-            controller.onConfiguredPasswordRefused = { [weak self] side in
+            controller.onConfiguredPasswordRefused = { [weak self, weak controller] side in
                 guard let self else { return }
                 switch side {
                 case .target: self.passwordCache.removeValue(forKey: targetKey)
-                case .jumpHost: if let jumpKey { self.passwordCache.removeValue(forKey: jumpKey) }
+                case .jumpHost:
+                    // The hop that refused it, of several; all of them when the worker did not say.
+                    let refusedHop = controller?.configuredRefusedJump.map { ":\($0.host):\($0.port)" }
+                    for key in jumpKeys where refusedHop.map({ key.hasSuffix("@" + $0.dropFirst()) }) ?? true {
+                        self.passwordCache.removeValue(forKey: key)
+                    }
                 }
             }
             controller.terminalHost.historyKey = historyKey(for: host)
             let tab = SessionTab(content: .ssh(controller), title: host.name)
             // The failure card's Try Again: the same tab, a fresh connection.
-            controller.onTryAgain = { [weak self, weak tab] refused in
+            controller.onTryAgain = { [weak self, weak tab, weak controller] refused in
                 guard let self, let tab else { return }
+                self.refusedJumpEndpoint = controller?.refusedJump.map { "\($0.host):\($0.port)" }
                 self.reconnect(tab: tab, askPasswordFor: refused)
             }
             if let carriedPromptName { controller.carryPromptName(carriedPromptName) }
@@ -1970,7 +2248,7 @@ final class AppModel: ObservableObject {
                 }
             }
             if attach(tab) { selectedID = tab.id }
-            controller.start()
+            if deferred { awaitConnect(tab, header: controller.cardHeader, on: controller.terminalHost) } else { controller.start() }
         case .serial, .telnet:
             // A telnet session is a console line over TCP: the same controller,
             // with `TelnetWorker` under it (see ConsoleWorker).
@@ -2051,9 +2329,22 @@ final class AppModel: ObservableObject {
                 }
             }
             if attach(tab) { selectedID = tab.id }
-            controller.start()
+            if deferred {
+                let name = host.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let endpoint = host.kind == .telnet ? "Telnet \(host.address):\(host.port)" : "\(host.address) · \(host.port)"
+                let title = SSHWorker.printable(name.isEmpty ? host.address : name)
+                awaitConnect(tab, header: ConnectionCardHeader(title: title, subtitle: SSHWorker.printable(endpoint),
+                                                               windowTitle: "\(title) — \(SSHWorker.printable(endpoint))"),
+                             on: controller.terminalHost)
+            } else {
+                controller.start()
+            }
         }
     }
+
+    /// "host:port" of the hop whose login was refused, from the failure
+    /// card's Try Again to the `open` it starts (read once there).
+    private var refusedJumpEndpoint: String?
 
     /// A jump host's accepted password: cached for the bastion's endpoint
     /// only. No recent, no username change — the tab's host is the target.
@@ -2162,7 +2453,10 @@ final class AppModel: ObservableObject {
         guard let index = store.quickConnectGroupIndex(for: groupName) else {
             if let makeCredential { host.credentialID = makeCredential() }
             store.noteExplicitUserMutation()
+            let roots = Set(GroupTree.children(of: nil, in: store.groups).map(\.id))
             store.groups.append(HostGroup(name: HostStore.quickConnectGroupName(groupName), hosts: [host]))
+            // The new group goes in the workspace being shown.
+            WorkspaceDefaults.adoptNewRoots(since: roots, groups: store.groups)
             store.save()
             onSaved?(host)
             return
@@ -2434,8 +2728,11 @@ final class AppModel: ObservableObject {
                   let current = self.tabs.first(where: { $0.id == tabID }),
                   current.statusInfo == "disconnected" else { return }
             let focusBefore = self.selectedID
-            self.reconnect(tab: current)
-            if let newTab = self.selectedTab {
+            // The successor itself, not "the tab now selected": a session
+            // that dropped in a background tab or an unfocused pane put its
+            // count on whatever the user was looking at, so it got one retry
+            // instead of three and never said it gave up (review 2026-11-11).
+            if let newTab = self.reconnect(tab: current) {
                 newTab.autoReconnectAttempts = attempts + 1
                 newTab.wasConnected = true
                 // Don't steal focus if the user was working in another tab.
@@ -2447,12 +2744,15 @@ final class AppModel: ObservableObject {
     }
 
     /// Tears down an SSH/serial tab and opens a fresh session to the same
-    /// host, keeping the tab's position in the strip.
-    func reconnect(tab: SessionTab, askPasswordFor refused: RefusedLogin? = nil) {
+    /// host, keeping the tab's position in the strip. Returns the successor
+    /// tab — nil when none was opened (a web / Files / Ping tab restarts in
+    /// place, a stale caller, an open that was refused).
+    @discardableResult
+    func reconnect(tab: SessionTab, askPasswordFor refused: RefusedLogin? = nil) -> SessionTab? {
         // A stale caller — a context menu left open across an automatic
         // reconnect — must not open a SECOND session to the host and take
         // the log file out from under the one already running.
-        guard tabs.contains(where: { $0.id == tab.id }) else { return }
+        guard tabs.contains(where: { $0.id == tab.id }) else { return nil }
         var host: Host
         var serialLog: Bool?
         var handedLogger: SessionLogger?
@@ -2474,14 +2774,14 @@ final class AppModel: ObservableObject {
         case .web(let controller):
             // "Reconnect" on a web tab is a reload: same page, same session.
             controller.reload()
-            return
+            return nil
         case .files(let controller):
             controller.connect()
-            return
+            return nil
         case .ping(let controller):
             controller.restartAll()
-            return
-        case .local: return
+            return nil
+        case .local: return nil
         }
         // The successor tab is rebuilt from scratch, so its highlight state
         // would revert to defaults — throwing away a device family the user
@@ -2520,9 +2820,12 @@ final class AppModel: ObservableObject {
             let next = book.remove(old)
             if selectedID == old { selectedID = next }
         }
-        if let newTab = tabs.last {
-            // Only to a successor that was really opened (close took one, open added one) — never to another tab (Fable).
-            if tabs.count == tabsBefore { FloatingTools.shared.give(carriedTools, to: newTab.id) }
+        // Only a successor that was really opened (close took one, open added
+        // one) — never another tab: when the open was refused, the last tab
+        // is somebody else's and must not take this one's family or count.
+        guard tabs.count == tabsBefore, let newTab = tabs.last else { return nil }
+        do {
+            FloatingTools.shared.give(carriedTools, to: newTab.id)
             newTab.notedSerialBaud = carriedNotedBaud
             newTab.vendorManuallyChosen = oldManual
             // An explicit choice (including an explicit .auto) must keep
@@ -2557,6 +2860,7 @@ final class AppModel: ObservableObject {
                 tabs.insert(newTab, at: index)
             }
         }
+        return newTab
     }
 
     func closeCurrentTab() {
@@ -2634,7 +2938,14 @@ final class AppModel: ObservableObject {
     func canSplitFocusedPane(_ direction: PaneDirection) -> Bool {
         guard let tab = selectedTab, let ws = selectedWorkspace, ws.paneCount < PaneLayout.maxPanes else { return false }
         var isPing = false
-        if case .ping = tab.content { isPing = true }
+        switch tab.content {
+        case .ping: isPing = true
+        // What `splitFocusedPane` can only beep at: a cable is exclusive
+        // (a telnet console opens again), a Files tab has no second copy.
+        case .serial(let controller): guard controller.isTelnet else { return false }
+        case .files: return false
+        case .local, .ssh, .web: break
+        }
         return book.canSplit(beside: tab.id, direction, compact: isPing)
     }
 
@@ -2798,10 +3109,14 @@ final class AppModel: ObservableObject {
     /// Split: each opens as usual, then the new sessions gather into one tab
     /// (the first nine; the rest keep their own tabs).
     func openInSplit(hosts: [Host]) {
+        // A saved split keeps its own tab and layout: gathered with the
+        // rest it was flattened into the common grid (6.1 (52)).
+        let splits = hosts.filter { $0.kind == .split }
         let before = Set(tabs.map(\.id))
-        for host in hosts { open(host: host) }
+        for host in hosts where host.kind != .split { open(host: host) }
         let opened = tabs.map(\.id).filter { !before.contains($0) }
         if let ws = book.gather(opened) { focusMoved(ws.focused) }
+        for host in splits { open(host: host) }
         collapseSidebar()
     }
 

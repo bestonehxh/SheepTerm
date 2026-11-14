@@ -33,6 +33,55 @@ struct SSHConfig: Sendable {
     /// password may follow them. `.automatic` = everything, as before.
     var authMethod: SSHAuthMethod = .automatic
     var jumpAuthMethod: SSHAuthMethod = .automatic
+    /// The hops BEFORE `jump`, first hop first (6.1 (34): a bastion behind a
+    /// bastion). Empty = `jump` is reached straight from here, as before.
+    var earlierJumps: [JumpStep] = []
+
+    /// Every hop, first hop first; the last is `jump`.
+    nonisolated var jumpSteps: [JumpStep] {
+        guard let jump else { return [] }
+        return earlierJumps + [JumpStep(hop: jump, identity: jumpIdentity, identityName: jumpIdentityName, authMethod: jumpAuthMethod)]
+    }
+}
+
+/// One hop of a route with what its login may use (its credential's key,
+/// its Authentication).
+nonisolated struct JumpStep: Sendable {
+    var hop: JumpHop
+    var identity: StoredKey? = nil
+    var identityName: String = ""
+    var authMethod: SSHAuthMethod = .automatic
+}
+
+/// What one run has learnt about a hop (6.1 (48)): a legacy retry builds
+/// the hops before it AGAIN, and without this each was asked for the same
+/// username and password again and tried modern algorithms again — the
+/// logins doubled with every level. Lives for one `run`, never stored.
+nonisolated struct JumpRouteMemo: Sendable {
+    struct Hop: Sendable, Equatable {
+        var username = ""
+        var password: String?
+        var legacy = false
+    }
+    private var hops: [String: Hop] = [:]
+    /// By the hop's PLACE in the chain as well (`depth` = hops up to and
+    /// including it): the same address twice in one route (one private IP at
+    /// two sites, one bastion under two users) is two hops, and one's
+    /// password must never be offered to the other.
+    static func key(_ hop: JumpHop, depth: Int) -> String { "\(depth)|\(hop.host.lowercased()):\(hop.port)|\(hop.username)" }
+    subscript(hop: JumpHop, depth depth: Int) -> Hop {
+        get { hops[Self.key(hop, depth: depth)] ?? Hop() }
+        set { hops[Self.key(hop, depth: depth)] = newValue }
+    }
+    /// The hop's config with what this run already knows put in: a typed
+    /// username only where none is configured, a password only for that user.
+    func applied(to config: SSHConfig, for hop: JumpHop, depth: Int) -> SSHConfig {
+        var config = config
+        let known = self[hop, depth: depth]
+        if config.username.isEmpty, !known.username.isEmpty { config.username = known.username }
+        if let password = known.password, !password.isEmpty, config.username == known.username { config.password = password }
+        return config
+    }
 }
 
 nonisolated extension JumpHop {
@@ -97,7 +146,11 @@ nonisolated final class SSHWorker: Sendable {
         var onPasswordWorked: (@Sendable (String, String) -> Void)?
         /// The same for the JUMP host's login — a separate door, so the
         /// bastion's user/password never land in the target's record.
-        var onJumpPasswordWorked: (@Sendable (String, String) -> Void)?
+        var onJumpPasswordWorked: (@Sendable (JumpHop, String, String) -> Void)?
+        /// The hop being connected and logged into right now (`askingForJumpHost`).
+        var jumpInQuestion: JumpHop?
+        /// The hop whose login was refused, for Try Again (`refusedLogin == .jumpHost`).
+        var refusedJump: JumpHop?
         /// `host:port` of the host whose key was refused (either hop), for
         /// the controller's Known Hosts offer.
         var refusedHost: String?
@@ -112,6 +165,8 @@ nonisolated final class SSHWorker: Sendable {
         /// lost", but Try Again must still ask — reloading the saved password
         /// would send the one the server already refused.
         var configuredRefusedThisRun: [RefusedLogin] = []
+        /// This run's hops (`JumpRouteMemo`).
+        var routeMemo = JumpRouteMemo()
         /// Fired once per login when the password the session was STARTED
         /// with (a saved credential, the session cache) is refused — the app
         /// stops offering a cached one. Never carries the password.
@@ -247,7 +302,12 @@ nonisolated final class SSHWorker: Sendable {
         get { state.withLock { $0.onPasswordWorked } }
         set { state.withLock { $0.onPasswordWorked = newValue } }
     }
-    var onJumpPasswordWorked: (@Sendable (String, String) -> Void)? {
+    /// The hop a question is about while `isAskingForJumpHost`.
+    var jumpInQuestion: JumpHop? { state.withLock { $0.jumpInQuestion } }
+    /// The hop whose login was refused in the run that just ended.
+    var refusedJump: JumpHop? { state.withLock { $0.refusedJump } }
+
+    var onJumpPasswordWorked: (@Sendable (JumpHop, String, String) -> Void)? {
         get { state.withLock { $0.onJumpPasswordWorked } }
         set { state.withLock { $0.onJumpPasswordWorked = newValue } }
     }
@@ -300,6 +360,10 @@ nonisolated final class SSHWorker: Sendable {
             }
         }
     }
+
+    /// Input accepted and not yet handed to the channel: a ZMODEM send
+    /// (`ZModemDriver`) feeds the line only while this is small.
+    var pendingWriteBytes: Int { state.withLock { $0.pendingWrites.count } }
 
     /// Returns false when the input was refused, so a paced paste can stop
     /// instead of reporting lines it never sent.
@@ -505,6 +569,7 @@ nonisolated final class SSHWorker: Sendable {
         var config = initialConfig
         refusedHost = nil
         refusedLogin = nil
+        state.withLock { $0.refusedJump = nil; $0.routeMemo = JumpRouteMemo() }
         configuredRefusedThisRun = []
         // config.port is an unvalidated Int.
         guard (1...65535).contains(config.port) else {
@@ -537,8 +602,9 @@ nonisolated final class SSHWorker: Sendable {
         // Jump host: the bastion is connected, checked and logged into first,
         // and the real host's SSH then runs over a direct-tcpip channel of it.
         var tunnel: SSHLink.Tunnel?
-        if let hop = config.jump {
-            guard let made = establishJump(hop, target: config, wake: pipeRead) else { return }
+        let steps = config.jumpSteps
+        if !steps.isEmpty {
+            guard let made = establishRoute(steps[...], toHost: config.host, port: config.port, wake: pipeRead) else { return }
             tunnel = made
         }
 
@@ -552,8 +618,8 @@ nonisolated final class SSHWorker: Sendable {
             usedLegacy = true
             // A failed negotiation took the bastion channel with it (the far
             // end hung up on the channel): a retry needs a fresh tunnel.
-            if let hop = config.jump {
-                guard let made = establishJump(hop, target: config, wake: pipeRead) else { return }
+            if !steps.isEmpty {
+                guard let made = establishRoute(steps[...], toHost: config.host, port: config.port, wake: pipeRead) else { return }
                 tunnel = made
             }
             switch connectAndExchangeKeys(config, legacy: true, wake: pipeRead, via: tunnel) {
@@ -718,7 +784,7 @@ nonisolated final class SSHWorker: Sendable {
         let kex = negotiated?.kex.rawValue ?? "?"
         let cipher = negotiated?.cipherClientToServer.rawValue ?? "?"
         var status = "ssh2 · \(cipher) · \(kex) · \(config.host):\(config.port) · \(config.username)"
-        if let hop = config.jump { status += " · via \(hop.label)" }
+        if !steps.isEmpty { status += " · via " + steps.map(\.hop.label).joined(separator: " → ") }
         if usedLegacy { status += " · LEGACY" }
         if forwarder != nil { status += " · agent" }
         // Local listeners now, plus every -R asked (the server's answer is a notice).
@@ -785,28 +851,51 @@ nonisolated final class SSHWorker: Sendable {
     /// failure is reported here with the bastion named, and nil comes back.
     /// The bastion link is owned by the returned tunnel; the inner link
     /// closes it with itself.
-    private func establishJump(_ hop: JumpHop, target: SSHConfig, wake: Int32) -> SSHLink.Tunnel? {
-        state.withLock { $0.askingForJumpHost = true }
-        defer { state.withLock { $0.askingForJumpHost = false } }
-        var hopConfig = hop.asConfig()
-        hopConfig.identity = target.jumpIdentity
-        hopConfig.identityName = target.jumpIdentityName
-        hopConfig.authMethod = target.jumpAuthMethod
+    ///
+    /// `steps` = this hop (the last) and the hops before it: the hop is
+    /// reached through a tunnel of THOSE (6.1 (34)), built here by the same
+    /// function — and built again for a legacy retry, since a failed
+    /// negotiation takes the channel under it along.
+    private func establishRoute(_ steps: ArraySlice<JumpStep>, toHost nextHost: String, port nextPort: Int, wake: Int32) -> SSHLink.Tunnel? {
+        guard let step = steps.last else { return nil }
+        let earlier = steps.dropLast()
+        let hop = step.hop
+        let depth = steps.count
+        // What an earlier build of this hop in the same run was told.
+        var hopConfig = state.withLock { $0.routeMemo }.applied(to: hop.asConfig(), for: hop, depth: depth)
+        hopConfig.identity = step.identity
+        hopConfig.identityName = step.identityName
+        hopConfig.authMethod = step.authMethod
         guard (1...65535).contains(hopConfig.port) else {
             closeSession("jump host \(hop.host): invalid port \(hopConfig.port)")
             return nil
         }
+        /// The wire to this hop: nil = straight there. `.failure` = an
+        /// earlier hop failed (it has reported itself).
+        func wire() -> Result<SSHLink.Tunnel?, HandshakeFailure> {
+            guard !earlier.isEmpty else { return .success(nil) }
+            guard let made = establishRoute(earlier, toHost: hop.host, port: hop.port, wake: wake) else { return .failure(.stopped) }
+            return .success(made)
+        }
+        guard case .success(let under) = wire() else { return nil }
+        // After the hops before it: their questions were theirs.
+        state.withLock { $0.askingForJumpHost = true; $0.jumpInQuestion = hop }
+        defer { state.withLock { $0.askingForJumpHost = false; $0.jumpInQuestion = nil } }
         notice("via jump host \(hop.label) — connecting…")
         let prefix = "jump host \(hop.label): "
-        var usedLegacy = hopConfig.mode == .legacy
+        var usedLegacy = hopConfig.mode == .legacy || (hopConfig.mode == .auto && state.withLock { $0.routeMemo[hop, depth: depth].legacy })
         let link: SSHLink
-        switch connectAndExchangeKeys(hopConfig, legacy: usedLegacy, wake: wake) {
+        switch connectAndExchangeKeys(hopConfig, legacy: usedLegacy, wake: wake, via: under) {
         case .success(let established):
             link = established
         case .failure(.negotiation(let why)) where hopConfig.mode == .auto:
             notice("jump host \(hop.label): modern negotiation failed (\(why)) — retrying with legacy algorithms…")
             usedLegacy = true
-            switch connectAndExchangeKeys(hopConfig, legacy: true, wake: wake) {
+            state.withLock { $0.routeMemo[hop, depth: depth].legacy = true }
+            state.withLock { $0.askingForJumpHost = false; $0.jumpInQuestion = nil }
+            guard case .success(let again) = wire() else { return nil }
+            state.withLock { $0.askingForJumpHost = true; $0.jumpInQuestion = hop }
+            switch connectAndExchangeKeys(hopConfig, legacy: true, wake: wake, via: again) {
             case .success(let established): link = established
             case .failure(let failure): report(failure, prefix: prefix); return nil
             }
@@ -823,6 +912,7 @@ nonisolated final class SSHWorker: Sendable {
                 return nil
             }
             hopConfig.username = user
+            state.withLock { $0.routeMemo[hop, depth: depth].username = user }
         }
         authCancelled = false
         authTransportError = nil
@@ -832,14 +922,19 @@ nonisolated final class SSHWorker: Sendable {
         // the bastion's user and password would be remembered for the target
         // (and handed to it on a later connect).
         let targetDoor = onPasswordWorked
-        onPasswordWorked = { [weak self] user, password in self?.onJumpPasswordWorked?(user, password) }
+        onPasswordWorked = { [weak self] user, password in
+            self?.state.withLock { $0.routeMemo[hop, depth: depth].username = user; $0.routeMemo[hop, depth: depth].password = password }
+            self?.onJumpPasswordWorked?(hop, user, password)
+        }
         defer { onPasswordWorked = targetDoor }
+        // A refusal of THIS hop's saved password, not an earlier hop's.
+        let refusedBefore = configuredRefusedThisRun.filter { $0 == .jumpHost }.count
         guard authenticate(link, hopConfig, side: .jumpHost, legacy: usedLegacy, wake: wake) else {
             if isRunning {
                 if let refusal = hostKeyRefusedDuringAuth {
                     closeSession(refusal, hostKeyRefusal: true)
                 } else if let transport = authTransportError {
-                    if configuredRefusedThisRun.contains(.jumpHost) { refusedLogin = .jumpHost }
+                    if configuredRefusedThisRun.filter({ $0 == .jumpHost }).count > refusedBefore { refusedLogin = .jumpHost; state.withLock { $0.refusedJump = hop } }
                     closeSession(prefix + transport)
                 } else if authCancelled {
                     // "connection cancelled" FIRST, never behind the prefix:
@@ -849,6 +944,7 @@ nonisolated final class SSHWorker: Sendable {
                     closeSession("connection cancelled — no password given for jump host \(hop.host)")
                 } else {
                     refusedLogin = .jumpHost
+                    state.withLock { $0.refusedJump = hop }
                     closeSession(prefix + "authentication failed")
                 }
             }
@@ -866,7 +962,7 @@ nonisolated final class SSHWorker: Sendable {
         }
         let channel: UInt32
         do {
-            channel = try ChannelTunnel.open(on: connection, host: target.host, port: target.port)
+            channel = try ChannelTunnel.open(on: connection, host: nextHost, port: nextPort)
         } catch {
             closeSession(prefix + "could not ask for a tunnel: \(Self.describe(error))")
             link.close()
@@ -881,7 +977,7 @@ nonisolated final class SSHWorker: Sendable {
             link.close()
             return nil
         case .success:
-            let target = "\(target.host):\(target.port)"
+            let target = "\(nextHost):\(nextPort)"
             if let outcome = ChannelTunnel.outcome(of: pending, channel: channel),
                let why = ChannelTunnel.explain(outcome, target: target) {
                 closeSession(prefix + why)
@@ -889,7 +985,7 @@ nonisolated final class SSHWorker: Sendable {
                 return nil
             }
         }
-        notice("tunnel to \(target.host):\(target.port) open through \(hop.label)")
+        notice("tunnel to \(nextHost):\(nextPort) open through \(hop.label)")
         let adapter = ChannelTunnel(connection: connection, channel: channel)
         // The target's first bytes (its version line) routinely arrive in
         // the same read as OPEN_CONFIRMATION; `waitFor` collected them into
@@ -3340,9 +3436,19 @@ nonisolated final class SSHLink {
     /// transport (whose messages route to the bastion connection), take our
     /// channel's data out of the connection's events, and feed it to the
     /// inner transport. EOF or CLOSE on the channel is the peer hanging up.
+    /// What arrived on this link's wire: the socket, or the tunnel it rides.
+    func readWire() throws -> Bool {
+        try tunnel.map { try readTunnel($0) } ?? readSocket()
+    }
+
+    /// Whether the socket at the bottom has bytes of ours waiting to go out.
+    var socketWantsOut: Bool { tunnel.map { $0.bastion.socketWantsOut } ?? !outbound.isEmpty }
+
     private func readTunnel(_ tunnel: Tunnel) throws -> Bool {
         do {
-            _ = try tunnel.bastion.readSocket()
+            // The bastion's own wire: its socket, or — a hop behind a hop
+            // (6.1 (34)) — the tunnel under it.
+            _ = try tunnel.bastion.readWire()
         } catch {
             // A refusal keeps its marker (the worker reads it); anything else
             // from the bastion's socket is named as the bastion's.
@@ -3372,7 +3478,7 @@ nonisolated final class SSHLink {
     func step(timeoutMS: Int32, wake: Int32, extra: [Int32]) throws -> Bool {
         try flush()
         try takeTransportEvents()
-        let wantsOut = tunnel.map { $0.bastion.hasPendingOutbound } ?? !outbound.isEmpty
+        let wantsOut = socketWantsOut
         var fds = [pollfd(fd: fd, events: Int16(POLLIN) | (wantsOut ? Int16(POLLOUT) : 0), revents: 0),
                    pollfd(fd: wake, events: Int16(POLLIN), revents: 0)]
         fds += extra.map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
@@ -3394,7 +3500,7 @@ nonisolated final class SSHLink {
         // resizing, probing or stopping — and its output reaches the
         // terminal as it comes.
         if revents & Int32(POLLIN | POLLHUP | POLLERR) != 0 {
-            gotBytes = try tunnel.map { try readTunnel($0) } ?? readSocket()
+            gotBytes = try readWire()
         }
         if revents & Int32(POLLNVAL) != 0 { throw Failure.socket("socket closed") }
         try flush()

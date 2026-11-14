@@ -854,11 +854,22 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
         let id: UInt32
         do {
             id = try channels.openSessionChannel()
+        } catch SSHChannelBridge.BridgeError.tooManyChannels {
+            // Busy, not gone: the terminal session is still up, and saying
+            // it was lost shut the Files tab for good.
+            throw RemoteFileError.remote("Too many transfers at once on this session — try again in a moment")
         } catch {
             markLost(SSHWorker.describe(error))
             throw RemoteFileError.connection(SSHWorker.describe(error))
         }
-        try pump(op) { opened.contains(id) || openFailed[id] != nil || ended.contains(id) }
+        do {
+            try pump(op) { opened.contains(id) || openFailed[id] != nil || ended.contains(id) }
+        } catch {
+            // Timed out (or cancelled) before the device answered: give the
+            // slot back — the bridge closes the channel the moment it opens.
+            try? channels.close(id)
+            throw error
+        }
         if let why = openFailed.removeValue(forKey: id) {
             throw RemoteFileError.remote("The device refused a new channel: \(why)")
         }

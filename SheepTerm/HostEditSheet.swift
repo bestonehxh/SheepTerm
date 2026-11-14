@@ -511,7 +511,7 @@ struct HostEditSheet: View {
             host.port = parsedPort ?? Host.defaultTelnetPort
         case .serial:
             host.port = baud
-        case .local, .web, .unsupported:
+        case .local, .web, .split, .unsupported:
             break
         }
         // The cached password belongs to the OLD user@address:port.
@@ -561,10 +561,11 @@ extension HostEditSheet {
 
 extension HostEditSheet {
     /// Saved SSH hosts this one may hop through — every one but itself.
-    /// One hop only: a host that is itself behind a jump host (saved or
-    /// typed) cannot be one.
+    /// One behind a bastion of its own too (6.1 (34)), unless its route
+    /// comes back through this host or is already `JumpTarget.maxHops` long.
     var jumpCandidates: [Host] {
-        model.store.groups.flatMap(\.hosts).filter { $0.id != original.id && JumpTarget.canBeBastion($0, groups: model.store.groups) }
+        let saved = model.store.groups.flatMap(\.hosts)
+        return saved.filter { JumpTarget.canBeBastion($0, for: original.id, saved: saved, groups: model.store.groups) }
     }
 
     /// The red line under "Via jump host" (see `JumpTarget.fieldError`).

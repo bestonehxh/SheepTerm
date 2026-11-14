@@ -78,7 +78,11 @@ extension PaneContent {
 extension SessionTerminalHost: PaneContent {
     var paneView: NSView { terminalView }
     var keyView: NSView { terminalView }
-    func paneDidHide() { cancelSafePaste(reason: .sessionEnded) }
+    func paneDidHide() {
+        // A Broadcast's lines keep going in a tab nobody is looking at (6.1 (48)).
+        if isPacingPaste, pacedRunIsBroadcast { return }
+        cancelSafePaste(reason: .sessionEnded)
+    }
     func setPointerNeedsFocus(_ needsFocus: Bool) { terminalView.pointerNeedsFocus = needsFocus }
     func refreshFocusAppearance() { terminalView.setNeedsFrame() }
 }

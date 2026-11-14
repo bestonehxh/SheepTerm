@@ -139,6 +139,12 @@ nonisolated final class SSHChannelBridge: Sendable {
                     credited = true
                 case .closed(let id):
                     s.open.remove(id)
+                case .channelOpenFailed(let id, _, _):
+                    // A refused channel never gets a `.closed`: its slot was
+                    // held for good, and four refusals later every transfer
+                    // failed with "too many channels" (review 2026-11-11).
+                    s.open.remove(id)
+                    s.queuedOut[id] = nil
                 default: break
                 }
             }

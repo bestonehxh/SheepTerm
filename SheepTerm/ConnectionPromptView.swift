@@ -112,6 +112,9 @@ enum ConnectionCardPage {
     case failure(title: String, message: String, hostKeyProblem: Bool, plan: ConnectionCardPlan.Page)
     /// A web tab's certificate question (answers .trust / .trustOnce / .cancel).
     case certificate(WebCertificateQuestion)
+    /// A tab brought back at launch (Reopen Last Tabs, 6.1 (35)): nothing is
+    /// dialled until Connect (it answers `.tryAgain`; Return too).
+    case waiting
 }
 
 /// What the user did on the card.
@@ -337,6 +340,7 @@ final class ConnectionCardView: NSView {
             switch model.page {
             case .progress: NSSound.beep()
             case .failure(_, _, _, let plan): model.send(plan.returnKey == .tryAgain ? .tryAgain : .close)
+            case .waiting: model.send(.tryAgain)
             case .question where model.entry.busy: NSSound.beep()
             case .question, .certificate: model.send(.answer(.cancel))
             }
@@ -418,7 +422,7 @@ struct ConnectionCardContent: View {
     @ViewBuilder private var titles: some View {
         VStack(spacing: 3) {
             switch model.page {
-            case .progress:
+            case .progress, .waiting:
                 title(model.header.title)
                 secondary(model.header.subtitle)
             case .question(let prompt):
@@ -525,6 +529,10 @@ struct ConnectionCardContent: View {
             }
         case .certificate(let question):
             CertificatePage(model: model, question: question)
+        case .waiting:
+            CardPage(content: { EmptyView() }, buttons: {
+                CardButton(String(localized: "Connect"), role: .green, help: String(localized: "Return")) { model.send(.tryAgain) }
+            })
         case .failure(_, let message, _, let plan):
             // Apple's order: the dismiss left of the action; the default
             // (Try Again, Return) rightmost.

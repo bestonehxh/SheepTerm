@@ -29,6 +29,12 @@ final class CredentialStore: ObservableObject {
     /// original is preserved, writes stop until the user acts, and every
     /// write leaves a .bak behind.
     private var suppressWritesAfterCorruptLoad = false
+    // credentials.json carries NO unknown key (6.1 (30)): `BackupManager
+    // .checkCredentialsCarryNoSecrets` refuses a file with one — the rule
+    // that keeps a secret out of it — so keeping a newer build's field here
+    // (as hosts.json / snippets.json do, `UnknownFields`) made this build's
+    // own file fail its own Sync and restore check. A newer field is
+    // dropped on this build's next save, as before 6.1 (14).
 
     /// False while the list is what a failed load left (empty, writes held):
     /// then it says nothing about which credentials exist, and Sync must not

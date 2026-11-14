@@ -181,6 +181,29 @@ nonisolated enum SyncPolicy {
         return filled
     }
 
+    /// A saved split (6.1 (36)) through a build that does not know it: such
+    /// a build keeps the row's kind ("split") and drops its `split` key, and
+    /// its copy, applied here, left a row that "can't be opened here" for
+    /// good. Like a parent: the layout this copy holds (`splits`: host id →
+    /// its `split` JSON) fills the GAP — never a value that is there.
+    static func fillKnownSplits(composed data: Data, splits: [String: Data]) -> Data {
+        guard !splits.isEmpty,
+              var list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return data }
+        var changed = false
+        for g in list.indices {
+            guard var hosts = list[g]["hosts"] as? [[String: Any]] else { continue }
+            for h in hosts.indices where (hosts[h]["kind"] as? String) == "split" && hosts[h]["split"] == nil {
+                guard let id = hosts[h]["id"] as? String, let known = splits[id],
+                      let layout = try? JSONSerialization.jsonObject(with: known) else { continue }
+                hosts[h]["split"] = layout
+                changed = true
+            }
+            list[g]["hosts"] = hosts
+        }
+        guard changed, let filled = try? SyncRecordCodec.canonical(list) else { return data }
+        return filled
+    }
+
     /// Whether a record this copy holds says the same as the cloud's copy,
     /// allowing for the two shapes one group has across builds: a build
     /// before nested groups always writes `"sections": []` and never
@@ -203,6 +226,13 @@ nonisolated enum SyncPolicy {
         if theirs["parentID"] == nil {
             guard (mine["parentID"] as? String) == parentAtApply else { return false }
             mine["parentID"] = nil
+        }
+        // A saved split back from a build that does not know it: the layout
+        // this copy filled in again (`fillKnownSplits`) is shape, not an edit
+        // — uploaded, the older build dropped it and sent its own copy back,
+        // every round.
+        if (mine["kind"] as? String) == "split", (theirs["kind"] as? String) == "split", theirs["split"] == nil {
+            mine["split"] = nil
         }
         guard let a = try? SyncRecordCodec.canonical(mine), let b = try? SyncRecordCodec.canonical(theirs) else { return false }
         return a == b
@@ -392,6 +422,9 @@ nonisolated enum SettingBounds {
         switch key {
         case "terminalFontSize": return min(max(value.rounded(), 9), 24)
         case "recentsShown": return min(max(value.rounded(), 1), 20)
+        // Spelled out, not `SidebarWidth.range`: this file is shared with
+        // Windows and Linux (root Package.swift `sharedSources`), where the
+        // Mac's sidebar type does not exist (6.1 (56)). A test keeps the two equal.
         case "sidebarWidth": return min(max(value, 200), 320)
         case "scrollbackLines": return min(max(value.rounded(), 500), 200_000)
         case "safePasteDelayMilliseconds":

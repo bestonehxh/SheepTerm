@@ -22,6 +22,47 @@ nonisolated enum SidebarCover {
     }
 }
 
+/// How wide the sidebar is (6.1 (20)–(22), the owner's numbers): the width
+/// follows the tree the sidebar shows — a level-7 row at 200 pt was an
+/// indent and three letters. Levels count the top-level group: up to 2 =
+/// the user's own width (233 until they drag), 3–4 = at least 243, 5–6 =
+/// at least 253, 7 = at least 263 (a level steps in 10 pt; the owner picked
+/// these in 6.1 (53) from a trial menu; 233 since 6.1 (54), the steps from it
+/// since 6.1 (55)). The user may still drag wider, never
+/// under the tree's floor. Nothing is stored for it: the `sidebarWidth`
+/// setting stays the user's own, so an older build reads the same number.
+nonisolated enum SidebarWidth {
+    static let range: ClosedRange<Double> = 200...320
+    static let standard: Double = 233
+
+    /// The user's width from the stored setting (0 = never dragged).
+    static func own(stored: Double) -> Double {
+        stored == 0 || !stored.isFinite ? standard : min(max(stored, range.lowerBound), range.upperBound)
+    }
+
+    /// The least width a tree `levels` deep is drawn at (1 = groups only).
+    static func floor(levels: Int) -> Double {
+        switch levels {
+        case ...2: return range.lowerBound
+        case 3...4: return 243
+        case 5...6: return 253
+        default: return 263
+        }
+    }
+
+    /// The user's own width after dragging the edge to `width`, the tree's
+    /// floor being `floor`: wider than the floor is theirs; at or under it
+    /// the tree is what holds the sidebar there, so their own width stays
+    /// what it was (never raised to the floor — a deep tree deleted must
+    /// give their narrow sidebar back).
+    static func dragged(own: Double, floor: Double, to width: Double) -> Double {
+        width > floor ? min(width, range.upperBound) : min(own, floor)
+    }
+
+    /// The width drawn.
+    static func shown(own: Double, levels: Int) -> Double { max(own, floor(levels: levels)) }
+}
+
 /// Settings ▸ Sidebar ▸ Show Sidebar at Launch (6.0 (12)): off = today's
 /// launch (clean, like Terminal.app; ⌘0 opens it). A per-Mac layout choice
 /// like `sidebarWidth`: in a backup, never synced

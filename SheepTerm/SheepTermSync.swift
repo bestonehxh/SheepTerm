@@ -208,6 +208,13 @@ final class SheepTermSync: SyncDataSource {
         for key in Self.syncedSettingKeys where records["setting:\(key)"] == nil {
             unavailable.insert("setting:\(key)")
         }
+        // A setting this build does not list (a newer build's) is never read
+        // as deleted (6.1 (14)): applied, it is not written here, so the next
+        // look would not see it and upload a deletion — an older Mac wiping a
+        // newer one's setting from every Mac. A listed setting with a value is
+        // a record above, so this prefix covers only the missing ones, which
+        // were unavailable already.
+        unavailablePrefixes.append("setting:")
         return SyncSnapshot(records: records, unavailable: unavailable, unavailablePrefixes: unavailablePrefixes,
                             wantCloudPrefixes: wantCloud)
     }
@@ -345,6 +352,12 @@ final class SheepTermSync: SyncDataSource {
                         if let parent = group.parentID { parents[group.id.uuidString] = parent.uuidString }
                     }
                     composed = SyncPolicy.fillKnownParents(composed: composed, parents: parents)
+                    // …and a saved split's layout, dropped by a build that does not know it.
+                    var splits: [String: Data] = [:]
+                    for host in AppModel.shared.store.groups.flatMap(\.hosts) {
+                        if let split = host.split, let data = try? JSONEncoder().encode(split) { splits[host.id.uuidString] = data }
+                    }
+                    composed = SyncPolicy.fillKnownSplits(composed: composed, splits: splits)
                 }
                 var payload = BackupManager.Payload(format: BackupManager.currentFormat, app: "sync", created: Date(),
                                                     device: "", files: [family.file: composed], settings: [:])

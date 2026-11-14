@@ -12,8 +12,12 @@ struct HomeView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var store = AppModel.shared.store
     @AppStorage(HomePlan.storageKey) private var stored: Data?
+    @AppStorage(HomePlan.newerKey) private var storedNewer: Data?
     /// The columns of a board from before 6.1 (4): only to size its tiles once.
     @AppStorage(HomePlan.columnsKey) private var storedColumns = 2
+    /// The workspace the sidebar shows (6.1 (16)): Home follows it.
+    @AppStorage(WorkspacePlan.storageKey) private var workspaceData: Data?
+    @AppStorage(WorkspacePlan.selectionKey) private var selectedWorkspace = ""
     @State private var editing = false
     /// The tile whose "+N more" list is open.
     @State private var expanded: UUID?
@@ -34,7 +38,8 @@ struct HomeView: View {
     /// The board, every tile with its size (an old board's sized once, and
     /// saved so on the first edit).
     private var widgets: [HomePlan.Widget] {
-        HomePlan.live(HomePlan.load(stored, groups: store.groups), groups: store.groups).map { widget in
+        HomePlan.live(HomePlan.load(stored, newer: storedNewer, groups: store.groups), groups: store.groups,
+                      workspaces: Set(WorkspacePlan.load(workspaceData).workspaces.map(\.id))).map { widget in
             var sized = widget
             sized.size = HomePlan.size(of: widget, oldColumns: storedColumns)
             return sized
@@ -52,7 +57,8 @@ struct HomeView: View {
                 }
                 .frame(maxWidth: HomePlan.boardWidth)
                 // An empty host list hides outside Edit Home; the other widgets always show.
-                let shown = widgets.filter { editing || !$0.source.isHostList || !hosts(for: $0).isEmpty }
+                // …and a group of another workspace is not on this one's board (kept, not removed).
+                let shown = widgets.filter { inWorkspace($0) && (editing || !$0.source.isHostList || !hosts(for: $0).isEmpty) }
                 if shown.isEmpty && !editing {
                     EmptyPaneView().padding(.top, 40)
                 }
@@ -130,7 +136,32 @@ struct HomeView: View {
     // MARK: cards
 
     private func hosts(for widget: HomePlan.Widget) -> [Host] {
-        HomePlan.hosts(for: widget.source, groups: store.groups, recents: store.recents)
+        let hosts = HomePlan.hosts(for: widget.source, groups: store.groups, recents: store.recents)
+        // No filter (All Workspaces): nothing to look up.
+        guard let visible = visibleRoots else { return hosts }
+        // A saved host by the map (one pass); only one saved under no id —
+        // a recent — goes the long way, by its connection.
+        let roots = WorkspacePlan.rootsByHost(store.groups)
+        return hosts.filter { host in
+            roots[host.id].map(visible.contains) ?? WorkspacePlan.shows(host, visible: visible, groups: store.groups)
+        }
+    }
+
+    /// The chosen workspace's top-level groups; nil = All Workspaces.
+    private var visibleRoots: Set<UUID>? {
+        let plan = WorkspacePlan.load(workspaceData)
+        return plan.visibleRoots(plan.selection(selectedWorkspace), groups: store.groups)
+    }
+
+    /// A group widget shows only in its group's workspace, a Workspace tile
+    /// only in its own (All Workspaces shows them all); every other kind always.
+    private func inWorkspace(_ widget: HomePlan.Widget) -> Bool {
+        if case .workspace(let id) = widget.source {
+            let plan = WorkspacePlan.load(workspaceData)
+            return plan.selection(selectedWorkspace).map { $0 == id } ?? true
+        }
+        guard case .group(let id) = widget.source, let visible = visibleRoots else { return true }
+        return visible.contains(WorkspacePlan.root(of: id, in: store.groups))
     }
 
     private func title(for source: HomePlan.Source) -> String {
@@ -154,6 +185,8 @@ struct HomeView: View {
         case .fileServer: return String(localized: "File Server")
         case .note: return String(localized: "Note")
         case .rackFill: return "Rack Fill"
+        case .workspace(let id):
+            return WorkspacePlan.load(workspaceData).workspaces.first { $0.id == id }?.name ?? String(localized: "Workspace")
         }
     }
 
@@ -439,6 +472,12 @@ struct HomeView: View {
                 }
             }
             Button("Hosts by Type") { add(.types(HostType.bulkTypes.map(\.rawValue))) }
+            // A workspace as folders (6.1 (33)).
+            Menu("Workspace") {
+                ForEach(WorkspacePlan.load(workspaceData).workspaces) { workspace in
+                    Button(workspace.name) { add(.workspace(workspace.id)) }
+                }
+            }
             Divider()
             // 6.1 (8): the widgets that are not a host list.
             ForEach(Array(HomePlan.extraSources.enumerated()), id: \.offset) { _, source in
@@ -453,7 +492,7 @@ struct HomeView: View {
             }
             Divider()
             // Back to Recent + every top-level group.
-            Button("Reset Home") { stored = nil }
+            Button("Reset Home") { stored = nil; storedNewer = nil }
         } label: {
             Label("Add Widget", systemImage: "plus")
                 .font(.system(size: 12))
@@ -472,6 +511,7 @@ struct HomeView: View {
 
     private func update(_ next: [HomePlan.Widget]) {
         stored = HomePlan.save(next)
+        storedNewer = HomePlan.saveNewer(next)
     }
 
     private func binding<V>(_ id: UUID, _ path: WritableKeyPath<HomePlan.Widget, V>) -> Binding<V> {

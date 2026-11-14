@@ -170,7 +170,11 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
     }
 
     /// Ends every connection, releases the port and removes every temp file
-    /// an unfinished upload left. Waits (briefly) for the threads.
+    /// an unfinished upload left. Waits (briefly) for the threads — on the
+    /// main thread at most `mainThreadWait`: a session that is slow to end
+    /// (a full socket, a disk that stalls) used to freeze the window for the
+    /// whole 3 s (review 2026-11-11); the rest of the wait and the temp
+    /// sweep then finish on a background queue.
     func stop() {
         let (wasRunning, live, wake): (Bool, [Session], Int32) = lock.withLock {
             let was = running
@@ -181,7 +185,20 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
         guard wasRunning else { return }
         if wake >= 0 { var byte: UInt8 = 1; _ = write(wake, &byte, 1) }
         for session in live { session.kill() }
-        _ = threads.wait(timeout: .now() + 3)
+        if Thread.isMainThread, threads.wait(timeout: .now() + Self.mainThreadWait) == .timedOut {
+            DispatchQueue.global(qos: .utility).async { [self] in
+                _ = threads.wait(timeout: .now() + 3)
+                sweepTemps()
+            }
+            return
+        }
+        if !Thread.isMainThread { _ = threads.wait(timeout: .now() + 3) }
+        sweepTemps()
+    }
+
+    static let mainThreadWait: TimeInterval = 0.25
+
+    private func sweepTemps() {
         let leftovers: Set<String> = lock.withLock {
             defer { temps.removeAll() }
             return temps
@@ -343,6 +360,9 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
         private var scp: (channel: UInt32, io: ChannelIO)?
         private var serviceChosen = false
         private var channelClosed = false
+        /// `kill` (another thread) against this thread closing the socket.
+        private let fdLock = NSLock()
+        private var fdClosed = false
 
         init(server: SSHFileServer, fd: Int32, peer: String, signers: [SSHSigner]) {
             self.server = server
@@ -356,7 +376,12 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
             seenAbort = server.currentAbortGeneration
         }
 
-        func kill() { shutdown(fd, SHUT_RDWR) }
+        /// Never after `run` closed the socket: by then the descriptor
+        /// NUMBER may belong to a socket opened since (an SSH tab), and a
+        /// shutdown would cut that one (review 2026-11-11).
+        func kill() {
+            fdLock.withLock { if !fdClosed { shutdown(fd, SHUT_RDWR) } }
+        }
 
         func run() {
             defer {
@@ -364,7 +389,7 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
                 scp?.io.markDead()
                 transport.disconnect()
                 flush()
-                close(fd)
+                fdLock.withLock { fdClosed = true; close(fd) }
             }
             _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
             var on: Int32 = 1

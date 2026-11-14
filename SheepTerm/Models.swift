@@ -15,6 +15,11 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
     /// holds the URL (see `WebAddress`, WebTabs.swift, and ARCHITECTURE.md
     /// "Web tabs"). JSON value "web" — SheepTerm for Windows reads it too.
     case web
+    /// A saved split (6.1 (36), Tabs ▸ Save Split…): a row in a group that
+    /// opens several panes in one tab, laid out as saved (`Host.split`).
+    /// JSON value "split"; a build that predates it reads `.unsupported`,
+    /// keeps the string — and, from 6.1 (14) on, the layout (`UnknownFields`).
+    case split
     /// A kind this build does not know: written by a newer SheepTerm (or the
     /// Windows port). Never written as itself — `Host` keeps the raw string
     /// (`unknownKind`) and writes it back, so a hosts.json that holds one is
@@ -36,6 +41,7 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
         case .telnet: return "TEL"
         case .local: return "ZSH"
         case .web: return "WEB"
+        case .split: return "SPL"
         case .unsupported: return "?"
         }
     }
@@ -43,6 +49,40 @@ nonisolated enum ConnectionKind: String, Codable, Sendable {
     /// Kinds that are a terminal session on a device (highlight, snippets,
     /// broadcast, history, paging, logging).
     var isDeviceSession: Bool { self == .ssh || self == .serial || self == .telnet }
+}
+
+/// What a saved split opens (`ConnectionKind.split`): its panes and how they
+/// share the tab. A pane names a saved host by id and carries the endpoint
+/// it was — enough to open it when the host has been deleted since — and
+/// NOTHING else: no credential, no key, no jump path, so a saved split can be
+/// exported, synced and kept in Recently Deleted like a plain name.
+nonisolated struct SavedSplit: Codable, Hashable, Sendable {
+    struct Pane: Codable, Hashable, Sendable {
+        /// The saved host this pane was; nil = a local shell or a typed target.
+        var hostID: UUID?
+        /// `ConnectionKind` raw value: "local", "ssh", "telnet" or "web".
+        var kind: String = ConnectionKind.local.rawValue
+        var name: String = ""
+        var address: String = ""
+        var port: Int = 0
+        var username: String = ""
+    }
+
+    indirect enum Node: Codable, Hashable, Sendable {
+        case pane(Pane)
+        /// `vertical`: the children are stacked (rows); else side by side.
+        case split(vertical: Bool, children: [Node], fractions: [Double])
+
+        var panes: [Pane] {
+            switch self {
+            case .pane(let pane): return [pane]
+            case .split(_, let children, _): return children.flatMap(\.panes)
+            }
+        }
+    }
+
+    var root: Node
+    var panes: [Pane] { root.panes }
 }
 
 /// Add Host ▸ Authentication (6.1). Tolerant like `CipherMode`: a value
@@ -186,6 +226,8 @@ struct Host: Identifiable, Codable, Hashable {
     /// The raw `kind` string of a host whose kind this build does not know
     /// (`kind == .unsupported`); written back as-is. Not a JSON key.
     var unknownKind: String? = nil
+    /// A saved split's panes (`kind == .split`), else nil.
+    var split: SavedSplit? = nil
 
     /// Whether this host opts out of session logging, nil = no.
     var skipsLog: Bool { noLog ?? false }
@@ -245,7 +287,9 @@ struct Host: Identifiable, Codable, Hashable {
     /// matching — the UUID is NOT part of it, so a recent entry and the
     /// host it came from (different ids) still match.
     var connectionKey: String {
-        "\(kind.rawValue)\u{0}\(address)\u{0}\(port)\u{0}\(username)"
+        // A saved split has no endpoint: two of them are never "the same connection".
+        if kind == .split { return "\(kind.rawValue)\u{0}\(id.uuidString)" }
+        return "\(kind.rawValue)\u{0}\(address)\u{0}\(port)\u{0}\(username)"
     }
 
     func sameConnection(as other: Host) -> Bool {
@@ -301,10 +345,11 @@ struct Host: Identifiable, Codable, Hashable {
 /// read with decodeIfPresent and written only when non-nil. A new field must
 /// be added to `CodingKeys`, `init(from:)` and `encode(to:)`.
 extension Host {
-    enum CodingKeys: String, CodingKey {
+    /// CaseIterable: `UnknownFields` keeps every key NOT on this list.
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, kind, address, port, username, credentialID, section, cipherMode, agentForward,
              vendor, disablePaging, jumpHostID, jumpSpec, noLog, webTrustedCertSHA256, forwards,
-             authMethod, isJumpServer, environment, sshBadge
+             authMethod, isJumpServer, environment, sshBadge, split
     }
 
     init(from decoder: Decoder) throws {
@@ -340,6 +385,7 @@ extension Host {
         // Tolerant like the rest: a value this build cannot read is dropped.
         environment = (try? c.decodeIfPresent(HostEnvironment.self, forKey: .environment)) ?? nil
         sshBadge = (try? c.decodeIfPresent(SSHBadge.self, forKey: .sshBadge)) ?? nil
+        split = (try? c.decodeIfPresent(SavedSplit.self, forKey: .split)) ?? nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -366,6 +412,7 @@ extension Host {
         if isJumpServer == true { try c.encode(true, forKey: .isJumpServer) }
         try c.encodeIfPresent(environment, forKey: .environment)
         if kind == .ssh { try c.encodeIfPresent(sshBadge, forKey: .sshBadge) }
+        if kind == .split { try c.encodeIfPresent(split, forKey: .split) }
     }
 }
 
@@ -472,7 +519,8 @@ struct HostGroup: Identifiable, Codable, Hashable {
     /// level's colour. Kept without an icon too — a bar can be recoloured alone.
     var iconColor: GroupIconColor? = nil
 
-    enum CodingKeys: String, CodingKey { case id, name, hosts, parentID, sections, jumpHostID, icon, iconColor }
+    /// CaseIterable: `UnknownFields` keeps every key NOT on this list.
+    enum CodingKeys: String, CodingKey, CaseIterable { case id, name, hosts, parentID, sections, jumpHostID, icon, iconColor }
 
     /// Written by hand: a synthesized `init(from:)` throws `keyNotFound` for
     /// a missing key even when the property has a default value (measured —
@@ -591,22 +639,37 @@ extension HostGroup {
 /// reader here stops at either instead of looping, and treats a group whose
 /// parent is missing as top level.
 enum GroupTree {
-    /// What the DATA may hold: Site › Building › Floor › Room. `repair`
-    /// files anything deeper at this level, so a list written by another
-    /// build, a sync or a backup with four levels loads as it is — never
-    /// flattened.
-    static let maxDepth = 4
-    /// What the USER may make (6.0 (12), design G): Add Subgroup…, a move, an
-    /// Add Hosts path, a `.sheepterm` / Share Link import build at most three
-    /// levels — one bar colour each (`levelColor`). A fourth level that
-    /// already exists stays, may move UP, and is never pushed deeper
-    /// (`canMove`).
-    static let userDepth = 3
+    /// What the DATA may hold: a top-level group and six subgroups (6.1 (14),
+    /// the owner: Company › City › Region › Data Center › Building › Room ›
+    /// Rack). `repair` files anything deeper at this level, so a list written
+    /// by another build, a sync or a backup with seven levels loads as it is
+    /// — never flattened. Raised from 4 one release BEFORE the user may make
+    /// deeper groups (`userDepth`): a build that still caps the data at 4
+    /// would file levels 5–7 back up and sync that, so every platform must
+    /// hold seven levels first (Design/workspaces/PLAN.md, round 1).
+    static let maxDepth = 7
+    /// What the USER may make: Add Subgroup…, a move, an Add Hosts path, a
+    /// `.sheepterm` / Share Link import build at most this many levels.
+    /// Three from 6.0 (12) (design G); seven — all the data holds — from
+    /// 6.1 (15), round 2, once round 1 had put seven levels in every build's
+    /// data (a build capped at 4 files levels 5–7 back up and syncs that).
+    /// A branch already deeper (data from somewhere else) stays, may move UP,
+    /// and is never pushed deeper (`canMove`).
+    static let userDepth = 7
+    /// How deep the load-time pass turns an old build's section LABELS into
+    /// subgroups (`fileLabels` on a hosts.json / backup from before nested
+    /// groups): the old data cap, so raising `maxDepth` never makes a group
+    /// below level 4 out of a label that a build capped at 4 would have to
+    /// file back up.
+    static let labelDepth = 4
 
     /// Design G's bar in front of a group row, by level (1 = top level):
-    /// blue, teal, purple; a level-4 group (old data, a sync) takes level 3's.
-    /// One palette for both platforms' sidebars (dark only).
-    static let levelColors: [UInt32] = [0x4F9CF7, 0x3FB6A8, 0xA78BFA]
+    /// blue, teal, purple, then (6.1 (14), the owner: option B — a colour of
+    /// its own for every level) pink, orange, sky, slate — all from
+    /// `GroupIconColor`, none of the green / yellow / red that mean a state.
+    /// Anything deeper takes level 7's. One palette for every platform's
+    /// sidebar (dark only).
+    static let levelColors: [UInt32] = [0x4F9CF7, 0x3FB6A8, 0xA78BFA, 0xF08BB4, 0xF0A05A, 0x7DD3FC, 0xA3AEC2]
     static func levelColor(depth: Int) -> UInt32 {
         levelColors[max(0, min(depth, levelColors.count) - 1)]
     }
@@ -759,7 +822,7 @@ enum GroupTree {
     /// Whether every group in `ids` may move under `parent` (nil = the top
     /// level): never into itself or its own subtree, and its deepest
     /// subgroup within `userDepth` once there — or, for a branch that
-    /// already reaches deeper (a fourth level from old data), no deeper than
+    /// already reaches deeper (levels 4–7 from another build or a sync), no deeper than
     /// it reaches now: such a branch can move up or sideways, never down.
     static func canMove(_ ids: Set<UUID>, under parent: UUID?, in groups: [HostGroup]) -> Bool {
         guard !ids.isEmpty else { return false }
@@ -902,7 +965,7 @@ enum GroupTree {
     /// user has since moved), and only then makes one — appended, so it is the
     /// last of its siblings. A step is only MADE down to level `makeUpTo`
     /// (`userDepth` for whatever the user brings in — a `.sheepterm`, Add
-    /// Hosts, a Share Link; `maxDepth` for the load-time pass); an existing
+    /// Hosts, a Share Link; `labelDepth` for the load-time pass); an existing
     /// subgroup is still followed down to `maxDepth` (what exists is kept).
     /// A path deeper than that files into the deepest group reached.
     ///
@@ -1046,7 +1109,7 @@ extension Host {
         switch kind {
         case .ssh, .telnet: return Host.sshPortRange.contains(port)
         case .serial: return Host.serialBaudRange.contains(port)
-        case .local, .web, .unsupported: return true
+        case .local, .web, .split, .unsupported: return true
         }
     }
 }
@@ -1464,9 +1527,10 @@ enum ConfigurationHygiene {
                 // A backup from before nested groups: its sections become
                 // subgroups (one name each, as the load pass reads them), and
                 // whatever shape the file had is repaired before it lands.
-                GroupTree.fileLabels(&groups, splitPaths: false, makeUpTo: GroupTree.maxDepth)
+                GroupTree.fileLabels(&groups, splitPaths: false, makeUpTo: GroupTree.labelDepth)
                 GroupTree.repair(&groups)
-                files["hosts.json"] = try encoder.encode(groups)
+                // A newer build's fields (a backup or a sync from it) survive the check.
+                files["hosts.json"] = UnknownFields.restore(into: try encoder.encode(groups), UnknownFields.capture(data))
             } catch {
                 throw HygieneError.undecodable(name: "hosts.json", reason: error.localizedDescription)
             }
@@ -1747,17 +1811,92 @@ enum ConnectParser {
 /// Which bastion a host connects through — the one rule `AppModel.open`
 /// follows, here so it can be tested without a window (4.2 (9)).
 ///
-/// Precedence: a `jumpHostID` that names a saved SSH host which is not itself
-/// behind a jump host (one hop only) → `.saved`; else a `jumpSpec` that parses
-/// → `.spec`; else anything named at all (a dangling or multi-hop id, a spec
-/// that does not parse) → `.invalid`, which the tab reports instead of
-/// silently connecting direct; else `.none`. An id naming the host itself is
-/// treated as unset, as before.
+/// Precedence: a `jumpHostID` that names a saved SSH host → `.saved`; else a
+/// `jumpSpec` that parses → `.spec`; else anything named at all (a dangling
+/// id, a spec that does not parse) → `.invalid`, which the tab reports
+/// instead of silently connecting direct; else `.none`. An id naming the
+/// host itself is treated as unset, as before.
+///
+/// `resolve` is the hop NEAREST the host. Since 6.1 (34) a bastion may be
+/// behind a bastion of its own: `route` follows the chain to the first hop
+/// (at most `maxHops`; a loop or a longer chain is `.invalid`). A typed
+/// bastion may be a list, `user@a,user@b` — first hop first, as `ssh -J`.
 enum JumpTarget: Equatable {
     case none
     case saved(Host)
     case spec(Host)
     case invalid
+
+    /// Hops in one route (the owner, 6.1 (34): a bastion behind a bastion).
+    static let maxHops = 4
+
+    /// One hop of a route: the endpoint, and whether it is a saved host
+    /// (its credential and key apply) or a typed one (the session cache or
+    /// the prompt).
+    struct Hop: Equatable {
+        var host: Host
+        var saved: Bool
+    }
+
+    /// A typed bastion list → its hops, first hop first. nil = not a list of
+    /// targets, or longer than `maxHops`.
+    static func parseChain(_ spec: String) -> [Host]? {
+        let parts = spec.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard !parts.isEmpty, parts.count <= maxHops else { return nil }
+        var hops: [Host] = []
+        for part in parts {
+            guard let hop = parse(part) else { return nil }
+            hops.append(hop)
+        }
+        return hops
+    }
+
+    /// What `host` itself names, one step: its own saved bastion, its typed
+    /// list, or its group's Jump Server.
+    private enum Step { case none, saved(Host), typed([Host]), invalid }
+
+    private static func step(host: Host, saved: [Host], groups: [HostGroup]) -> Step {
+        let jumpID = host.jumpHostID.flatMap { $0 == host.id ? nil : $0 }
+        if let jumpID, let bastion = saved.first(where: { $0.id == jumpID }), bastion.kind == .ssh {
+            return .saved(bastion)
+        }
+        if let spec = host.jumpSpecValue {
+            guard let parsed = parseChain(spec) else { return .invalid }
+            return .typed(parsed)
+        }
+        if jumpID != nil { return .invalid }
+        // 6.1: the Jump Server its group (or a parent group) reaches through.
+        guard let viaID = groupVia(for: host, in: groups) else { return .none }
+        guard let bastion = saved.first(where: { $0.id == viaID }), bastion.kind == .ssh else { return .invalid }
+        return .saved(bastion)
+    }
+
+    /// Every hop to `host`, the first one connected to first; [] = straight
+    /// there; nil = something named cannot be followed (a dangling id, text
+    /// that does not parse, a loop, more than `maxHops`) — reported in the
+    /// tab, never bypassed.
+    static func route(host: Host, saved: [Host], groups: [HostGroup] = []) -> [Hop]? {
+        var hops: [Hop] = []
+        var seen: Set<UUID> = [host.id]
+        var current = host
+        while true {
+            switch step(host: current, saved: saved, groups: groups) {
+            case .none:
+                return hops
+            case .invalid:
+                return nil
+            case .typed(let list):
+                // A typed hop names no bastion of its own: the route starts here.
+                hops.insert(contentsOf: list.map { Hop(host: $0, saved: false) }, at: 0)
+                return hops.count <= maxHops ? hops : nil
+            case .saved(let bastion):
+                guard seen.insert(bastion.id).inserted else { return nil }
+                hops.insert(Hop(host: bastion, saved: true), at: 0)
+                guard hops.count <= maxHops else { return nil }
+                current = bastion
+            }
+        }
+    }
 
     /// A typed bastion → an SSH endpoint. nil = not a target. An empty
     /// username is allowed (the worker asks for one).
@@ -1771,34 +1910,26 @@ enum JumpTarget: Equatable {
         return parsed
     }
 
-    /// Whether `host` may be a bastion: SSH, and not itself behind a jump
-    /// host by either route (one hop only).
-    static func canBeBastion(_ host: Host) -> Bool {
-        host.kind == .ssh && host.jumpHostID == nil && host.jumpSpecValue == nil
-    }
-
+    /// The hop nearest `host` (see the type's comment); `.invalid` also when
+    /// the route beyond it cannot be followed.
     static func resolve(host: Host, saved: [Host], groups: [HostGroup] = []) -> JumpTarget {
-        let jumpID = host.jumpHostID.flatMap { $0 == host.id ? nil : $0 }
-        if let jumpID, let bastion = saved.first(where: { $0.id == jumpID }), canBeBastion(bastion, groups: groups) {
-            return .saved(bastion)
+        switch step(host: host, saved: saved, groups: groups) {
+        case .none: return .none
+        case .invalid: return .invalid
+        case .typed(let list): return list.last.map { .spec($0) } ?? .invalid
+        case .saved(let bastion):
+            return route(host: host, saved: saved, groups: groups) == nil ? .invalid : .saved(bastion)
         }
-        if let spec = host.jumpSpecValue {
-            guard let parsed = parse(spec) else { return .invalid }
-            return .spec(parsed)
-        }
-        if jumpID != nil { return .invalid }
-        // 6.1: the Jump Server its group (or a parent group) reaches through.
-        guard let viaID = groupVia(for: host, in: groups) else { return .none }
-        guard let bastion = saved.first(where: { $0.id == viaID }), canBeBastion(bastion, groups: groups) else { return .invalid }
-        return .saved(bastion)
     }
 
     /// The Jump Server `host`'s group chain names (nearest group first), or
-    /// nil. A Jump Server is never behind one (one hop only), and a group
-    /// never sends its own Jump Server through itself.
+    /// nil. A group never sends a Jump Server through one (a Jump Server is
+    /// behind another only by its own "Via jump host"), nor through itself.
     static func groupVia(for host: Host, in groups: [HostGroup]) -> UUID? {
         // SSH only: a telnet or web host in the group connects straight there.
-        guard host.kind == .ssh, host.isJumpServer != true, !groups.isEmpty,
+        // A Jump Server too, since 6.1 (34): one that sits in a group another
+        // reaches is behind that one (two hops for the hosts it reaches).
+        guard host.kind == .ssh, !groups.isEmpty,
               var group = groups.first(where: { $0.hosts.contains { $0.id == host.id } }) else { return nil }
         var seen: Set<UUID> = []
         while seen.insert(group.id).inserted {
@@ -1809,10 +1940,13 @@ enum JumpTarget: Equatable {
         return nil
     }
 
-    /// `canBeBastion`, also refusing a bastion that a group sends through
-    /// another Jump Server (that would be two hops).
-    static func canBeBastion(_ host: Host, groups: [HostGroup]) -> Bool {
-        canBeBastion(host) && groupVia(for: host, in: groups) == nil
+    /// Whether `candidate` may be `host`'s bastion: an SSH host whose own
+    /// route can be followed, does not come back through `host` (a loop),
+    /// and leaves room for one more hop.
+    static func canBeBastion(_ candidate: Host, for host: UUID?, saved: [Host], groups: [HostGroup]) -> Bool {
+        guard candidate.kind == .ssh, candidate.id != host,
+              let beyond = route(host: candidate, saved: saved, groups: groups), beyond.count < maxHops else { return false }
+        return !beyond.contains { $0.saved && $0.host.id == host }
     }
 
     /// Every saved Jump Server, in sidebar order — what a group's Via Jump
@@ -1831,21 +1965,21 @@ enum JumpTarget: Equatable {
         if let jumpHostID {
             if candidates.contains(where: { $0.id == jumpHostID }) { return nil }
             if saved.contains(where: { $0.id == jumpHostID }) {
-                return String(localized: "That host is behind a jump host itself — one hop only")
+                return String(localized: "That host cannot be the jump host here — its own route comes back through this host or is too long")
             }
             return String(localized: "Saved jump host no longer exists — pick another or None")
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if trimmed.contains(where: { $0.isWhitespace }) { return String(localized: "Jump host must not contain spaces") }
-        return parse(trimmed) == nil ? String(localized: "Jump host must be user@host[:port]") : nil
+        return parseChain(trimmed) == nil ? String(localized: "Jump host must be user@host[:port]") : nil
     }
 
     /// Typed text that does not parse keeps Connect/Save disabled.
     static func blocksSave(text: String, jumpHostID: UUID?) -> Bool {
         guard jumpHostID == nil else { return false }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && parse(trimmed) == nil
+        return !trimmed.isEmpty && parseChain(trimmed) == nil
     }
 
     /// The typed half of the field as it is stored: nil when a saved host is
@@ -1950,7 +2084,7 @@ nonisolated enum HostType: String, CaseIterable, Identifiable, Sendable {
         case .telnet: self = .telnet
         case .serial: self = .serial
         case .web: self = .web
-        case .local, .unsupported: return nil
+        case .local, .split, .unsupported: return nil
         }
     }
 
@@ -3347,6 +3481,9 @@ final class HostStore: ObservableObject {
     /// load and after each save so a save can tell whether another
     /// running copy wrote in between (last-writer-wins mitigation).
     private var knownGroupsMtime: Date?
+    /// Fields of hosts.json this build does not know (a newer build's), by
+    /// group / host id: put back on every write (`UnknownFields`).
+    private var unknownFields = UnknownFields.Extras()
     private var knownRecentsMtime: Date?
     /// Hosts and groups THIS copy removed since launch. The merge-on-save
     /// union below treats "on disk, not in memory" as "another copy added
@@ -3401,6 +3538,10 @@ final class HostStore: ObservableObject {
     }
 
     private static var fileURL: URL { baseDirectory.appendingPathComponent("hosts.json") }
+    private static var trashURL: URL { baseDirectory.appendingPathComponent(HostTrash.fileName) }
+    /// Last time's tabs (`TabRestore`): beside hosts.json, this Mac's only.
+    /// The name is `TabRestore.fileName`, spelled out: the worker harnesses stop at Models.
+    static var openTabsURL: URL { baseDirectory.appendingPathComponent("open-tabs.json") }
     private static var recentsURL: URL { baseDirectory.appendingPathComponent("recents.json") }
 
     init() {
@@ -3416,6 +3557,7 @@ final class HostStore: ObservableObject {
         // Mac. The recovered list then differs from disk, which keeps
         // `syncSnapshot` from re-uploading the parentless file.
         if let data = try? Data(contentsOf: Self.fileURL) {
+            unknownFields = UnknownFields.capture(data)
             let parentless = GroupTree.parentlessIDs(in: data)
             if !parentless.isEmpty, groupsLoad.warning == nil,
                let bakData = try? Data(contentsOf: Self.fileURL.appendingPathExtension("bak")),
@@ -3435,6 +3577,88 @@ final class HostStore: ObservableObject {
         hasUnsavedGroups = false
         knownGroupsMtime = Self.mtime(of: Self.fileURL)
         knownRecentsMtime = Self.mtime(of: Self.recentsURL)
+        // Recently Deleted: what is past its 30 days goes now.
+        let trashData = try? Data(contentsOf: Self.trashURL)
+        let trashThere = FileManager.default.fileExists(atPath: Self.trashURL.path)
+        if let binned = HostTrash.readable(trashData, fileExists: trashThere) {
+            trash = HostTrash.kept(binned, now: Date())
+            if trash != binned { writeTrash() }
+        } else {
+            // Unreadable: kept beside it, like every other file here — the
+            // next delete starts a new trash.json and must not overwrite it.
+            let stamp = Int(Date().timeIntervalSince1970)
+            try? FileManager.default.moveItem(at: Self.trashURL, to: Self.trashURL.appendingPathExtension("corrupt-\(stamp)"))
+            // Still there (it could not be read, or not moved): nothing is
+            // written over it this run — what it holds may be wanted back.
+            trashWritesSuppressed = FileManager.default.fileExists(atPath: Self.trashURL.path)
+        }
+    }
+
+    // MARK: Recently Deleted (6.1 (28), `HostTrash`)
+
+    /// What the user deleted in the last 30 days, newest first. This Mac's
+    /// only: never synced, not in a backup.
+    @Published private(set) var trash: [HostTrash.Entry] = []
+
+    /// The trash file was there but could not be read or set aside (6.1 (52)).
+    private var trashWritesSuppressed = false
+
+    @discardableResult private func writeTrash() -> Bool {
+        guard !trashWritesSuppressed, let data = HostTrash.save(trash) else { return false }
+        do { try data.write(to: Self.trashURL, options: .atomic); return true } catch {
+            NSLog("SheepTerm: trash.json could not be written (%@)", error.localizedDescription)
+            return false
+        }
+    }
+
+    private func bin(_ entries: [HostTrash.Entry]) {
+        guard !entries.isEmpty else { return }
+        // Where each was filed, read now: its group is about to go.
+        let plan = WorkspaceDefaults.plan()
+        let entries = entries.map { entry -> HostTrash.Entry in
+            var copy = entry
+            if let anchor = entry.host == nil ? entry.groups.first?.id : entry.origin, groups.contains(where: { $0.id == anchor }) {
+                copy.workspace = plan.workspace(for: WorkspacePlan.root(of: anchor, in: groups))
+            }
+            return copy
+        }
+        trash = HostTrash.kept(entries + trash, now: Date())
+        writeTrash()
+    }
+
+    /// Puts a deleted host or group back (under new ids — `HostTrash.restored`).
+    func restoreFromTrash(_ id: UUID) {
+        guard let entry = trash.first(where: { $0.id == id }) else { return }
+        noteUserMutation()
+        let before = groups
+        let tops = Set(GroupTree.children(of: nil, in: before).map(\.id))
+        groups = HostTrash.restored(entry, into: before)
+        let newRoots = GroupTree.children(of: nil, in: groups).map(\.id).filter { !tops.contains($0) }
+        save()
+        // In exactly one place: when the list could not be written, the
+        // restore is taken back and the entry stays in the trash — otherwise
+        // a later save would write the group AND leave "Restore" offering a
+        // second copy (or, at quit, it would be in neither).
+        guard !hasUnsavedGroups else { groups = before; return }
+        trash.removeAll { $0.id == id }
+        writeTrash()
+        // A top-level group that came back (new id) goes to the workspace
+        // it was deleted from; when that is gone or was never recorded, to
+        // the one being shown.
+        guard !newRoots.isEmpty else { return }
+        let shown = WorkspaceDefaults.plan().selection(UserDefaults.standard.string(forKey: WorkspacePlan.selectionKey))
+        WorkspaceDefaults.update { plan in
+            let was = plan
+            let home = entry.workspace.flatMap { id in plan.workspaces.contains { $0.id == id } ? id : nil } ?? shown ?? WorkspacePlan.defaultID
+            for root in newRoots { plan.assign(root: root, to: home) }
+            return plan != was
+        }
+    }
+
+    /// Deletes one entry for good; nil = all of them.
+    func emptyTrash(_ id: UUID? = nil) {
+        if let id { trash.removeAll { $0.id == id } } else { trash = [] }
+        writeTrash()
     }
 
     /// Loads a Codable list from disk. A missing file is normal (fresh
@@ -3509,6 +3733,7 @@ final class HostStore: ObservableObject {
         // would flatten the subtree on every Mac.
         if let data = try? Data(contentsOf: Self.fileURL) {
             Self.keepKnownParents(&loadedGroups, parentless: GroupTree.parentlessIDs(in: data), known: groups)
+            unknownFields = UnknownFields.capture(data)
         }
         Self.materialise(&loadedGroups)
         groups = loadedGroups
@@ -3547,7 +3772,7 @@ final class HostStore: ObservableObject {
             _ = ConfigurationHygiene.sanitizeHeadings(&groups[index])
             cleanHostNames(&groups[index].hosts)
         }
-        GroupTree.fileLabels(&groups, splitPaths: false, makeUpTo: GroupTree.maxDepth)
+        GroupTree.fileLabels(&groups, splitPaths: false, makeUpTo: GroupTree.labelDepth)
         cleanGroupNames(&groups)
         GroupTree.repair(&groups)
     }
@@ -3736,6 +3961,7 @@ final class HostStore: ObservableObject {
             _ = quarantineUnreadable(Self.fileURL)
             return
         }
+        unknownFields = unknownFields.merging(UnknownFields.capture(data))
 
         // uniquingKeysWith, never uniqueKeysWithValues: this is user data that
         // has been through imports, shares and restores, and a duplicate group
@@ -3871,7 +4097,9 @@ final class HostStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         do {
-            let data = try encoder.encode(value)
+            var data = try encoder.encode(value)
+            // What a newer build wrote that this one does not know goes back on.
+            if url == Self.fileURL { data = UnknownFields.restore(into: data, unknownFields) }
             if FileManager.default.fileExists(atPath: url.path) {
                 // Copy beside the old .bak and swap, so a failed copy leaves
                 // the PREVIOUS backup in place instead of no backup at all.
@@ -4114,6 +4342,8 @@ final class HostStore: ObservableObject {
         guard picked > 0 else { return 0 }
         let doomed = Set(ids.flatMap { GroupTree.subtreeIDs(of: $0, in: groups) })
         let victims = groups.filter { doomed.contains($0.id) }
+        // Kept for 30 days (Recently Deleted) before anything is removed.
+        bin(HostTrash.entries(forGroups: ids, in: groups, now: Date()))
         noteUserMutation()
         var keys = Set<String>()
         for group in victims {
@@ -4565,6 +4795,8 @@ final class HostStore: ObservableObject {
         let wanted = Set(ids)
         let victims = groups.flatMap(\.hosts).filter { wanted.contains($0.id) }
         guard !victims.isEmpty else { return 0 }
+        // Kept for 30 days (Recently Deleted) before anything is removed.
+        bin(HostTrash.entries(forHosts: wanted, in: groups, now: Date()))
         noteUserMutation()
         for host in victims { deletedHostIDs.insert(host.id) }
         for index in groups.indices {
@@ -5282,4 +5514,8 @@ struct Credential: Identifiable, Codable, Hashable {
     /// The OpenSSH user certificate for that key (6.1), a `-cert.pub` line.
     /// Public like `publicKey`; offered before the bare key. nil = none.
     var certificate: String? = nil
+
+    /// The synthesized Codable's keys, listed so `UnknownFields` can keep the
+    /// ones a newer build adds. A new field goes here too.
+    enum CodingKeys: String, CodingKey, CaseIterable { case id, name, username, websites, publicKey, certificate }
 }

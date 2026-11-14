@@ -16,8 +16,7 @@ struct ContentView: View {
     private var mainLayout: some View {
         HStack(spacing: 0) {
             if model.sidebarShown {
-                SidebarView(store: model.store)
-                    .frame(width: model.sidebarWidth)
+                SidebarSlot(store: model.store)
                     // Clip to the sidebar's own slot. The outer
                     // .ignoresSafeArea(.top) lets the outline's scroll content
                     // draw upward into the titlebar row — with a short window
@@ -153,9 +152,34 @@ private struct WindowSyncAccessor: NSViewRepresentable {
 }
 
 /// Thin draggable divider between sidebar and terminal pane.
+/// The sidebar at the width its tree asks for (`SidebarWidth`): it watches
+/// the store and the workspace shown, so a level made, moved in or switched
+/// to widens it at once and removing it gives the user's width back.
+struct SidebarSlot: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var store: HostStore
+    @AppStorage(WorkspacePlan.storageKey) private var workspaceData: Data?
+    @AppStorage(WorkspacePlan.selectionKey) private var selectedWorkspace = ""
+
+    private var levels: Int {
+        let plan = WorkspacePlan.load(workspaceData)
+        return plan.levels(shown: plan.visibleRoots(plan.selection(selectedWorkspace), groups: store.groups), groups: store.groups)
+    }
+
+    var body: some View {
+        let floor = SidebarWidth.floor(levels: levels)
+        SidebarView(store: store)
+            .frame(width: SidebarWidth.shown(own: model.sidebarWidth, levels: levels))
+            .onAppear { model.sidebarFloor = floor }
+            .onChange(of: floor) { _, now in model.sidebarFloor = now }
+    }
+}
+
 struct SidebarResizeHandle: View {
     @EnvironmentObject var model: AppModel
     @State private var dragStartWidth: CGFloat?
+    /// The user's own width when the drag began (`SidebarWidth.dragged`).
+    @State private var dragStartOwn: CGFloat = SidebarWidth.standard
     /// Tracks the pushed resize cursor so pop only runs when we pushed —
     /// if the sidebar collapses (⌘0) mid-hover the exit callback never fires.
     @State private var cursorPushed = false
@@ -174,9 +198,9 @@ struct SidebarResizeHandle: View {
                         DragGesture(minimumDistance: 1, coordinateSpace: .global)
                             .onChanged { value in
                                 dragging = true
-                                let base = dragStartWidth ?? model.sidebarWidth
-                                if dragStartWidth == nil { dragStartWidth = base }
-                                model.sidebarWidth = min(max(base + value.translation.width, 200), 320)
+                                let base = dragStartWidth ?? max(model.sidebarWidth, model.sidebarFloor)
+                                if dragStartWidth == nil { dragStartWidth = base; dragStartOwn = model.sidebarWidth }
+                                model.sidebarWidth = SidebarWidth.dragged(own: dragStartOwn, floor: model.sidebarFloor, to: base + value.translation.width)
                             }
                             .onEnded { _ in
                                 dragging = false
@@ -329,6 +353,15 @@ struct DetailPane: View {
         .sheet(isPresented: $model.showReorderGroups) {
             ReorderGroupsSheet(store: model.store)
         }
+        .sheet(item: $model.saveSplitTarget) { request in
+            NamePromptSheet(title: "Save Split") { name in model.saveSplit(request, named: name) }
+        }
+        .sheet(item: $model.renameSplitTarget) { host in
+            NamePromptSheet(title: "Rename Split", initialName: host.name) { name in model.renameSplit(host, to: name) }
+        }
+        .sheet(isPresented: $model.showRecentlyDeleted) {
+            RecentlyDeletedSheet(store: model.store)
+        }
         // Here for the same reason as Reorder Groups above: View → Add
         // Hosts… must work whether or not the sidebar is showing.
         .sheet(item: $model.addHostsRequest) { request in
@@ -469,6 +502,16 @@ struct TopBarView: View {
         .frame(height: 30)
         .background {
             ChromeBackground(zone: .topBar).gesture(WindowDragGesture())
+        }
+        // A right-click anywhere on the bar that has no menu of its own —
+        // the empty strip, the icons — is the ＋ menu at the pointer (6.1
+        // (29), the owner: the Windows app had it and it comes back on all
+        // three). A tab chip keeps its own menu (the innermost one wins),
+        // which has New Tab ▸ too.
+        .contextMenu {
+            ForEach(Array(NewItemMenu.entries(model: model).enumerated()), id: \.offset) { _, entry in
+                if let entry { Button(entry.title, action: entry.run) } else { Divider() }
+            }
         }
         // Ground truth on attach: a restore straight into fullscreen may skip
         // the will/did notifications below (§2), and at onAppear the window

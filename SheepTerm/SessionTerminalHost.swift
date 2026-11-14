@@ -391,6 +391,19 @@ final class SessionTerminalHost {
         placeConnectionCard()
     }
 
+    /// A tab brought back at launch: the card with one button, Connect.
+    /// Close / Escape do nothing — the card is the pane until it connects.
+    func showConnectionWaiting(_ header: ConnectionCardHeader, onConnect: @escaping () -> Void) {
+        beginConnectionCard(header)
+        guard let card = connectionCard else { return }
+        settleQuestion(.cancel)
+        pageClose = nil
+        pageKnownHosts = nil
+        pageTryAgain = onConnect
+        card.show(stage: .connect, page: .waiting) { [weak self] action in self?.cardAction(action) }
+        placeConnectionCard()
+    }
+
     /// Settles a live question with `.cancel` (its worker gets nil); the
     /// card stays. Safe to call with nothing up.
     func dismissPrompt() {
@@ -685,6 +698,26 @@ final class SessionTerminalHost {
         if PacedRunGate.verdict(sendingPacedLine ? .pacedLine : .keystroke, runActive: pastePacer.isActive) == .stopRun {
             cancelSafePaste(reason: .keyboardInput)
         }
+    }
+
+    /// Broadcast's several commands (6.1 (46)): the lines go out one at a
+    /// time on the Safe Paste pacer — quiet gap, prompt check, the HUD with
+    /// Stop — without the review sheet: the Broadcast sheet showed the lines
+    /// and asked about a dangerous one. False = nothing was started.
+    ///
+    /// Such a run goes on while its pane is hidden (`paneDidHide`): it was
+    /// started for several tabs at once, and looking at one of them must
+    /// not cut the others off half-configured.
+    private(set) var pacedRunIsBroadcast = false
+
+    @discardableResult
+    func sendPacedLines(_ lines: [String]) -> Bool {
+        guard safePasteAvailable, !inputBlocked, !pastePacer.isActive, !pastePromptPresented, !lines.isEmpty else { return false }
+        let delay = SafePastePlan.delay(saved: UserDefaults.standard.integer(forKey: Self.pasteDelayKey))
+        let bytes = lines.reduce(0) { $0 + $1.utf8.count + 1 }
+        pacedRunIsBroadcast = true
+        startSafePaste(plan: SafePastePlan(lines: lines, sourceByteCount: bytes), delayMilliseconds: delay)
+        return true
     }
 
     /// A paced Safe Paste is still sending (Send File via XMODEM waits for it;
@@ -1279,6 +1312,7 @@ final class SessionTerminalHost {
             },
             completion: { [weak self] reason, sent in
                 guard let self else { return }
+                self.pacedRunIsBroadcast = false
                 self.hidePasteHUD()
                 // A paste that was cut short must SAY so. The pacer counts
                 // lines it handed to the transport, so a silent stop left the

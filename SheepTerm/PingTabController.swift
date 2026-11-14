@@ -133,7 +133,9 @@ final class PingTabController: ObservableObject {
         rows = order
     }
 
-    func add(targets: [String]) {
+    /// `started: false` (a tab brought back at launch): the rows are there,
+    /// stopped — nothing is pinged until the user starts them.
+    func add(targets: [String], started: Bool = true) {
         guard !closed else { return }
         let room = PingPlan.maxTargets - rows.count
         var known = Set(addresses.map { $0.lowercased() })
@@ -141,7 +143,7 @@ final class PingTabController: ObservableObject {
         for address in targets.filter({ known.insert($0.lowercased()).inserted }).prefix(max(0, room)) {
             let row = Row(address: address, name: savedName?(address) ?? address)
             rows.append(row)
-            start(row)
+            if started { start(row) } else { row.stats.stop() }
         }
         changed()
     }

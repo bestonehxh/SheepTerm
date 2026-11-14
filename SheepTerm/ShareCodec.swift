@@ -100,7 +100,9 @@ enum ShareCodec {
         var copy = group
         // A group's Jump Server (6.1) is a saved id, like a host's.
         copy.jumpHostID = nil
-        copy.hosts = group.hosts.map { host in
+        // A saved split is this Mac's layout, and its panes name hosts of
+        // OTHER groups (address, port, username): it does not travel.
+        copy.hosts = group.hosts.filter { $0.kind != .split }.map { host in
             var host = host
             host.credentialID = nil
             host.agentForward = nil

@@ -12,6 +12,21 @@ import Synchronization
 final class SerialTerminalController: NSObject {
     /// The view, its fading scroller and SafePaste. See SessionTerminalHost.
     let terminalHost = SessionTerminalHost(safePaste: true)
+    /// Read on the worker's queue: the session log skips a ZMODEM transfer's bytes.
+    nonisolated private let transferLogMuted = Mutex(false)
+    /// `sz` / `rz` on the far end of a console cable (6.1 (37)). Not over
+    /// telnet (its line is not 8-bit clean until BINARY is agreed), nor
+    /// while an XMODEM transfer has the line.
+    private lazy var zmodem = ZModemDriver(line: .init(
+        write: { [weak self] bytes in self?.worker.write(bytes) ?? false },
+        hasRoom: { [weak self] in !(self?.worker.hasUnsentWrites ?? true) },
+        window: { [weak self] in self?.terminalView.window },
+        notice: { [weak self] text, error in self?.printNotice(text, error: error) },
+        muteLog: { [weak self] muted in self?.transferLogMuted.withLock { $0 = muted } },
+        isAvailable: { [weak self] in
+            guard let self else { return false }
+            return !self.isTelnet && !self.worker.isTransferring
+        }), host: terminalHost)
     var terminalView: TerminalView { terminalHost.terminalView }
     private(set) var host: Host
 
@@ -231,6 +246,8 @@ final class SerialTerminalController: NSObject {
                     self?.drainPendingFeed()
                 }
             }
+            // A ZMODEM transfer's bytes are a file, not a session: not logged.
+            if self.transferLogMuted.withLock({ $0 }) { return }
             // Logging (regex strip + blocking file write) must not stall
             // the worker's I/O loop — hand it to the log queue.
             let logger = self.logger
@@ -285,6 +302,8 @@ final class SerialTerminalController: NSObject {
         worker.onClosed = { [weak self] message in
             DispatchQueue.main.async {
                 guard let self else { return }
+                // A transfer has no line left: its HUD, part file and log mute go now.
+                self.zmodem.sessionEnded()
                 self.terminalHost.cancelSafePaste(reason: .sessionEnded)
                 self.terminalHost.hideBaudHint()
                 self.printNotice(message, error: true)
@@ -683,6 +702,7 @@ final class SerialTerminalController: NSObject {
     }
 
     func stop() {
+        zmodem.sessionEnded()
         terminalHost.cancelSafePaste(reason: .sessionEnded)
         worker.stop()
         // Nothing will drain these once the tab is gone, so stop gating: a
@@ -712,7 +732,8 @@ final class SerialTerminalController: NSObject {
     /// Feeds everything the worker has coalesced since the last drain. Runs on
     /// the main actor only, so `MainFeedQueue.take()` has a single consumer.
     private func drainPendingFeed() {
-        let pending = mainFeed.take()
+        // ZMODEM first (see SSHTerminalController): its bytes are not the terminal's.
+        let pending = zmodem.filter(mainFeed.take())
         guard !pending.isEmpty else { return }
         terminalView.feed(pending)
         terminalHost.noteDeviceBytes(pending)       // Safe Paste's quiet gap and prompt check read this
@@ -766,7 +787,7 @@ extension SerialTerminalController: TerminalViewDelegate {
         let typed = sendIsKeystroke
         sendIsKeystroke = false
         // The line is the file's while a transfer runs.
-        if worker.isTransferring {
+        if worker.isTransferring || zmodem.isBusy {
             terminalHost.discardPendingKeystroke()
             NSSound.beep()
             return

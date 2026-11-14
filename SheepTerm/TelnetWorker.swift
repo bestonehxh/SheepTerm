@@ -75,6 +75,15 @@ nonisolated final class TelnetWorker: ConsoleWorker {
     /// unsent at the socket — so a Ctrl-C behind a long paste is not stuck
     /// behind megabytes the kernel has not taken (SSHWorker's 256 KiB rule).
     static let socketHighWater = 256 * 1024
+
+    /// The limit on negotiation ANSWERS waiting in the outbox (counted on
+    /// their own since 6.1 (48): a paste of several megabytes enters the
+    /// outbox whole and is not a flood). A far end that floods commands and
+    /// never reads the answers grew it without limit (review 2026-11-11). Reading must NOT stop instead (a
+    /// device that prints while a paste is stalled would deadlock): the
+    /// session ends here.
+    static let outboxHardCap = 16 * socketHighWater
+    static func outboxOverflows(_ count: Int) -> Bool { count > outboxHardCap }
     /// Connect budget: TCP, every address, the lot (SSH's 15 s).
     static let connectTimeout: Duration = .seconds(15)
     /// No progress on queued output for this long = the far end is gone.
@@ -303,6 +312,8 @@ nonisolated final class TelnetWorker: ConsoleWorker {
         let size = state.withLock { $0.size }
         var telnet = TelnetProtocol(cols: size.cols, rows: size.rows)
         var outbox = telnet.opening()
+        /// Negotiation answers added since the outbox was last empty (`outboxHardCap`).
+        var answersWaiting = 0
         let display = host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
         onStatus?("telnet · \(display)")
 
@@ -374,6 +385,7 @@ nonisolated final class TelnetWorker: ConsoleWorker {
                 let written = outbox.withUnsafeBytes { raw in Darwin.write(fd, raw.baseAddress, raw.count) }
                 if written > 0 {
                     outbox.removeFirst(written)
+                    if outbox.isEmpty { answersWaiting = 0 }
                     lastProgress = Self.clock()
                 } else if written < 0, errno != EAGAIN, errno != EINTR {
                     onClosed?("connection lost: \(String(cString: strerror(errno)))")
@@ -418,6 +430,11 @@ nonisolated final class TelnetWorker: ConsoleWorker {
                 if count > 0 {
                     let (data, reply) = telnet.receive(Array(buffer[0..<count]))
                     outbox += reply
+                    answersWaiting += reply.count
+                    if Self.outboxOverflows(answersWaiting) {
+                        onClosed?("connection lost: the far end asked for more than it would read")
+                        return
+                    }
                     if var sender = transfer, let job = transferJob, !data.isEmpty {
                         // The device's half of the protocol, not text.
                         outbox += telnet.encode(sender.receive(data, now: Self.clock()))

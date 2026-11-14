@@ -180,6 +180,21 @@ final class SSHTerminalController: NSObject {
     /// longer exists, which is reported instead of connecting directly.
     private let jump: JumpHop?
     private let jumpUnresolved: Bool
+    /// Read on the worker's queue: the session log skips a ZMODEM transfer's bytes.
+    nonisolated private let transferLogMuted = Mutex(false)
+    /// `sz` / `rz` on the far end (6.1 (37)).
+    private lazy var zmodem = ZModemDriver(line: .init(
+        write: { [weak self] bytes in self?.worker.write(bytes) ?? false },
+        hasRoom: { [weak self] in (self?.worker.pendingWriteBytes ?? .max) < 64 * 1024 },
+        window: { [weak self] in self?.terminalView.window },
+        notice: { [weak self] text, error in self?.printNotice(text, error: error) },
+        muteLog: { [weak self] muted in self?.transferLogMuted.withLock { $0 = muted } },
+        isAvailable: { true }), host: terminalHost)
+    /// The hop whose login was refused when the session last ended (of
+    /// several hops): Try Again asks for that one's password only.
+    private(set) var refusedJump: JumpHop?
+    /// The hop whose START password (a saved or cached one) was just refused.
+    private(set) var configuredRefusedJump: JumpHop?
 
     init(host: Host, password: String?, keys: SessionKeys = SessionKeys(), jump: JumpHop? = nil, jumpUnresolved: Bool = false,
          reusingLogger: SessionLogger? = nil) {
@@ -233,6 +248,8 @@ final class SSHTerminalController: NSObject {
                     self?.drainPendingFeed()
                 }
             }
+            // A ZMODEM transfer's bytes are a file, not a session: not logged.
+            if self.transferLogMuted.withLock({ $0 }) { return }
             // Logging (regex strip + blocking file write) must not stall
             // the worker's I/O loop — hand it to the log queue.
             let logger = self.logger
@@ -282,6 +299,8 @@ final class SSHTerminalController: NSObject {
         worker.onClosed = { [weak self] message in
             DispatchQueue.main.async {
                 guard let self else { return }
+                // A transfer has no line left: its HUD, part file and log mute go now.
+                self.zmodem.sessionEnded()
                 self.terminalHost.cancelSafePaste(reason: .sessionEnded)
                 // Nothing can be waiting on a card once the session closed.
                 self.cancelPrompt()
@@ -358,7 +377,12 @@ final class SSHTerminalController: NSObject {
             self?.askInTab(prompt, rejected: rejected) { _, _ in .challenge(text: SSHWorker.printable(prompt), secure: secure) }
         }
         worker.onConfiguredPasswordRefused = { [weak self] side in
-            DispatchQueue.main.async { self?.onConfiguredPasswordRefused?(side) }
+            // Read HERE, on the worker's queue, while the hop is still the one in question.
+            let hop = side == .jumpHost ? self?.worker.jumpInQuestion : nil
+            DispatchQueue.main.async {
+                self?.configuredRefusedJump = hop
+                self?.onConfiguredPasswordRefused?(side)
+            }
         }
         worker.onPasswordWorked = { [weak self] user, password in
             DispatchQueue.main.async {
@@ -368,12 +392,12 @@ final class SSHTerminalController: NSObject {
                 AppModel.shared.rememberSessionPassword(password, forUser: user, host: self.host)
             }
         }
-        worker.onJumpPasswordWorked = { [weak self] user, password in
+        worker.onJumpPasswordWorked = { hop, user, password in
             DispatchQueue.main.async {
-                guard let self, let jump = self.jump else { return }
-                // The bastion's login goes under the bastion's own key — and
-                // nowhere near this tab's host, username or recents.
-                AppModel.shared.rememberJumpPassword(password, forUser: user, address: jump.host, port: jump.port)
+                // The bastion's login goes under the bastion's own key (the
+                // hop that took it, of several) — and nowhere near this
+                // tab's host, username or recents.
+                AppModel.shared.rememberJumpPassword(password, forUser: user, address: hop.host, port: hop.port)
             }
         }
         worker.usernamePrompt = { [weak self] prompt in
@@ -392,7 +416,7 @@ final class SSHTerminalController: NSObject {
     /// jump host while the worker is logging into it, else this tab's host.
     nonisolated private func promptSubject() -> (host: String, viaJump: Bool, tabHost: String) {
         let tabHost = SSHWorker.printable(hostLabel)
-        if worker.isAskingForJumpHost, let jump = jumpLabel {
+        if worker.isAskingForJumpHost, let jump = worker.jumpInQuestion?.label ?? jumpLabel {
             return (SSHWorker.printable(jump), true, tabHost)
         }
         return (tabHost, false, tabHost)
@@ -508,7 +532,7 @@ final class SSHTerminalController: NSObject {
     private var connectCancelledByUser = false
 
     /// The session's title and "SSH address:port" for the card.
-    private var cardHeader: ConnectionCardHeader {
+    var cardHeader: ConnectionCardHeader {
         let address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = host.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = SSHWorker.printable(name.isEmpty ? address : name)
@@ -605,6 +629,7 @@ final class SSHTerminalController: NSObject {
         // start. After a refused login it asks that login's password again —
         // the refused one is not reused.
         let refused = worker.refusedLogin
+        refusedJump = refused == .jumpHost ? worker.refusedJump : nil
         let tryAgain: (() -> Void)? = ConnectionCardPlan.offersTryAgain(message: message, hostKeyProblem: hostKeyProblem)
             && onTryAgain != nil ? { [weak self] in self?.onTryAgain?(refused) } : nil
         cancelPendingProgress()
@@ -653,12 +678,12 @@ final class SSHTerminalController: NSObject {
         }
         if jumpUnresolved {
             // Never "connect directly instead": the user set a path on purpose.
-            printNotice("this host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only) — edit the host and pick another, or None", error: true)
+            printNotice("this host connects via a jump host that no longer exists, or a route that loops or is longer than \(JumpTarget.maxHops) hops — edit the host and pick another, or None", error: true)
             onStatus?("disconnected — jump host missing")
             cancelPendingProgress()
             terminalHost.beginConnectionCard(cardHeader)
             terminalHost.showConnectionFailure(title: String(localized: "Jump host missing"),
-                                               message: String(localized: "This host connects via a jump host that no longer exists (or is itself behind a jump host — one hop only). Edit the host and pick another, or None."),
+                                               message: String(localized: "This host connects via a jump host that no longer exists, or a route that loops or is too long. Edit the host and pick another, or None."),
                                                hostKeyProblem: false, onKnownHosts: nil) { [weak self] in
                 self?.terminalHost.closeConnectionCard()
             }
@@ -682,7 +707,8 @@ final class SSHTerminalController: NSObject {
             jumpIdentity: keys.jump?.key,
             jumpIdentityName: keys.jump?.name ?? "",
             authMethod: host.authMethod ?? .automatic,
-            jumpAuthMethod: keys.jumpAuthMethod
+            jumpAuthMethod: keys.jumpAuthMethod,
+            earlierJumps: keys.earlierJumps
         ))
     }
 
@@ -851,6 +877,7 @@ final class SSHTerminalController: NSObject {
 
     func stop() {
         stopped = true
+        zmodem.sessionEnded()
         terminalHost.cancelSafePaste(reason: .sessionEnded)
         worker.stop()
         // A question still up is answered "no" — the worker, blocked on it,
@@ -886,7 +913,9 @@ final class SSHTerminalController: NSObject {
     /// Feeds everything the worker has coalesced since the last drain. Runs on
     /// the main actor only, so `MainFeedQueue.take()` has a single consumer.
     private func drainPendingFeed() {
-        let pending = mainFeed.take()
+        // ZMODEM first: an `sz` / `rz` on the far end, and then the transfer
+        // itself, are not the terminal's to draw.
+        let pending = zmodem.filter(mainFeed.take())
         guard !pending.isEmpty else { return }
         terminalView.feed(pending)
         terminalHost.noteDeviceBytes(pending)       // Safe Paste's quiet gap and prompt check read this
@@ -939,6 +968,8 @@ extension SSHTerminalController: TerminalViewDelegate {
         // Every early return below = not taken; a stale true from an earlier
         // keystroke must not answer `takeLastSendAccepted` for these bytes.
         lastWriteAccepted = false
+        // The line is the file's while a ZMODEM transfer runs (or asks).
+        if zmodem.isBusy { NSSound.beep(); return }
         // A typed Return on a dangerous command is held for the user's
         // answer (Danger Command Guard) — and the keys behind it.
         guard terminalHost.admitOutgoing(bytes) else { return }

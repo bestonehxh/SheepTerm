@@ -530,10 +530,12 @@ struct QuickConnectSheet: View {
         kind == .ssh ? forwardDraft?.error(adding: forwards) : nil
     }
 
-    /// Saved SSH hosts that can be a bastion: one hop only, so a host that
-    /// is itself behind a jump host is not offered (same rule as Edit Host).
+    /// Saved SSH hosts that can be a bastion (`JumpTarget.canBeBastion`, the
+    /// same rule as Edit Host): one behind a bastion of its own too, while
+    /// the route has room for one more hop.
     private var jumpCandidates: [Host] {
-        model.store.groups.flatMap(\.hosts).filter { JumpTarget.canBeBastion($0, groups: model.store.groups) }
+        let saved = model.store.groups.flatMap(\.hosts)
+        return saved.filter { JumpTarget.canBeBastion($0, for: nil, saved: saved, groups: model.store.groups) }
     }
 
     /// The red line under "Via jump host" (see `JumpTarget.fieldError`).

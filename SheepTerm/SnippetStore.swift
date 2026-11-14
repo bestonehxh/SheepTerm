@@ -18,6 +18,12 @@ final class SnippetStore: ObservableObject {
     }
 
     private var suppressWritesAfterCorruptLoad = false
+    /// Fields a newer build wrote that this one does not know, by snippet id:
+    /// put back on every save (`UnknownFields`, 6.1 (14)).
+    private var unknownFields: [String: Data] = [:]
+    private func captureUnknownFields() {
+        unknownFields = (try? Data(contentsOf: Self.fileURL)).map { UnknownFields.captureList($0, known: UnknownFields.snippetKeys) } ?? [:]
+    }
     /// Sync: snippets.json failed to load; stays set until a clean reload
     /// (see `CredentialStore.isTrusted`).
     private(set) var quarantinedSinceLoad = false
@@ -25,6 +31,7 @@ final class SnippetStore: ObservableObject {
     init() {
         let (loaded, warning) = Self.load()
         snippets = loaded
+        captureUnknownFields()
         suppressWritesAfterCorruptLoad = warning != nil
         quarantinedSinceLoad = warning != nil
         if let warning { DispatchQueue.main.async { Self.reportCorruptLoad(warning) } }
@@ -34,6 +41,7 @@ final class SnippetStore: ObservableObject {
     func reloadFromDisk() {
         let (loaded, warning) = Self.load()
         snippets = loaded
+        captureUnknownFields()
         suppressWritesAfterCorruptLoad = warning != nil
         quarantinedSinceLoad = warning != nil
         if let warning { DispatchQueue.main.async { Self.reportCorruptLoad(warning) } }
@@ -114,7 +122,7 @@ final class SnippetStore: ObservableObject {
             return false
         }
         do {
-            let data = try SnippetCodec.encode(snippets)
+            let data = UnknownFields.restoreList(into: try SnippetCodec.encode(snippets), unknownFields)
             if FileManager.default.fileExists(atPath: Self.fileURL.path) {
                 let backupURL = Self.fileURL.appendingPathExtension("bak")
                 let stagingURL = Self.fileURL.appendingPathExtension("bak.tmp")

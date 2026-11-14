@@ -25,6 +25,9 @@ nonisolated struct SessionKeys: Sendable {
     var jump: (key: StoredKey, name: String)? = nil
     /// The bastion's Authentication (6.1).
     var jumpAuthMethod: SSHAuthMethod = .automatic
+    /// The hops before the bastion, first hop first, each with its own key
+    /// and Authentication (6.1 (34)).
+    var earlierJumps: [JumpStep] = []
 }
 
 /// Reading, checking and generating SSH private keys for credentials.

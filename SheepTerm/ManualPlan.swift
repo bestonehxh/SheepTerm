@@ -53,7 +53,7 @@ nonisolated enum ManualPlan {
             "The ≡ at the bottom of the sidebar shows the same list in the same order.",
         ], picture: "WhatsNew-rightclick"),
         Topic(id: "groups", symbol: "folder", title: "Groups and icons", steps: [
-            "New Group and Add Subgroup — up to four levels; drag hosts and groups to move them.",
+            "New Group and Add Subgroup — up to seven levels; drag hosts and groups to move them.",
             "Pick an icon and a colour when you make a group, or later: right-click ▸ Group Icon…",
             "The bar in front of the group follows its colour.",
         ], picture: "WhatsNew-groupicon"),
@@ -67,7 +67,7 @@ nonisolated enum ManualPlan {
             "Give a host the Jump badge.",
             "In Reaches, pick the groups behind it — every host in them connects through it.",
             "Reaches ▸ New Host… adds a host behind it straight away.",
-            "One hop only: a host that goes through a jump server cannot be one.",
+            "A jump server inside a group another one reaches goes through that one — up to 4 hops.",
         ], picture: "WhatsNew-jumphost"),
         Topic(id: "logs", symbol: "doc.text", title: "Session logs", steps: [
             "Settings ▸ Log Sessions to File; a host can opt out with Don't Log.",

@@ -268,12 +268,17 @@ nonisolated final class FTPServer: @unchecked Sendable {
             self.peerIP = peerIP
         }
 
+        /// Once only, and never after `run` closed the control socket: by
+        /// then its descriptor NUMBER may belong to a socket opened since
+        /// (an SSH tab, an SFTP client), and a shutdown would cut that one
+        /// (review 2026-11-11). `run` closes under this same lock.
         func abort() {
             fdLock.lock()
+            defer { fdLock.unlock() }
+            guard !aborted else { return }
             aborted = true
             shutdown(control, SHUT_RDWR)
             if dataFD >= 0 { shutdown(dataFD, SHUT_RDWR) }
-            fdLock.unlock()
         }
 
         /// Cuts the upload in flight, if any (see `FTPServer.abortWrites`).
@@ -333,10 +338,12 @@ nonisolated final class FTPServer: @unchecked Sendable {
                     if ready > 0, recv(control, &sink, sink.count, 0) <= 0 { break }
                 }
             }
+            // Under the lock, with `aborted` set: `abort` can no longer reach
+            // a descriptor that is closed (and maybe handed out again).
             fdLock.lock()
             aborted = true
-            fdLock.unlock()
             close(control)
+            fdLock.unlock()
             server?.sessionEnded(self)
         }
 

@@ -16,6 +16,10 @@ nonisolated struct Snippet: Identifiable, Codable, Hashable, Sendable {
     /// newline when Return is wanted (the paste encoder turns newlines into
     /// CR, which is what a terminal's Return sends).
     var payload: String { sendReturn ? text + "\n" : text }
+
+    /// The synthesized Codable's keys, listed so `UnknownFields` can keep the
+    /// ones a newer build adds. A new field goes here too.
+    enum CodingKeys: String, CodingKey, CaseIterable { case id, name, text, sendReturn }
 }
 
 /// How app-composed text reaches the device (Snippets, Broadcast): the body
@@ -167,6 +171,27 @@ nonisolated enum BroadcastPlan {
         let line = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty, !ticked.isEmpty else { return [] }
         return eligible(tabs).filter { ticked.contains($0.id) }.map { ($0.id, line + "\n") }
+    }
+
+    /// Several commands (6.1 (46)): every non-blank line of the cleaned text,
+    /// in order. One line = the old Send (`sends`); two or more go to each
+    /// tab one at a time, each waiting for its own device (the Safe Paste
+    /// pacer, `SessionTerminalHost.sendPacedLines`).
+    static func lines(_ text: String) -> [String] {
+        SnippetCodec.commandText(text).split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Safe Paste's own ceiling (10,000 lines, 5 MB): the lines ride its
+    /// pacer, and a box has no reason to take more than a paste may.
+    static func withinLimits(_ lines: [String]) -> Bool {
+        lines.count <= SafePastePlan.maxLines && lines.reduce(0) { $0 + $1.utf8.count + 1 } <= SafePastePlan.maxBytes
+    }
+
+    /// The ticked AND eligible tabs, in tab order.
+    static func targets(_ ticked: Set<UUID>, among tabs: [Candidate]) -> [UUID] {
+        eligible(tabs).map(\.id).filter(ticked.contains)
     }
 }
 

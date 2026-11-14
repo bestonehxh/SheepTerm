@@ -17,6 +17,7 @@ struct OptimizationSettingsView: View {
     @AppStorage(OptimizationPlan.newTabButtonKey) private var newTabButton = OptimizationPlan.NewTabButton.afterLastTab
     @AppStorage(OptimizationPlan.launchTabKey) private var launchTab = OptimizationPlan.Settings().launchTab
     @AppStorage(OptimizationPlan.showHomeButtonKey) private var showHomeButton = true
+    @AppStorage(TabRestore.settingKey) private var restoreTabs = false
     @AppStorage(OptimizationPlan.showSearchButtonKey) private var showSearchButton = true
     @AppStorage(OptimizationPlan.homePlaceKey) private var homePlace = OptimizationPlan.HomePlace.tabStrip
     /// 6.1 (9): the Stopwatch / Rack Fill bar buttons — off unless chosen (the owner).
@@ -86,6 +87,9 @@ struct OptimizationSettingsView: View {
                 .pickerStyle(.segmented)
                 // Chosen by hand: the user's, even back to the pinned value (Fable round 22).
                 .onChange(of: launchTab) { OptimizationPlan.unpinLaunchTab(.standard) }
+                // This Mac's only; nothing connects by itself (`TabRestore`).
+                Toggle("Reopen Last Tabs", isOn: $restoreTabs)
+                    .help("Brings back the tabs and splits that were open at quit. SSH, Telnet and console panes wait for Connect.")
                 Picker("New Tab Button", selection: $newTabButton) {
                     Text("After Last Tab").tag(OptimizationPlan.NewTabButton.afterLastTab)
                     Text("Far Right").tag(OptimizationPlan.NewTabButton.farRight)
