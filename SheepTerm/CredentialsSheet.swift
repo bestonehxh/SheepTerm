@@ -469,11 +469,27 @@ struct CredentialEditSheet: View {
             credential.name = trimmedName.isEmpty ? trimmedUser : trimmedName
             credential.username = trimmedUser
             credential.websites = websites
-            let applied = applyKey(key.change, to: credential.id, current: credential.publicKey)
-            guard applied.ok else { keyProblem = String(localized: "macOS refused to store the key in the Keychain."); return }
-            credential.publicKey = applied.line
-            credential.certificate = applied.line == nil ? nil : certificate
-            guard credentialStore.update(credential) else { NSSound.beep(); return }
+            if case .some(.some(let new)) = key.change { credential.publicKey = new.line }
+            if case .some(.none) = key.change { credential.publicKey = nil }
+            credential.certificate = credential.publicKey == nil ? nil : certificate
+            // The vault first, then the credential; a failed credential write
+            // puts the old key back (`PasswordsPlan.applyKeyEdit`).
+            let id = credential.id, changed = credential
+            let outcome = PasswordsPlan.applyKeyEdit(
+                key.change.map { $0.map { $0.key } }, exists: credentialStore.credential(for: id) != nil,
+                hadKey: credentialStore.credential(for: id)?.publicKey != nil, current: { Keychain.key(for: id) },
+                absent: { Keychain.hasKeyWithoutPrompt(for: id) == false },
+                set: { Keychain.setKey($0, for: id) }, remove: { Keychain.deleteKey(for: id) },
+                update: { credentialStore.update(changed) })
+            switch outcome {
+            case .saved: break
+            case .keyRefused:
+                keyProblem = String(localized: "macOS refused to store the key in the Keychain.")
+                return
+            case .gone, .updateFailed:
+                NSSound.beep()
+                return
+            }
             // The PASSWORD is never trimmed — a leading or trailing space can be part of it.
             if !password.isEmpty {
                 guard Keychain.setPassword(password, for: credential.id) else { NSSound.beep(); return }

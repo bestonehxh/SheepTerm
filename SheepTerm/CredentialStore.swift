@@ -359,6 +359,11 @@ enum Keychain {
         vault.value(for: id.uuidString, interactive: false).flatMap { String(data: $0, encoding: .utf8) }
     }
 
+    /// Whether a password is stored, never a prompt: nil = cannot tell yet.
+    static func hasPasswordWithoutPrompt(for id: UUID) -> Bool? {
+        vault.contains(id.uuidString)
+    }
+
     /// Sync's write: never a prompt. Not written = Sync retries later.
     static func setPasswordWithoutPrompt(_ password: String, for id: UUID) -> Bool {
         vault.set(Data(password.utf8), for: id.uuidString, interactive: false)
@@ -393,6 +398,12 @@ enum Keychain {
 
     static func key(for id: UUID) -> StoredKey? {
         vault.value(for: keyEntry(for: id), interactive: true).flatMap { try? JSONDecoder().decode(StoredKey.self, from: $0) }
+    }
+
+    /// Whether a key is stored, never a prompt: nil = cannot tell (the vault
+    /// is not open, or the read was refused).
+    static func hasKeyWithoutPrompt(for id: UUID) -> Bool? {
+        vault.contains(keyEntry(for: id))
     }
 
     /// Sync: the entry's raw bytes, never a prompt (nil = none or unknown).

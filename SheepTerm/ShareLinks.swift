@@ -37,11 +37,12 @@ final class ShareLinks: ObservableObject {
 
     // MARK: Sender
 
-    /// The logins a share of `group` could carry (the sheet turns the checkbox off at 0).
+    /// The logins a share of `group` could carry (the sheet turns the checkbox off at 0). Never a Keychain prompt: the sheet
+    /// asks this while it draws.
     func loginCount(in group: HostGroup) -> Int {
         let store = AppModel.shared.credentialStore
         return ShareLinkPlan.loginCount(group: group, credential: { store.credential(for: $0).map { ($0.name, $0.username) } },
-                                        hasPassword: { Keychain.password(for: $0) != nil })
+                                        hasPassword: { Keychain.hasPasswordWithoutPrompt(for: $0) })
     }
 
     func createShare(group: HostGroup, recipients: String, includeCredentials: Bool, passphrase: String,
@@ -51,7 +52,8 @@ final class ShareLinks: ObservableObject {
         let store = AppModel.shared.credentialStore
         let outgoing = try ShareLinkPlan.outgoing(group: group,
                                                   credential: { store.credential(for: $0).map { ($0.name, $0.username) } },
-                                                  password: { Keychain.password(for: $0) })
+                                                  password: ShareLinkPlan.passwordLookup(includeCredentials: includeCredentials,
+                                                                                         read: { Keychain.password(for: $0) }))
         var credentials: ShareCredentials?
         if includeCredentials, !outgoing.logins.isEmpty {
             credentials = ShareCredentials(entries: outgoing.logins.map {

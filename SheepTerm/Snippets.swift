@@ -22,6 +22,49 @@ nonisolated struct Snippet: Identifiable, Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey, CaseIterable { case id, name, text, sendReturn }
 }
 
+/// Edit Snippets' form (`SnippetsSheet`): nothing typed there is lost unless
+/// the user chooses so (Esc, Cancel Edit). Done used to hold Return and close
+/// the sheet over a half-typed snippet or an open edit, dropping it.
+nonisolated enum SnippetFormPlan {
+    /// What Done does.
+    enum Done: Equatable { case close, commitThenClose, stay }
+
+    /// Return belongs to Add/Save while there is something to write
+    /// (`isPending`); otherwise to Done. An edit left as it was is Done: Save
+    /// there rewrote snippets.json for nothing and left the sheet up
+    /// (review 6.1 (62)).
+    static func returnCommits(editing: Snippet?, name: String, text: String, sendReturn: Bool) -> Bool {
+        isPending(editing: editing, name: name, text: text, sendReturn: sendReturn)
+    }
+
+    /// Something in the form that is not in the list: new text, or an edit
+    /// that changed the snippet. An edit left as it was is not — Done then
+    /// writes nothing (a write would also re-arm a quarantined snippets.json).
+    static func isPending(editing: Snippet?, name: String, text: String, sendReturn: Bool) -> Bool {
+        if let editing { return editing.name != name || editing.text != text || editing.sendReturn != sendReturn }
+        return !blank(name) || !blank(text)
+    }
+
+    /// Add/Save's own rule: a command to send.
+    static func canCommit(text: String) -> Bool { !blank(text) }
+
+    static func done(editing: Snippet?, name: String, text: String, sendReturn: Bool) -> Done {
+        guard isPending(editing: editing, name: name, text: text, sendReturn: sendReturn) else { return .close }
+        return canCommit(text: text) ? .commitThenClose : .stay
+    }
+
+    /// An edit whose snippet went away meanwhile (Sync, another window) is
+    /// added back rather than dropped.
+    static func commitAdds(editing: Snippet?, existing: [Snippet]) -> Bool {
+        guard let editing else { return true }
+        return !existing.contains { $0.id == editing.id }
+    }
+
+    private static func blank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 /// How app-composed text reaches the device (Snippets, Broadcast): the body
 /// is PASTED and the Return is its own CR afterwards. Folding the newline into
 /// the paste puts the CR inside ESC[200~…ESC[201~ when the shell asked for
@@ -63,9 +106,9 @@ nonisolated enum CommandSendPlan {
     }
 
     /// Whether a command's body reached the worker. `cleanedSend`: Safe
-    /// Paste took a one-line body over and sent its CLEANED text at once
-    /// (`shouldPaste` → `sendImmediatePaste`) — that send's own acceptance
-    /// (nil = it did not). The view then reports "not pasted" (the host
+    /// Paste or the guard took the body over and sent its CLEANED text at
+    /// once (`GuardedPaste.sendCleaned` → `sendImmediatePaste`) — that
+    /// send's own acceptance (nil = it did not). The view then reports "not pasted" (the host
     /// vetoed its copy), which used to drop the command's Return and keep
     /// the tab out of Broadcast's count although the body went out
     /// (6.0 (12) review). Otherwise: handed to the view AND taken by the
@@ -73,6 +116,18 @@ nonisolated enum CommandSendPlan {
     static func bodyAccepted(handedOver: Bool, cleanedSend: Bool?, lastSendAccepted: () -> Bool) -> Bool {
         if let cleanedSend { return cleanedSend }
         return handedOver && lastSendAccepted()
+    }
+
+    /// The one dangerous line `sendCommand` asks about before anything
+    /// goes out: a body of one line that will run, checked CLEANED — the
+    /// text `shouldPaste` sends (`GuardedPaste`), not the raw body, which
+    /// an ESC or a backspace could make read as harmless (6.1 (62)). nil =
+    /// nothing to ask here (several lines go to the review, which marks them).
+    static func askFirst(_ plan: (body: String, thenReturn: Bool), isDangerous: (String) -> Bool) -> String? {
+        guard plan.thenReturn else { return nil }
+        let body = PasteHygiene.cleaned(plan.body)
+        guard !body.contains(where: \.isNewline), isDangerous(body) else { return nil }
+        return body
     }
 
     static func reviewed(_ plan: SafePastePlan, text: String, thenReturn: Bool?) -> Reviewed {

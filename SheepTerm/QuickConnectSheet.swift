@@ -303,6 +303,11 @@ struct QuickConnectSheet: View {
         .frame(width: SheetLayout.width)
         .sheepSheetChrome()
         .noAutoFill()
+        // A credential deleted while the sheet is open goes back to "Enter
+        // manually" (Edit Host and GroupCredentialSheet do the same).
+        .onChange(of: credentialStore.credentials) { _, credentials in
+            credentialSelection = HostFormPlan.liveSelection(credentialSelection, in: credentials)
+        }
         // Add Host opens nothing, so a typed password has no session to go
         // to: it is kept as a credential (shown ticked), never dropped.
         .onChange(of: password) {
@@ -344,7 +349,7 @@ struct QuickConnectSheet: View {
                 port = String(prefill.port)
                 portEdited = true
                 username = prefill.username
-                credentialSelection = prefill.credentialID
+                credentialSelection = HostFormPlan.liveSelection(prefill.credentialID, in: model.credentialStore.credentials)
                 cipherMode = prefill.cipherMode ?? .auto
                 agentForward = prefill.agentForward ?? false
                 disablePaging = prefill.disablePaging ?? false
@@ -517,8 +522,8 @@ struct QuickConnectSheet: View {
         switch kind {
         case .ssh:
             return parsedPort != nil && !targetHost.isEmpty && addressError == nil
-                && (isJumpServer || !JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID)) && forwardError == nil
-                && (authMethod != .key || credentialSelection != nil)
+                && !HostFormPlan.jumpBlocksSave(fieldError: jumpError) && forwardError == nil
+                && !HostFormPlan.keyBlocksSave(authMethod, selection: credentialSelection, in: credentialStore.credentials)
         case .telnet:
             return parsedPort != nil && !targetHost.isEmpty && addressError == nil
         default: return !device.isEmpty
@@ -577,11 +582,12 @@ struct QuickConnectSheet: View {
         let trimmedName = ConfigurationHygiene.cleanedName(name)
         if kind == .ssh {
             var hostUsername = effectiveUsername
-            var credentialID = credentialSelection
+            // Only an id that still resolves (the same rule as Edit Host).
+            var credentialID = HostFormPlan.liveSelection(credentialSelection, in: model.credentialStore.credentials)
 
             if let selected = model.credentialStore.credential(for: credentialSelection) {
                 hostUsername = selected.username
-            } else if saveCredential, !password.isEmpty, !addOnly, authMethod != .agent {
+            } else if saveCredential, !addOnly, HostFormPlan.savesTypedPassword(password, method: authMethod, credentialResolves: false) {
                 // CredentialStore skips the Keychain write for an empty
                 // password, which left the host bound to a credential that
                 // could never authenticate and prompted on every connect.
@@ -667,7 +673,9 @@ struct QuickConnectSheet: View {
             // once it knows the host is really added or updated (Keep Saved
             // Host must not leave a credential nothing uses).
             var newCredential: AppModel.NewCredential?
-            if kind == .ssh, credentialSelection == nil, saveCredential, !password.isEmpty, authMethod != .agent {
+            if kind == .ssh, saveCredential,
+               HostFormPlan.savesTypedPassword(password, method: authMethod,
+                                               credentialResolves: model.credentialStore.credential(for: credentialSelection) != nil) {
                 let typedName = credentialName.trimmingCharacters(in: .whitespacesAndNewlines)
                 newCredential = .init(name: typedName.isEmpty ? defaultCredentialName : typedName,
                                       username: effectiveUsername, password: password)

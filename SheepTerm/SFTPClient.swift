@@ -699,6 +699,10 @@ nonisolated final class SFTPEngine: @unchecked Sendable {
             while true {
                 while events.isEmpty, let payload = link.nextParked() {
                     do {
+                        // The login banner is dropped here: a Files tab has no
+                        // terminal to print it into (an SSH tab prints it —
+                        // `LoginBanner`, SSHWorker.authenticate). Not an answer,
+                        // so the wait goes on.
                         events += try auth.handle(payload).filter { if case .banner = $0 { return false }; return true }
                     } catch {
                         throw RemoteFileError.connection(SSHWorker.describe(error))

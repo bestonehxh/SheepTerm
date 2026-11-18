@@ -372,6 +372,148 @@ nonisolated enum CommandHistoryFile {
     }
 }
 
+// MARK: - Saving
+
+/// When history.json is written (6.1 (62)). It used to be encoded and
+/// rewritten whole on the main thread at every Return — 9.4 ms encode +
+/// 1.7 ms write at the cap (100 hosts × 500 lines, 1.6 MB), in front of the
+/// device's reply being drawn. Now a change is written `delay` after the
+/// last one (at most `longest` after the first unsaved one, so a steady
+/// stream still lands), encoded and written on a queue of its own from a
+/// copy, and `flush()` writes what is pending synchronously at quit: a crash
+/// loses at most the last couple of seconds. The file, the `.bak` of a
+/// run's first write and the rules for when writing stops are
+/// `CommandHistoryFile.save`'s and the store's, unchanged: writes stay off
+/// after an unreadable file (`suppressed` from the load) or a failed write
+/// until the user's next explicit change (`rearm`).
+@MainActor
+final class CommandHistorySaver {
+    static let delay: TimeInterval = 1.5
+    static let longest: TimeInterval = 5
+
+    private(set) var suppressed: Bool
+    private let url: URL
+    private let delay: TimeInterval
+    private let longest: TimeInterval
+    private let disk = Disk()
+    private let queue = DispatchQueue(label: "SheepTerm.history-save", qos: .utility)
+    private var pending: CommandHistoryData?
+    private var firstPending: Date?
+    private var generation = 0
+    /// Bumped by `rearm`: a failure of a write sent before it is not this run's to report.
+    private var epoch = 0
+    private let failed: @MainActor (String) -> Void
+
+    /// `failed` = a write did not land (writes are off from then on), with the reason.
+    /// `willWrite` runs on the save queue before each write (the harness
+    /// slows a write down with it to catch one in flight).
+    init(url: URL, suppressed: Bool, delay: TimeInterval = CommandHistorySaver.delay,
+         longest: TimeInterval = CommandHistorySaver.longest,
+         willWrite: (@Sendable () -> Void)? = nil, failed: @escaping @MainActor (String) -> Void) {
+        self.url = url
+        self.suppressed = suppressed
+        self.delay = delay
+        self.longest = longest
+        self.failed = failed
+        disk.willWrite = willWrite
+    }
+
+    /// Touched only on `queue`.
+    private nonisolated final class Disk: @unchecked Sendable {
+        var backedUp = false
+        var writes = 0
+        var willWrite: (@Sendable () -> Void)?
+    }
+
+    /// Writes that reached the disk or failed there (the harness counts them).
+    var writeCount: Int { Self.count(disk, on: queue) }
+
+    /// History changed: write it soon, unless writing is off.
+    func changed(_ data: CommandHistoryData) {
+        guard !suppressed else { return }
+        pending = data
+        let now = Date()
+        if firstPending == nil { firstPending = now }
+        let due = min(delay, max(0, longest - now.timeIntervalSince(firstPending ?? now)))
+        generation &+= 1
+        let current = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + due) { [weak self] in
+            guard let self, current == self.generation else { return }
+            self.send()
+        }
+    }
+
+    /// The user's explicit change: writing may go on again.
+    func rearm() {
+        suppressed = false
+        epoch &+= 1
+    }
+
+    /// Quit: what is pending is on disk when this returns (after any write
+    /// already under way).
+    func flush() {
+        generation &+= 1
+        // Nothing pending can still mean a write `send()` already handed to
+        // the queue: wait for it, or quit cuts the atomic write off half way
+        // (6.1 (62) review — this returned before touching the queue).
+        guard let data = pending, !suppressed else { Self.drain(queue); return }
+        pending = nil
+        firstPending = nil
+        if let error = Self.writeNow(data, to: url, disk: disk, on: queue) {
+            suppressed = true
+            failed(error)
+        }
+    }
+
+    private func send() {
+        guard let data = pending, !suppressed else { return }
+        pending = nil
+        firstPending = nil
+        Self.enqueue(data, to: url, disk: disk, on: queue, epoch: epoch) { [weak self] error, epoch in
+            guard let self, epoch == self.epoch, !self.suppressed else { return }
+            self.suppressed = true
+            self.pending = nil
+            self.failed(error)
+        }
+    }
+
+    // The blocks `queue` runs are built in these nonisolated statics.
+    private nonisolated static func count(_ disk: Disk, on queue: DispatchQueue) -> Int {
+        queue.sync { disk.writes }
+    }
+
+    /// Returns once every write already on `queue` has finished.
+    private nonisolated static func drain(_ queue: DispatchQueue) {
+        queue.sync {}
+    }
+
+    private nonisolated static func writeNow(_ data: CommandHistoryData, to url: URL, disk: Disk, on queue: DispatchQueue) -> String? {
+        queue.sync { write(data, to: url, disk: disk) }
+    }
+
+    /// The report of a failure comes back on main.
+    private nonisolated static func enqueue(_ data: CommandHistoryData, to url: URL, disk: Disk, on queue: DispatchQueue,
+                                            epoch: Int, failed: @escaping @MainActor @Sendable (String, Int) -> Void) {
+        queue.async {
+            guard let error = write(data, to: url, disk: disk) else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { failed(error, epoch) } }
+        }
+    }
+
+    /// On `queue`. nil = written.
+    private nonisolated static func write(_ data: CommandHistoryData, to url: URL, disk: Disk) -> String? {
+        disk.willWrite?()
+        disk.writes += 1
+        do {
+            try CommandHistoryFile.save(data, to: url, backup: !disk.backedUp)
+            disk.backedUp = true
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+}
+
 nonisolated private extension JSONEncoder {
     static var history: JSONEncoder {
         let encoder = JSONEncoder()

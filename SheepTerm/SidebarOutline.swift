@@ -299,7 +299,9 @@ final class SidebarOutlineView: NSOutlineView {
                     super.keyDown(with: event)
                     return
                 }
-                for row in hosts { coordinator?.activate(row) }
+                // Through the same question as right-click ▸ Connect: more
+                // than a tab holds asks "Open N hosts?" first.
+                coordinator?.activateSeveral(hosts)
                 return
             }
             if let item = items.first ?? item(atRow: selectedRow) as? SidebarItem {
@@ -1005,6 +1007,9 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             result.append(section)
         }
 
+        // The tree read once for this pass (`GroupTree.Index`): the
+        // workspace filter and a search's paths ask it per group.
+        let tree = parent.store.groupIndex
         do {
             let local = item(id: "section-local", kind: .section)
             local.title = String(localized: "This Mac")
@@ -1014,13 +1019,13 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
             result.append(local)
 
             if parent.showRecents && parent.searchText.isEmpty
-                && parent.store.recents.contains(where: { WorkspacePlan.shows($0, visible: parent.visibleRoots, groups: parent.store.groups) }) {
+                && parent.store.recents.contains(where: { WorkspacePlan.shows($0, visible: parent.visibleRoots, index: tree) }) {
                 let recent = item(id: "section-recent", kind: .section)
                 recent.title = String(localized: "Recent")
                 let shown = min(max(parent.recentsShown, 1), HostStore.maxRecents)
                 // The chosen workspace's recents (a typed connection always shows).
                 let recents = parent.store.recents.filter {
-                    WorkspacePlan.shows($0, visible: parent.visibleRoots, groups: parent.store.groups)
+                    WorkspacePlan.shows($0, visible: parent.visibleRoots, index: tree)
                 }
                 recent.children = recents.prefix(shown).map { host in
                     let row = item(id: "recent-\(host.id.uuidString)", kind: .staticRow)
@@ -1084,20 +1089,20 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
         }
         // Only the chosen workspace's top-level groups and what is under them.
         let visible = parent.visibleRoots
-        func inWorkspace(_ id: UUID) -> Bool { visible.map { $0.contains(WorkspacePlan.root(of: id, in: all)) } ?? true }
+        func inWorkspace(_ id: UUID) -> Bool { visible.map { $0.contains(tree.root(of: id)) } ?? true }
         if searching {
-            for entry in GroupTree.preorder(all) where inWorkspace(entry.group.id) {
+            for entry in GroupTree.preorder(tree) where inWorkspace(entry.group.id) {
                 let hosts = shown[entry.group.id] ?? []
                 guard !hosts.isEmpty else { continue }
                 let node = item(id: "group-\(entry.group.id.uuidString)", kind: .group)
                 node.group = entry.group
-                node.title = GroupTree.shownPath(of: entry.group.id, in: all)
+                node.title = GroupTree.shownPath(of: entry.group.id, in: tree)
                 node.children = hosts.map { hostRow($0, in: entry.group) }
                 node.count = hosts.count
                 result.append(node)
             }
         } else {
-            for group in GroupTree.children(of: nil, in: all) where visible?.contains(group.id) ?? true {
+            for group in tree.children(of: nil) where visible?.contains(group.id) ?? true {
                 let node = item(id: "group-\(group.id.uuidString)", kind: .group)
                 node.group = group
                 node.title = group.name
@@ -1309,7 +1314,7 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
 
     private func groupLevel(_ node: SidebarItem) -> Int {
         guard let id = node.group?.id else { return 1 }
-        return GroupTree.depth(of: id, in: parent.store.groups)
+        return parent.store.groupIndex.depth(of: id)
     }
 
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
@@ -1978,15 +1983,29 @@ final class SidebarOutlineCoordinator: NSObject, NSOutlineViewDataSource, NSOutl
     /// Opening many hosts from one click: past a full grid (nine) it asks
     /// first — each is a connection, and the rest open as tabs of their own.
     private func openSeveral(_ hosts: [Host], _ run: (AppModel, [Host]) -> Void) {
-        if hosts.count > PaneLayout.maxPanes {
+        guard confirmOpening(hosts.count) else { return }
+        run(parent.model, hosts)
+    }
+
+    /// Return on several selected hosts: each opened as a double click would,
+    /// after the same question as right-click ▸ Connect.
+    func activateSeveral(_ rows: [SidebarItem]) {
+        guard confirmOpening(rows.count) else { return }
+        for row in rows { activate(row) }
+    }
+
+    /// "Open N hosts?" when more open than a tab holds (`PaneLayout.asksBeforeOpening`);
+    /// false = the user said Cancel.
+    private func confirmOpening(_ count: Int) -> Bool {
+        if PaneLayout.asksBeforeOpening(count) {
             let alert = SheepAlert()
-            alert.messageText = String(localized: "Open \(hosts.count) hosts?")
+            alert.messageText = String(localized: "Open \(count) hosts?")
             alert.informativeText = String(localized: "Each one connects. A tab holds nine side by side; the rest open in tabs of their own.")
             alert.addButton(withTitle: String(localized: "Cancel"))   // default, so Return cancels
             alert.addButton(withTitle: String(localized: "Open"))
-            guard alert.sheepStyled().runModal() == .alertSecondButtonReturn else { return }
+            return alert.sheepStyled().runModal() == .alertSecondButtonReturn
         }
-        run(parent.model, hosts)
+        return true
     }
 
     private func add(_ menu: NSMenu, _ title: String, action: @escaping () -> Void) {

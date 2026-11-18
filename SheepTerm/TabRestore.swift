@@ -79,12 +79,45 @@ import Foundation
 
     // MARK: At launch
 
+    /// `node` as a tab can hold it, whoever wrote it (open-tabs.json, a saved
+    /// split from Sync or a hand edit): the first `limit` panes in reading
+    /// order — the rest are left out, nothing is opened or dialled for them,
+    /// and their neighbours share their room — a split with no pane left
+    /// goes and one with one pane becomes that pane. Fractions that do not
+    /// match the children are dropped (`layout` then evens the split). nil =
+    /// no pane. An over-size split (200 panes from a file) thus opens its
+    /// first 9: in its own shape when what is left is on the grid, else as
+    /// `PaneLayout.grid` (`layout`).
+    static func openable(_ node: Node, limit: Int = PaneLayout.maxPanes) -> Node? {
+        var left = limit
+        func walk(_ node: Node) -> Node? {
+            switch node {
+            case .pane:
+                guard left > 0 else { return nil }
+                left -= 1
+                return node
+            case .split(let vertical, let children, let fractions):
+                let matched = fractions.count == children.count
+                var kept: [(Node, Double)] = []
+                for (index, child) in children.enumerated() {
+                    guard let made = walk(child) else { continue }
+                    kept.append((made, matched ? fractions[index] : 0))
+                }
+                guard kept.count > 1 else { return kept.first?.0 }
+                return .split(vertical: vertical, children: kept.map(\.0), fractions: matched ? kept.map(\.1) : [])
+            }
+        }
+        return walk(node)
+    }
+
     /// The tab's layout over the sessions opened for `node.panes`, in that
     /// order. A tree this build would not make itself (off the 3 × 3 grid —
-    /// a file from somewhere else) becomes the plain grid; nil when the
-    /// counts differ or there are more panes than a tab holds.
+    /// a file from somewhere else) becomes the plain grid, an untidy one
+    /// (a split of one pane or none) is tidied first (`openable`); nil when
+    /// the counts differ or there are more panes than a tab holds.
     static func layout(_ node: Node, sessions: [UUID]) -> PaneLayout? {
-        guard sessions.count == node.panes.count, !sessions.isEmpty, sessions.count <= PaneLayout.maxPanes else { return nil }
+        guard sessions.count == node.panes.count, !sessions.isEmpty, sessions.count <= PaneLayout.maxPanes,
+              let node = openable(node), node.panes.count == sessions.count else { return nil }
         var next = 0
         func build(_ node: Node) -> PaneNode {
             switch node {
@@ -176,9 +209,12 @@ import Foundation
 
     /// A saved split as the panes to open: the saved host as it is NOW (its
     /// credential, its jump path) when it still exists, else the endpoint
-    /// the split kept — a typed target, which asks for its login.
+    /// the split kept — a typed target, which asks for its login. Through
+    /// `openable`: a split of one pane or none (Sync from another Mac, a
+    /// hand edit) is tidied and never more panes than a tab holds are
+    /// opened, whatever the split says; nil = no pane in it.
     static func node(_ split: SavedSplit, saved: (UUID) -> Host?,
-                     endpoint: ((ConnectionKind, String, Int, String) -> Host?)? = nil) -> Node {
+                     endpoint: ((ConnectionKind, String, Int, String) -> Host?)? = nil) -> Node? {
         func convert(_ node: SavedSplit.Node) -> Node {
             switch node {
             case .split(let vertical, let children, let fractions):
@@ -197,6 +233,6 @@ import Foundation
                 return .pane(.host(Host(name: pane.name, kind: kind, address: pane.address, port: pane.port, username: pane.username)))
             }
         }
-        return convert(split.root)
+        return openable(convert(split.root))
     }
 }

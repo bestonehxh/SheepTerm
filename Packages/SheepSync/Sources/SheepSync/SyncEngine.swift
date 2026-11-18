@@ -889,7 +889,8 @@ public final class SyncEngine {
         state.shadow = shadow
         state.lastSync = Date()
         lastSync = state.lastSync
-        try saveStateOrThrow()
+        try saveRoundState()
+        sealer.endDigestRound()
         return (warning, applied)
     }
 
@@ -945,9 +946,33 @@ public final class SyncEngine {
         config.stateDirectory.appendingPathComponent("sync-state.json")
     }
 
+    /// The time of a sync that changed nothing else (`saveRoundState`).
+    private static func lastSyncURL(_ config: SyncConfiguration) -> URL {
+        config.stateDirectory.appendingPathComponent("sync-last.json")
+    }
+
+    /// `sync-last.json`: written instead of the whole state when a round
+    /// changed nothing but the time. Bound to the vault it was written for.
+    struct LastSyncNote: Codable, Equatable {
+        var keyID: String
+        var lastSync: Date
+    }
+
+    /// The note's time counts only beside the state it was written for: the
+    /// same vault, a state that has synced, and later than the state's own
+    /// time (a whole-state write removes the note; this is in case that
+    /// removal failed — a vault forgotten since must not get its time back).
+    nonisolated static func lastSync(state: SyncLocalState, note: LastSyncNote?) -> Date? {
+        guard let note, let keyID = state.keyID, note.keyID == keyID, let own = state.lastSync,
+              state.shadow != nil, note.lastSync > own else { return state.lastSync }
+        return note.lastSync
+    }
+
     private static func loadState(_ config: SyncConfiguration) -> SyncLocalState {
         if let data = try? Data(contentsOf: stateURL(config)),
-           let state = try? decoder.decode(SyncLocalState.self, from: data) {
+           var state = try? decoder.decode(SyncLocalState.self, from: data) {
+            let note = (try? Data(contentsOf: lastSyncURL(config))).flatMap { try? decoder.decode(LastSyncNote.self, from: $0) }
+            state.lastSync = lastSync(state: state, note: note)
             return state
         }
         // Missing or unreadable: start as a Mac that never synced. That is
@@ -967,9 +992,55 @@ public final class SyncEngine {
     private func saveStateOrThrow() throws {
         do {
             try FileManager.default.createDirectory(at: config.stateDirectory, withIntermediateDirectories: true)
-            try Self.encoder.encode(state).write(to: Self.stateURL(config), options: .atomic)
+            let url = Self.stateURL(config)
+            try Self.encoder.encode(state).write(to: url, options: .atomic)
+            written = (state, Self.fileStamp(url))
+            // The whole state carries the time now: no note may outlive it.
+            try? FileManager.default.removeItem(at: Self.lastSyncURL(config))
         } catch {
+            written = nil
             throw SyncEngineError.stateNotSaved(error.localizedDescription)
         }
+    }
+
+    /// The end of a sync round. A round that changed nothing but the time
+    /// (the common one: every 5 minutes, and after each edit's round has
+    /// settled) used to re-encode and rewrite the whole state — the shadow
+    /// of every record, ~9 ms on main for 2,300 of them. Then only the time
+    /// goes, in `sync-last.json` (a few dozen bytes). The whole state is
+    /// still written whenever anything else in it differs from what this
+    /// engine last wrote, or the file is not the one it wrote (gone,
+    /// replaced, touched: its size, modification time or inode moved).
+    private func saveRoundState() throws {
+        let url = Self.stateURL(config)
+        var unchanged = state
+        unchanged.lastSync = written?.state.lastSync
+        guard let written, written.state == unchanged, let keyID = state.keyID, let time = state.lastSync,
+              let stamp = written.stamp, Self.fileStamp(url) == stamp else {
+            try saveStateOrThrow()
+            return
+        }
+        do {
+            try Self.encoder.encode(LastSyncNote(keyID: keyID, lastSync: time)).write(to: Self.lastSyncURL(config), options: .atomic)
+        } catch {
+            // Only the time was at stake; the whole state carries it too.
+            try saveStateOrThrow()
+        }
+    }
+
+    /// What `saveStateOrThrow` last put on disk, and the file it made.
+    @ObservationIgnored private var written: (state: SyncLocalState, stamp: FileStamp?)?
+
+    struct FileStamp: Equatable {
+        var size: UInt64
+        var modified: Date
+        var inode: UInt64
+    }
+
+    nonisolated static func fileStamp(_ url: URL) -> FileStamp? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              let modified = attributes[.modificationDate] as? Date else { return nil }
+        return FileStamp(size: size, modified: modified, inode: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0)
     }
 }

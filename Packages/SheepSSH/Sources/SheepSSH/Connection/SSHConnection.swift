@@ -72,6 +72,12 @@ public final class SSHConnection {
         var manualWindow = false
         /// Bytes taken inside the window and not yet reported consumed.
         var unconsumed: UInt64 = 0
+        /// Bytes handed to the owner of a `manualWindow` channel and not yet
+        /// reported consumed, overrun included — what its buffer holds.
+        var owed: UInt64 = 0
+        /// Closed by us for data past `maximumOwed`: what still arrives
+        /// before the server's CLOSE is dropped.
+        var overrunClosed = false
         var outgoing: [UInt8] = []
         /// Bytes of `outgoing` already sent (compacted lazily — removing the
         /// front per 32 KiB packet made a big paste quadratic).
@@ -97,6 +103,10 @@ public final class SSHConnection {
     /// 2 MiB window, 32 KiB packets — OpenSSH's own client values.
     public static let windowSize: UInt64 = 2 * 1024 * 1024
     public static let maxPacket = 32 * 1024
+    /// The most a `manualWindow` channel's owner is handed before passing
+    /// it on: the window plus one packet of a server that counts it wrong.
+    /// Past it the channel is closed — not the session (review 6.1 (59)).
+    public static let maximumOwed = windowSize + UInt64(maxPacket)
 
     public let transport: SSHTransport
     /// Accept the server's auth-agent@openssh.com channels. Set only when the
@@ -175,6 +185,7 @@ public final class SSHConnection {
     /// not added back. A no-op for any other channel.
     public func consumed(_ id: UInt32, _ count: Int) throws(ConnectionError) {
         guard let channel = channels[id], channel.open, channel.manualWindow, count > 0 else { return }
+        channel.owed -= min(UInt64(count), channel.owed)
         let credit = min(UInt64(count), channel.unconsumed)
         channel.unconsumed -= credit
         channel.consumedSinceAdjust += credit
@@ -470,6 +481,26 @@ public final class SSHConnection {
                 // end a long `show tech` halfway (the top-up follows use).
                 // Count only what was inside the window, or each top-up would
                 // add back overrun bytes never taken off and the window drift up.
+                // A manual-window channel (a port forward, a lent SFTP
+                // channel) buffers what its socket has not taken yet, so the
+                // tolerance stops at `maximumOwed`: beyond it that channel
+                // is closed and the rest dropped; a shell keeps the old
+                // tolerance (its output is drawn as it comes).
+                if channel.overrunClosed { break }
+                let delivered = type == 94 || dataType == 1
+                if channel.manualWindow, delivered, channel.owed + UInt64(data.count) > Self.maximumOwed {
+                    channel.overrunClosed = true
+                    if !channel.closeSent {
+                        channel.closeSent = true
+                        var w = SSHWriter()
+                        w.writeByte(97)             // CHANNEL_CLOSE
+                        w.writeUInt32(channel.remote)
+                        try send(w.bytes)
+                    }
+                    finishIfClosed(channel)
+                    break
+                }
+                if channel.manualWindow, delivered { channel.owed += UInt64(data.count) }
                 let taken = min(UInt64(data.count), channel.localWindow)
                 channel.localWindow -= taken
                 if channel.manualWindow {

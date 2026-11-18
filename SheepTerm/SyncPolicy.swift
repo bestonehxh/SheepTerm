@@ -362,6 +362,34 @@ nonisolated enum SyncRecordCodec {
         return out
     }
 
+    /// `decompose` remembered per file (6.1 (62)): every sync round splits
+    /// all three files (30 ms for 2,000 hosts / 300 groups, on main) and
+    /// between rounds they almost never change. The split is a pure function
+    /// of the bytes, so the key is the bytes THEMSELVES — compared in full,
+    /// not a modification time or a size — and a hit is exactly what a fresh
+    /// split gives (a refusal included). Whether the split is USED is still
+    /// decided every round by the caller (quarantine, unsaved changes, a
+    /// missing file); `reset` drops it all (the app does after every apply).
+    struct DecomposeMemo {
+        private var last: [String: (data: Data, records: [String: Data]?)] = [:]
+        private(set) var hits = 0
+        private(set) var misses = 0
+
+        /// nil = the file could not be split (`decompose` threw).
+        mutating func records(_ data: Data, as family: Family) -> [String: Data]? {
+            if let known = last[family.file], known.data == data {
+                hits += 1
+                return known.records
+            }
+            misses += 1
+            let records = try? decompose(data, as: family)
+            last[family.file] = (data, records)
+            return records
+        }
+
+        mutating func reset() { last = [:] }
+    }
+
     /// The file's JSON from records. Order: the order record, then anything
     /// it does not name, by id — the same on every Mac.
     static func compose(_ records: [String: Data], as family: Family) throws -> Data {

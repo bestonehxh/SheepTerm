@@ -248,6 +248,17 @@ final class PaneTreeView: NSView {
     /// Show `workspace`: containers for new sessions, departed ones detached,
     /// every frame recomputed.
     func apply(_ workspace: WorkspaceState, selected: UUID?) {
+        var workspace = workspace
+        // Mid-drag the model still has the layout from before it (it hears the
+        // drag on release): keep the dragged divider where the pointer has it.
+        if let drag = dividerDragPosition {
+            if state?.id == workspace.id,
+               let kept = workspace.layout.withDivider(ofSplit: drag.split, index: drag.index, at: drag.position, children: drag.children) {
+                workspace.layout = kept
+            } else {
+                dividerDragPosition = nil
+            }
+        }
         state = workspace
         self.selected = selected
         AppModel.shared.activePaneTree = self
@@ -558,7 +569,7 @@ final class PaneTreeView: NSView {
     }
 
     /// The position of the divider being dragged, committed on release.
-    private var dividerDragPosition: (split: UUID, index: Int, position: CGFloat)?
+    private var dividerDragPosition: (split: UUID, index: Int, position: CGFloat, children: Int)?
 
     /// A divider at `point` (in our coordinates): the boundary's share along
     /// the split it belongs to — the length WITHOUT the gaps, which is what
@@ -581,7 +592,7 @@ final class PaneTreeView: NSView {
             : (point.y - union.minY - before) / max(1, union.height - gaps)
         guard state.layout.moveDivider(ofSplit: split, index: divider.index, to: position) else { return }
         self.state = state
-        dividerDragPosition = (split, divider.index, position)
+        dividerDragPosition = (split, divider.index, position, count)
         layoutPanes()
     }
 

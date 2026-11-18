@@ -100,9 +100,17 @@ enum ShareLinkPlan {
         return Outgoing(document: document, hostCount: group.hosts.count, logins: order.compactMap { byCredential[$0] })
     }
 
-    /// How many distinct logins `outgoing` would carry (for the sheet: the checkbox is off when there are none).
-    static func loginCount(group: HostGroup, credential: (UUID) -> (name: String, username: String)?, hasPassword: (UUID) -> Bool) -> Int {
-        Set(group.hosts.compactMap { $0.credentialID }.filter { credential($0) != nil && hasPassword($0) }).count
+    /// How many distinct logins `outgoing` would carry (for the sheet: the checkbox is off when there are none). `hasPassword`
+    /// never prompts — it is asked from a view body — and nil (the vault is not open yet) counts: whether the password is really
+    /// there is settled by `outgoing` when the share is created, the one place that may ask the Keychain.
+    static func loginCount(group: HostGroup, credential: (UUID) -> (name: String, username: String)?, hasPassword: (UUID) -> Bool?) -> Int {
+        Set(group.hosts.compactMap { $0.credentialID }.filter { credential($0) != nil && hasPassword($0) != false }).count
+    }
+
+    /// The password lookup `outgoing` is handed: the prompting Keychain read only when the share carries credentials; without
+    /// them nothing is read, so the Keychain is never asked for a share that sends no password.
+    static func passwordLookup(includeCredentials: Bool, read: @escaping (UUID) -> String?) -> (UUID) -> String? {
+        includeCredentials ? read : { _ in nil }
     }
 
     /// The incoming group document → a group. Goes through `ShareCodec.decode`, the one door every incoming group uses, so no

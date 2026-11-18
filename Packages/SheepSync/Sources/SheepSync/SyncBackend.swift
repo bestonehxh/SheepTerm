@@ -96,7 +96,7 @@ public actor MemorySyncBackend: SyncBackend {
         version[name] = nil
     }
 
-    public func setFailNextWrite() { failNextWrite = true }
+    public func setFailNextWrite(_ value: Bool = true) { failNextWrite = value }
     public func overwrite(_ name: String, _ data: Data?) {
         files[name] = data
         if data == nil { version[name] = nil } else { bump(name) }

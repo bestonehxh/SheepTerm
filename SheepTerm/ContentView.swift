@@ -163,10 +163,12 @@ struct SidebarSlot: View {
 
     private var levels: Int {
         let plan = WorkspacePlan.load(workspaceData)
-        return plan.levels(shown: plan.visibleRoots(plan.selection(selectedWorkspace), groups: store.groups), groups: store.groups)
+        let tree = store.groupIndex
+        return plan.levels(shown: plan.visibleRoots(plan.selection(selectedWorkspace), index: tree), index: tree)
     }
 
     var body: some View {
+        let levels = self.levels
         let floor = SidebarWidth.floor(levels: levels)
         SidebarView(store: store)
             .frame(width: SidebarWidth.shown(own: model.sidebarWidth, levels: levels))
@@ -320,7 +322,7 @@ struct DetailPane: View {
             AddingHostsSheet()
         }
         .sheet(isPresented: $model.showWhatsNew) {
-            WhatsNewView()
+            WhatsNewView(selection: model.whatsNewSelection)
         }
         .sheet(isPresented: $model.showCredentials) {
             CredentialsSheet()
@@ -524,6 +526,8 @@ struct TopBarView: View {
                 MainWindowCloseGuard.shared.attach(to: window)
                 let actual = window.styleMask.contains(.fullScreen)
                 if actual != isFullScreen { isFullScreen = actual }
+                // The reading made before the window was known was not shared.
+                mirrorFullScreen(isFullScreen)
             }
         })
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
@@ -558,6 +562,8 @@ struct TopBarView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
             if isOurWindow(note) { isFullScreen = false }
         }
+        // The sidebar's top gap reads the same state (`MainWindowFullScreen`).
+        .onChange(of: isFullScreen, initial: true) { _, on in mirrorFullScreen(on) }
     }
 }
 
@@ -567,8 +573,13 @@ extension TopBarView {
     /// fullscreen is exactly the failure §2 warns about — so an unknown window
     /// still counts. Once we know ours, only it may move the spacer.
     private func isOurWindow(_ note: Notification) -> Bool {
-        guard let hostWindow else { return true }
-        return (note.object as? NSWindow) === hostWindow
+        MainWindowFullScreen.counts(note.object as? NSWindow, host: hostWindow)
+    }
+
+    /// Only the main window's top bar shares its reading (`MainWindowFullScreen.writes`).
+    private func mirrorFullScreen(_ on: Bool) {
+        guard MainWindowFullScreen.writes(host: hostWindow, isMain: isMainTerminalWindow) else { return }
+        MainWindowFullScreen.shared.set(on)
     }
 
     /// The spacer for the traffic lights must match what the window IS, not

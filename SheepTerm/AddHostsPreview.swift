@@ -58,19 +58,26 @@ import Foundation
         let rootDepth = root.map { GroupTree.depth(of: $0, in: groups) } ?? 1
         let top = Node(id: "root", name: root.flatMap { id in groups.first { $0.id == id }?.name } ?? newName,
                        path: "", exists: root != nil, depth: rootDepth)
-        var byPath: [String: Node] = ["": top]
         // The subgroups that exist, in tree order, each under its parent.
+        var byGroup: [UUID: Node] = [:]
+        var groupOf: [String: UUID] = [:]
         if let root {
+            byGroup[root] = top
+            groupOf[top.id] = root
             for id in GroupTree.subtreeIDs(of: root, in: groups).dropFirst() {
-                guard let path = GroupTree.relativePath(of: id, below: root, in: groups),
-                      let group = groups.first(where: { $0.id == id }) else { continue }
-                let parentPath = path.split(separator: GroupTree.separator).dropLast().joined(separator: String(GroupTree.separator))
-                guard let parent = byPath[key(parentPath)] else { continue }
+                guard let group = groups.first(where: { $0.id == id }), let parent = group.parentID.flatMap({ byGroup[$0] }),
+                      let path = GroupTree.relativePath(of: id, below: root, in: groups) else { continue }
                 let node = Node(id: "g-\(id.uuidString)", name: group.name, path: path, exists: true, depth: parent.depth + 1)
                 parent.children.append(node)
-                byPath[key(path)] = node
+                byGroup[id] = node
+                groupOf[node.id] = id
             }
         }
+        // A step takes the subgroup the STORE takes (`GroupTree.childrenByKey`,
+        // the lookup `fileLabels` uses: of two siblings that read the same,
+        // the first); else one this batch made already; else it is made.
+        let existing = GroupTree.childrenByKey(groups)
+        var made: [String: [String: Node]] = [:]
         // Connections saved in the group already, and in this batch so far.
         let saved = Set((root.map { GroupTree.subtreeIDs(of: $0, in: groups) } ?? [])
             .compactMap { id in groups.first { $0.id == id } }
@@ -81,12 +88,14 @@ import Foundation
             var warning: Warning?
             for step in GroupTree.components(row.section) {
                 guard node.depth < GroupTree.userDepth else { warning = .tooDeep; break }
+                guard let stepKey = HostStore.headingKey(step) else { continue }
+                if let child = groupOf[node.id].flatMap({ existing[$0]?[stepKey] }), let known = byGroup[child] { node = known; continue }
+                if let known = made[node.id]?[stepKey] { node = known; continue }
                 let path = node.path.isEmpty ? step : node.path + String(GroupTree.separator) + step
-                if let known = byPath[key(path)] { node = known; continue }
-                let made = Node(id: "n-\(key(path))", name: step, path: path, exists: false, depth: node.depth + 1)
-                node.children.append(made)
-                byPath[key(path)] = made
-                node = made
+                let fresh = Node(id: "n-\(key(path))", name: step, path: path, exists: false, depth: node.depth + 1)
+                node.children.append(fresh)
+                made[node.id, default: [:]][stepKey] = fresh
+                node = fresh
             }
             // The store's own identity, or the warnings would disagree with
             // what Add does (admin@x and root@x are two hosts).

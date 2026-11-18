@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 /// File ▸ Logs… (6.1): every session log in the app, by day, newest first,
@@ -14,6 +13,12 @@ struct LogsView: View {
     @State private var selection: String?
     @State private var watcher: LogFolderWatcher?
     @State private var now = Date()
+    @State private var reader = LogFolderReader()
+    /// Logs a session is still writing (`SessionLogger.livePaths`), read with
+    /// every reload: a new session's log is a folder change, and one that
+    /// ended is seen on the next tick.
+    @State private var livePaths: Set<String> = []
+    @ObservedObject private var screen = MainWindowKeyMonitor.shared
 
     private var directory: URL { SessionLogger.logsDirectory }
 
@@ -71,14 +76,30 @@ struct LogsView: View {
             watcher = watch
         }
         .onDisappear { watcher = nil }
-        // A growing log never changes the folder's listing: sizes, the live
-        // dot and Today/Yesterday refresh on a slow clock too (Fable).
-        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in reload() }
+        // The watcher sees the listing change (a log added, renamed, moved
+        // to the Trash) and nothing else: a growing log never changes the
+        // folder, so sizes, the live dot and Today/Yesterday refresh on a
+        // slow clock too (Fable) — and so does a folder that did not exist
+        // yet when the window opened (no watcher). Not while nothing of the
+        // app is on screen; coming back reads the folder at once.
+        .task(id: screen.isVisible) {
+            guard screen.isVisible else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if !Task.isCancelled { reload() }
+            }
+        }
+        .onChange(of: screen.isVisible) { _, visible in if visible { reload() } }
     }
 
+    /// Off the main thread (`LogFolderReader`); the list changes only when
+    /// the answer differs.
     private func reload() {
-        now = Date()
-        entries = LogLibrary.scan(directory)
+        reader.request(directory) { found in
+            now = Date()
+            livePaths = SessionLogger.livePaths
+            if found != entries { entries = found }
+        }
     }
 
     private func title(of day: LogLibrary.Day) -> String {
@@ -121,7 +142,16 @@ struct LogsView: View {
             }
             Divider()
             // The Trash, never a delete: a log is evidence.
-            Button("Move to Trash") { NSWorkspace.shared.recycle([entry.url]) { _, _ in reload() } }
+            // The completion is not promised on main: the reload hops there.
+            // Not while a session still writes it (`LogLibrary.canTrash`) —
+            // asked again at the click, the list may be a tick old.
+            let trashable = LogLibrary.canTrash(entry, livePaths: livePaths)
+            Button("Move to Trash") {
+                guard LogLibrary.canTrash(entry, livePaths: SessionLogger.livePaths) else { NSSound.beep(); return }
+                NSWorkspace.shared.recycle([entry.url]) { _, _ in DispatchQueue.main.async { reload() } }
+            }
+            .disabled(!trashable)
+            .help(trashable ? "" : String(localized: "Being written"))
         }
         .help(entry.fileName)
     }

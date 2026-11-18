@@ -127,6 +127,9 @@ public final class PortForwarder {
     public static let maximumUnsent = 288 * 1024
 
     public let rules: [ForwardRule]
+    /// This session's share of the app-wide name lookups (-R targets and
+    /// remote SOCKS connects): one session cannot starve another's.
+    let lookups = TCPConnector.LookupBudget()
     private var listeners: [Listener] = []
     private var tunnels: [Tunnel] = []
     private var buffer = [UInt8](repeating: 0, count: 32 * 1024)
@@ -242,7 +245,8 @@ public final class PortForwarder {
     }
 
     /// The most any one tunnel holds for its Mac-side socket (tests: bounded
-    /// by the channel window when that socket stops reading).
+    /// by the channel window when that socket stops reading — at most
+    /// `SSHConnection.maximumOwed` from a server that ignores it).
     var largestClientQueue: Int { tunnels.map(\.toSocket.count).max() ?? 0 }
 
     /// For the owner's poll set (POLLIN): listeners, and Mac-side sockets
@@ -256,9 +260,15 @@ public final class PortForwarder {
 
     /// Poll with a short timeout meanwhile: a Mac-side socket is full (its
     /// writability is not in the poll set), waits on the unsent budget, or
-    /// a -R connect is in progress (lookup on a thread, connect polled).
+    /// a -R connect is in progress (lookup on a thread, connect polled) —
+    /// or bytes for a Mac-side socket were queued AFTER this pass wrote to
+    /// it (a SOCKS reply made while reading the client: `pump` writes before
+    /// it reads). Nothing else would wake the owner for those: the client is
+    /// waiting for the reply, so its socket stays quiet (6.1 (62) review —
+    /// the owner's idle loop now sleeps until its next keepalive).
     public var wantsPromptPump: Bool {
-        tunnels.contains { $0.isLive && ($0.blocked || $0.throttledByUnsent || $0.stage == .connecting) }
+        tunnels.contains { $0.isLive && ($0.blocked || $0.throttledByUnsent || $0.stage == .connecting
+            || ($0.hasSocket && !$0.toSocket.isEmpty)) }
     }
 
     public func owns(_ channel: UInt32) -> Bool { tunnels.contains { $0.channel == channel } }
@@ -314,7 +324,7 @@ public final class PortForwarder {
         case .remote(_, _, let host, let targetPort):
             let t = Tunnel(rule: rule, fd: ForwardSocket.invalid, stage: .connecting)
             t.channel = channel
-            t.connector = TCPConnector(host: host, port: targetPort)
+            t.connector = TCPConnector(host: host, port: targetPort, budget: lookups)
             tunnels.append(t)
         case .remoteDynamic:
             let t = Tunnel(rule: rule, fd: ForwardSocket.invalid, stage: .channelSocks)
@@ -328,7 +338,9 @@ public final class PortForwarder {
     public func received(_ channel: UInt32, _ bytes: [UInt8], connection: SSHConnection) throws(ConnectionError) {
         guard let t = tunnel(channel), t.isLive else { return }
         guard t.stage == .channelSocks else {
-            // Bounded by the channel window: nothing reopens it until written.
+            // Bounded by the channel window (nothing reopens it until
+            // written), and against a server that ignores it by
+            // SSHConnection.maximumOwed, past which the channel is closed.
             t.toSocket.append(contentsOf: bytes)
             return
         }
@@ -344,7 +356,7 @@ public final class PortForwarder {
             try finishChannel(t, connection: connection)
         case .connect(let host, let port, let leftover):
             t.toSocket.append(contentsOf: leftover)
-            t.connector = TCPConnector(host: host, port: port)
+            t.connector = TCPConnector(host: host, port: port, budget: lookups)
             t.stage = .connecting
         }
     }
@@ -405,8 +417,9 @@ public final class PortForwarder {
         case .failed(let why):
             t.connector = nil
             if case .remoteDynamic = t.rule, let channel = t.channel {
-                // The far client hears "refused"; one bad name is not news here.
-                try? connection.write(channel, t.socks.failureReply(5))
+                // The far client hears "refused" (one bad name is not news
+                // here), or "general failure" when every lookup slot is taken.
+                try? connection.write(channel, t.socks.failureReply(why == TCPConnector.busyMessage ? 1 : 5))
             } else {
                 reportOnce(t.rule, why)
             }

@@ -126,6 +126,9 @@ struct AddHostsRequest: Identifiable {
     var debugPaste: String? = nil
     /// DEBUG renders: open on the review step.
     var debugReview = false
+    /// DEBUG renders (What's New, 6.1 (60)): this file imported on open,
+    /// through the same path as Import….
+    var debugImport: URL? = nil
 }
 
 /// One showing of the "Set Credential for Group…" sheet, for the group it was
@@ -277,17 +280,27 @@ final class AppModel: ObservableObject {
     @Published var showFileTransfer = false
     /// File ▸ Transfer Log… / the File Server popover (`TransferLogView`).
     @Published var showTransferLog = false
-    /// 6.0's What's New, once (`WhatsNewPlan`).
+    /// What's New (`WhatsNewPlan`): what the window shows — everything from
+    /// Help, what this upgrade brought on launch (6.1 (64)).
+    @Published var whatsNewSelection = WhatsNewPlan.everything
+    func openWhatsNew(_ selection: WhatsNewPlan.Selection = WhatsNewPlan.everything) {
+        whatsNewSelection = selection
+        showWhatsNew = true
+    }
     @Published var showWhatsNew = false {
         // Closing What's New: the Home-first question, if it is due (6.1 (4)).
         // A run-loop turn later: the sheet closes first (Fable round 19).
         didSet { if oldValue && !showWhatsNew { DispatchQueue.main.async { [weak self] in self?.askHomeFirstIfDue() } } }
     }
 
+    /// `usedBefore` as this launch found it, before anything here wrote a
+    /// key (What's New tells a new Mac from an updater by it, 6.1 (64)).
+    private(set) var usedBeforeAtLaunch = false
+
     /// A Mac that ran an earlier build: anything saved by it. A new Mac has
     /// none of these on its first launch.
     static func usedBefore(_ d: UserDefaults) -> Bool {
-        d.object(forKey: WhatsNewPlan.seenKey) != nil || OptimizationPlan.touched(d)
+        d.object(forKey: WhatsNewPlan.seenKey) != nil || d.object(forKey: WhatsNewPlan.lastRunKey) != nil || OptimizationPlan.touched(d)
             || FileManager.default.fileExists(atPath: BackupManager.baseDirectory.appendingPathComponent("hosts.json").path)
     }
 
@@ -349,6 +362,10 @@ final class AppModel: ObservableObject {
     }
     /// Right-click a group ▸ Group Icon… (6.1).
     @Published var groupIconTarget: HostGroup?
+    /// The sheets the sidebar has up right now — set by `SidebarView` from
+    /// its own bindings, read by every path that hides it (`SheetGate`).
+    @Published var sidebarSheets: Set<SheetGate.SidebarSheet> = []
+    var sidebarMayHide: Bool { SheetGate.sidebarMayHide(sidebarSheets: sidebarSheets) }
     @Published var addHostsRequest: AddHostsRequest?
     @Published var groupCredentialRequest: GroupCredentialRequest?
     @Published var shareLinkRequest: ShareLinkRequest?
@@ -549,7 +566,8 @@ final class AppModel: ObservableObject {
         showStatusBar = UserDefaults.standard.object(forKey: "showStatusBar") as? Bool ?? true
         // An updater keeps what it had where it never chose (6.1 (4)): pinned
         // BEFORE the bottom bar and the launch tab are read.
-        OptimizationPlan.pinLaunchTabIfUpdating(.standard, usedBefore: Self.usedBefore(.standard))
+        usedBeforeAtLaunch = Self.usedBefore(.standard)
+        OptimizationPlan.pinLaunchTabIfUpdating(.standard, usedBefore: usedBeforeAtLaunch)
         // A pinned value is unpinned the moment it changes (6.1 (12)) — on every
         // write, not Sync's debounced read, so on-then-off quickly still counts.
         pinSettler = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { _ in
@@ -1321,6 +1339,16 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// What Find… and Clear Scrollback can act on in the tab in front: the
+    /// same split as `activeTerminalView` / `selectedWebController` above.
+    var searchTarget: ViewMenuLayout.SearchTarget {
+        switch selectedTab?.content {
+        case .local, .ssh, .serial: return .terminal
+        case .web: return .web
+        case .files, .ping, nil: return .none
+        }
+    }
+
     /// Find in scrollback. SheepVT ships the search engine AND the find bar
     /// (`FindBar`, anchored top-trailing inside the terminal view) wired to
     /// the standard `performTextFinderAction:` responder action — the menu
@@ -1606,9 +1634,12 @@ final class AppModel: ObservableObject {
 
     /// One tab of `node`'s panes, laid out as it says; the first pane's
     /// session, nil when none opened. `deferred` (a launch): nothing is
-    /// dialled; else (a saved split the user opened) every pane connects.
+    /// dialled; else (a saved split the user opened) every pane connects —
+    /// the first `PaneLayout.maxPanes` of them (`TabRestore.openable`, before
+    /// anything opens): a split of 200 panes never starts 200 connections.
     @discardableResult
     private func openPanes(_ node: TabRestore.Node, deferred: Bool) -> UUID? {
+        guard let node = TabRestore.openable(node) else { return nil }
         var opened: [UUID] = []
         for pane in node.panes {
             let before = Set(tabs.map(\.id))
@@ -1712,7 +1743,7 @@ final class AppModel: ObservableObject {
         let node = TabRestore.node(split, saved: { id in saved.first { $0.id == id } }, endpoint: { kind, address, port, username in
             saved.first { $0.kind == kind && $0.address == address && $0.port == port && $0.username == username }
         })
-        if let first = openPanes(node, deferred: false) { selectedID = first }
+        if let node, let first = openPanes(node, deferred: false) { selectedID = first }
     }
 
     /// A pane brought back at launch: its card with Connect, nothing dialled.
@@ -1964,16 +1995,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Whether the menu item above has anything to act on.
+    /// Whether the menu item above has anything to act on: a console tab
+    /// whose line no transfer owns (XMODEM or ZMODEM — a break inside one
+    /// corrupts it, and on a router can mean ROMMON).
     var canSendBreak: Bool {
-        if case .serial? = selectedTab?.content { return true }
+        if case .serial(let controller)? = selectedTab?.content { return !controller.isTransferring }
         return false
     }
 
     /// A console tab: the cable, or telnet (binary mode is asked for first —
-    /// a console server's line to a ROMMON).
+    /// a console server's line to a ROMMON) — and no transfer on its line.
     var canSendFileViaXModem: Bool {
-        if case .serial? = selectedTab?.content { return true }
+        if case .serial(let controller)? = selectedTab?.content { return !controller.isTransferring }
         return false
     }
 
@@ -2278,6 +2311,9 @@ final class AppModel: ObservableObject {
                 guard let tab, !tab.vendorManuallyChosen else { return }
                 tab.highlightVendor = detected
             }
+            // A transfer took or gave back the line: Send Break / Send File
+            // read it (`canSendBreak`).
+            controller.onLineOwnerChanged = { [weak self] in self?.objectWillChange.send() }
             // The wrong-speed hint's Try: the status bar menu's path.
             controller.onTryBaud = { [weak self, weak tab] baud in
                 guard let self, let tab else { return }
@@ -3291,6 +3327,12 @@ final class AppModel: ObservableObject {
     static let sidebarAnimation = Animation.easeInOut(duration: 0.15)
 
     func toggleSidebar() {
+        // Not away while one of its own sheets is up: they (Edit Host, Rename
+        // Group, …) live in its view tree and went with it (`SheetGate`).
+        if sidebarShown, !sidebarMayHide {
+            NSSound.beep()
+            return
+        }
         withAnimation(Self.sidebarAnimation) { sidebarShown.toggle() }
         // Closing the sidebar must hand keyboard focus back to the
         // terminal — a sidebar-less window with focus stranded on the
@@ -3478,7 +3520,12 @@ final class AppModel: ObservableObject {
     /// Keep Sidebar Open is on (`SidebarKeepOpen`). Every opening path comes
     /// through here; the terminal takes the keyboard either way.
     func collapseSidebar() {
-        if SidebarKeepOpen.closesOnOpen(stored: UserDefaults.standard.object(forKey: SidebarKeepOpen.key)) {
+        // A session opened while one of the sidebar's own sheets is up (a link
+        // from another app) leaves the sidebar where it is: the sheet would go
+        // with it (`SheetGate`). Any other sheet — Quick Connect closing on
+        // Connect — does not hold it.
+        if SidebarKeepOpen.closesOnOpen(stored: UserDefaults.standard.object(forKey: SidebarKeepOpen.key)),
+           sidebarMayHide {
             withAnimation(Self.sidebarAnimation) { sidebarShown = false }
         }
         DispatchQueue.main.async { [weak self] in self?.focusActiveTerminal() }

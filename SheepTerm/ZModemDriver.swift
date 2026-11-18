@@ -23,6 +23,10 @@ import AppKit
         var muteLog: (Bool) -> Void
         /// Off where the line is not 8-bit clean or is busy (telnet, an XMODEM transfer).
         var isAvailable: () -> Bool
+        /// On while `isBusy` (a question or a transfer): the line is this
+        /// transfer's — Break, a speed change, XMODEM, pastes, snippets and
+        /// Broadcast are refused (`ConsoleWorker.claimLine`, `lineBusy`).
+        var claim: (Bool) -> Void = { _ in }
     }
 
     private enum State {
@@ -36,7 +40,15 @@ import AppKit
 
     private let line: Line
     private weak var host: SessionTerminalHost?
-    private var state: State = .idle
+    private var state: State = .idle {
+        didSet {
+            guard isBusy != claimed else { return }
+            claimed = isBusy
+            line.claim(claimed)
+        }
+    }
+    /// What `line.claim` was last told.
+    private var claimed = false
     private var watcher = ZModem.Watcher()
     /// What arrived since the offer while the question is up (the offer itself, repeated).
     private var held: [UInt8] = []

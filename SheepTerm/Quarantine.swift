@@ -29,6 +29,18 @@ nonisolated enum Quarantine {
             return getxattr(path, attribute, nil, 0, 0, 0) > 0
         }
     }
+
+    /// A web tab's finished download, before it is moved into place: marked
+    /// unless something (WebKit, LaunchServices) already did — that mark is
+    /// kept, it may carry the page's address. WebKit only fills in a mark the
+    /// process already got from LaunchServices, and this app is neither
+    /// sandboxed nor LSFileQuarantineEnabled, so in practice the mark is
+    /// ours. False when the file stays unmarked (a volume that cannot hold
+    /// it); the download still succeeds — marking never fails it.
+    @discardableResult
+    static func markIfNeeded(_ url: URL) -> Bool {
+        isMarked(url) || mark(url)
+    }
 }
 
 extension Quarantine {

@@ -101,6 +101,17 @@ public final class SSHServerTransport {
     public private(set) var isStrictKex = false
     public private(set) var packetsReceived: UInt64 = 0
     public var isEstablished: Bool { sessionID != nil && kex == nil && phase == .running }
+    /// A key exchange after the first is running (either side started it).
+    /// The owner puts a deadline on it: a client that sends KEXINIT and
+    /// never finishes the exchange would otherwise keep the session — and
+    /// everything `send` holds — for as long as it keeps talking.
+    public var isRekeying: Bool { kex != nil && !isFirstKex && phase == .running }
+    /// A rekey is running AND the client's KEXINIT for it is in: from here
+    /// on the exchange waits on the client alone. Before it, a rekey WE
+    /// started may only be waiting for the client to read down to our
+    /// KEXINIT, which sits behind whatever was already in flight — on a
+    /// slow link that can take minutes and is no sign of a stalled client.
+    public var isRekeyingWithClientKexInit: Bool { isRekeying && kex?.clientKexInit != nil }
 
     private var phase = Phase.versionExchange
     private var inbound = PacketProtection()
@@ -121,6 +132,14 @@ public final class SSHServerTransport {
     private var bytesSinceKex: UInt64 = 0
 
     static let maximumVersionPreamble = 64 * 1024
+    /// What `send` may hold while a key exchange runs, in bytes and in
+    /// payloads. The owner's back-pressure counts `heldPayloadBytes` and
+    /// stays far below this (the File Server waits at 2 MB); this is the
+    /// floor under any owner — replies to tiny requests (a GLOBAL_REQUEST
+    /// flood during a stalled rekey) cost a payload each. Past either cap
+    /// the transport fails (review 6.1 (59)).
+    public static let maximumHeldBytes = 16 * 1024 * 1024
+    public static let maximumHeldPayloads = 16 * 1024
 
     /// What KEXINIT actually offers: `preferences` minus what this build
     /// cannot run, kex methods without a server half, and host-key
@@ -189,6 +208,11 @@ public final class SSHServerTransport {
             throw .protocolError("send before the first key exchange finished")
         }
         if let kex, !kex.sentNewKeys {
+            guard heldPayloadBytes + payload.count <= Self.maximumHeldBytes,
+                  heldPayloads.count < Self.maximumHeldPayloads else {
+                phase = .failed
+                throw .protocolError("too much output held during a key exchange")
+            }
             heldPayloads.append(payload)
             heldPayloadBytes += payload.count
             return

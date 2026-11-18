@@ -17,7 +17,8 @@ import SheepSSH
 ///   ones old switches need after them.
 /// - One thread per connection (blocking pump: socket ↔ transport ↔
 ///   handler), one accept thread; caps: 16 connections, 4 per address;
-///   30 s to log in, 10 min idle.
+///   30 s to log in, 10 min idle, 60 s for a rekey to finish once the
+///   client's KEXINIT for it is in.
 /// - Uploads land in a hidden temp beside the target and are promoted with
 ///   `renamex_np(RENAME_EXCL)`, which refuses an existing name — a device can
 ///   never replace a file on the Mac. 16 GB per upload, and never more than
@@ -75,6 +76,20 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
     var keyExchangeTimeout: TimeInterval = 10
     /// No byte from the client for this long ends the connection.
     var idleTimeout: TimeInterval = 600
+    /// A key exchange after login (either side's) must finish within this.
+    /// A client that sends KEXINIT and never completes it stays "active"
+    /// (any byte resets the idle clock) while the transport holds our
+    /// output (review 6.1 (59)). The clock starts when the client's KEXINIT
+    /// for the exchange has arrived: a rekey WE start sends our KEXINIT
+    /// behind megabytes already in the socket, and a slow client cannot
+    /// answer what it has not read yet — the clock used to start at once and
+    /// cut a healthy slow client off (6.1 (62) review). Until the client's
+    /// KEXINIT comes, what we hold is capped by `unsent` back-pressure and
+    /// the session by the idle clock, as for any client.
+    var rekeyTimeout: TimeInterval = 60
+    /// The transport's own rekey after this many bytes (the harness lowers
+    /// it to make the server start one).
+    var rekeyAfterBytes: UInt64 = 1 << 30
 
     private let lock = NSLock()
     // Lock-protected.
@@ -348,6 +363,9 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
         private var dead = false
         private var deadline: Date
         private let keyExchangeDeadline: Date
+        /// Set when a rekey is first seen waiting on the client (its KEXINIT
+        /// is in), cleared when the rekey ends.
+        private var rekeyDeadline: Date?
         private var seenAbort: Int
         private var sftp: (channel: UInt32, handler: SFTPServerHandler)?
         private var sftpInbox: [UInt8] = []
@@ -368,7 +386,8 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
             self.server = server
             self.fd = fd
             self.peer = peer
-            transport = SSHServerTransport(configuration: .init(softwareVersion: "SheepTerm_FileServer", hostKeys: signers))
+            transport = SSHServerTransport(configuration: .init(softwareVersion: "SheepTerm_FileServer",
+                                                                rekeyAfterBytes: server.rekeyAfterBytes, hostKeys: signers))
             connection = SSHServerConnection(transport: transport, configuration: .init(
                 username: server.access.username, password: server.access.password))
             deadline = Date().addingTimeInterval(server.handshakeTimeout)
@@ -424,7 +443,15 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
                 sftp?.handler.abortWrites()
                 scp?.io.abortWrites = true
             }
-            if Date() >= deadline || (transport.sessionID == nil && Date() >= keyExchangeDeadline) {
+            if transport.isRekeyingWithClientKexInit {
+                // A client that started a rekey, or answered ours, and does
+                // not finish it: `rekeyTimeout` from its KEXINIT.
+                if rekeyDeadline == nil { rekeyDeadline = Date().addingTimeInterval(server.rekeyTimeout) }
+            } else if !transport.isRekeying {
+                rekeyDeadline = nil
+            }
+            if Date() >= deadline || (transport.sessionID == nil && Date() >= keyExchangeDeadline)
+                || rekeyDeadline.map({ Date() >= $0 }) == true {
                 transport.disconnect(reason: .byApplication, description: "timed out")
                 flush()
                 dead = true
@@ -542,6 +569,15 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
             }
         }
 
+        /// Our output not yet sealed for the socket: waiting for the
+        /// channel's window, or held by the transport while a key exchange
+        /// runs. Back-pressure counts both — a client that starts a rekey
+        /// and keeps the window open with WINDOW_ADJUST otherwise moved
+        /// every reply into the transport's hold, unseen (review 6.1 (59)).
+        private func unsent(_ channel: UInt32) -> Int {
+            connection.pendingOutput(channel) + transport.heldPayloadBytes
+        }
+
         /// Answers every complete SFTP packet, while the replies already
         /// queued for the client stay under 2 MB (READs are cheap to ask for).
         private func serviceSFTPInbox() {
@@ -549,7 +585,7 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
             var consumed = 0
             var waiting = false
             while sftpInbox.count - consumed >= 4 {
-                if connection.pendingOutput(channel) > 2 * 1024 * 1024 { waiting = true; break }
+                if unsent(channel) > 2 * 1024 * 1024 { waiting = true; break }
                 let b = sftpInbox[consumed..<(consumed + 4)].map(UInt32.init)
                 let length = Int(b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3])
                 guard length >= 1, length <= 256 * 1024 else { dead = true; return }
@@ -580,8 +616,9 @@ nonisolated final class SSHFileServer: @unchecked Sendable {
         fileprivate func channelWrite(_ channel: UInt32, _ bytes: [UInt8]) -> Bool {
             guard !dead, connection.isWritable(channel) else { return false }
             do { try connection.write(channel, bytes) } catch { dead = true; return false }
-            // Back-pressure: never more than 1 MB waiting for the window.
-            while !dead, !channelClosed, connection.pendingOutput(channel) > 1024 * 1024 { pumpOnce() }
+            // Back-pressure: never more than 1 MB waiting for the window or
+            // held by a rekey.
+            while !dead, !channelClosed, unsent(channel) > 1024 * 1024 { pumpOnce() }
             flush()
             return !dead
         }

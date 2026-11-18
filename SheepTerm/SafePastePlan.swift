@@ -106,7 +106,7 @@ public nonisolated struct SafePastePlan: Equatable, Sendable {
     }
 }
 
-extension SafePastePlan {
+nonisolated extension SafePastePlan {
     /// A CLIPBOARD paste (⌘V and friends) as the review shows and the pacer
     /// sends it (6.0 (12)): cleaned by `PasteHygiene.cleaned` (so the line
     /// count, the dangerous-line marks and the bytes are one text), and the
@@ -124,6 +124,81 @@ extension SafePastePlan {
         var plan = try parse(cleaned, maxBytes: maxBytes, maxLines: maxLines)
         plan.finalLineWithoutReturn = !PasteHygiene.endsWithLineBreak(cleaned)
         return plan
+    }
+}
+
+/// What a paste does once Safe Paste or the Danger Command Guard looks at it
+/// (`SessionTerminalHost.shouldPaste`; a snippet's body takes the same road).
+/// With either one on, what was CHECKED is what is SENT: the cleaned text
+/// (`PasteHygiene.cleaned`), never the clipboard's own bytes — `reloadX⌫`
+/// or `reloa␈␈oad` is not dangerous once cleaned, but sent raw the device's
+/// line editor applied the backspaces and ran `reload` (6.1 (62) review).
+/// With both off the view pastes the text exactly as before.
+public nonisolated enum GuardedPaste: Equatable, Sendable {
+    /// Both off, or nothing to clean: the view pastes `text` as it is.
+    case asBefore
+    /// Nothing to ask: this goes out at once in the text's place (empty =
+    /// nothing goes out).
+    case sendCleaned(String)
+    /// One dangerous line that runs: ask in the tab, then send `send`.
+    case askLine(String, send: String)
+    /// Safe Paste's review (or the guard's, for marked lines) of `text`.
+    case review(SafePastePlan, text: String, dangerous: [Int])
+    /// Over Safe Paste's ceiling, with Safe Paste on — or with the guard
+    /// alone when a line of it is dangerous.
+    case limit(SafePastePlan.ParseError)
+
+    /// `guardOn` = the setting; `guardAsks` = it may still ask (false once
+    /// the user already said yes to this send). `isDangerous` is
+    /// `CommandGuard.isDangerous` for the tab's family.
+    public static func decide(_ text: String, safePaste: Bool, guardOn: Bool, guardAsks: Bool,
+                              isDangerous: (String) -> Bool) -> GuardedPaste {
+        guard safePaste || guardOn else { return .asBefore }
+        // The guard asks or marks only while it is ON: with Safe Paste on and
+        // the guard off, `guardAsks` alone (the caller's "not yet confirmed",
+        // true for every ordinary paste) put the guard's card and red marks
+        // back on a guard the user turned off (6.1 (62) review).
+        let asks = guardOn && guardAsks
+        let cleaned = PasteHygiene.cleaned(text)
+        // What goes out when nothing is asked.
+        let unasked: GuardedPaste = cleaned == text ? .asBefore : .sendCleaned(cleaned)
+        let plan: SafePastePlan
+        do {
+            plan = try SafePastePlan.parseClipboard(text)
+        } catch SafePastePlan.ParseError.singleLine {
+            // One line runs only when it carries its own line break; without
+            // one the user's Return is checked like any typed line.
+            let line = cleaned.trimmingCharacters(in: .newlines)
+            if asks, line != cleaned, isDangerous(line) { return .askLine(line, send: cleaned) }
+            return unasked
+        } catch {
+            let limit = GuardedPaste.limit(error as? SafePastePlan.ParseError ?? .tooManyBytes)
+            guard !safePaste else { return limit }
+            // The guard alone: over the ceiling there is no review to mark a
+            // line in, so a dangerous line refuses the whole paste with the
+            // same alert (6.1 (62) review — it used to go out unchecked).
+            // Nothing dangerous: no alert, as before.
+            if asks, containsDangerousLine(cleaned, isDangerous: isDangerous) { return limit }
+            return unasked
+        }
+        let dangerous = asks ? plan.lines.indices.filter { isDangerous(plan.lines[$0]) } : []
+        guard safePaste || !dangerous.isEmpty else { return unasked }
+        return .review(plan, text: cleaned, dangerous: dangerous)
+    }
+
+    /// Any line of `cleaned` (LF its only break) that `isDangerous` marks —
+    /// the review's own lines, the last one too, read one at a time over
+    /// the bytes: no plan, no array of every line of a 5 MB paste.
+    static func containsDangerousLine(_ cleaned: String, isDangerous: (String) -> Bool) -> Bool {
+        let utf8 = cleaned.utf8
+        var start = utf8.startIndex
+        while start < utf8.endIndex {
+            let end = utf8[start...].firstIndex(of: 0x0A) ?? utf8.endIndex
+            if isDangerous(String(decoding: utf8[start..<end], as: UTF8.self)) { return true }
+            guard end < utf8.endIndex else { break }
+            start = utf8.index(after: end)
+        }
+        return false
     }
 }
 

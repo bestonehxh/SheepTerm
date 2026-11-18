@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Snippets → Edit Snippets…: the saved commands behind the Snippets menu.
@@ -51,22 +52,35 @@ struct SnippetsSheet: View {
             }
             .textFieldStyle(.roundedBorder)
 
+            // Return is Add/Save while the form holds something not yet in the
+            // list, Done otherwise; Done itself keeps what is typed (`SnippetFormPlan`).
+            let returnCommits = SnippetFormPlan.returnCommits(editing: editing, name: name, text: text, sendReturn: sendReturn)
             HStack {
                 if editing != nil {
                     Button("Cancel Edit") { clearForm() }
                 }
                 Spacer()
                 Button(editing == nil ? String(localized: "Add") : String(localized: "Save")) { commit() }
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                    .disabled(!SnippetFormPlan.canCommit(text: text))
+                    .keyboardShortcut(returnCommits ? .defaultAction : nil)
+                Button("Done") { done() }
+                    .keyboardShortcut(returnCommits ? nil : .defaultAction)
             }
         }
         .padding(20)
         .frame(width: 560)
         .sheepSheetChrome()
-        // Esc closes it, as Esc closes any Mac sheet (Done holds Return).
+        // Esc closes it, as Esc closes any Mac sheet — the one way to leave
+        // a typed snippet behind on purpose.
         .onExitCommand { dismiss() }
+    }
+
+    private func done() {
+        switch SnippetFormPlan.done(editing: editing, name: name, text: text, sendReturn: sendReturn) {
+        case .close: dismiss()
+        case .commitThenClose: commit(); dismiss()
+        case .stay: NSSound.beep()
+        }
     }
 
     private func row(_ snippet: Snippet) -> some View {
@@ -118,7 +132,7 @@ struct SnippetsSheet: View {
     }
 
     private func commit() {
-        if var snippet = editing {
+        if var snippet = editing, !SnippetFormPlan.commitAdds(editing: editing, existing: store.snippets) {
             snippet.name = name
             snippet.text = text
             snippet.sendReturn = sendReturn

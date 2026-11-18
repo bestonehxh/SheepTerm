@@ -61,6 +61,16 @@ public final class AgentForwarder {
     /// socket, which wakes poll.)
     public var isThrottledByUnsent: Bool { tunnels.values.contains { $0.isLive && $0.throttled == .unsent } }
 
+    /// The owner should poll with a short timeout: a tunnel is throttled by
+    /// the unsent budget (above), or a request from the far end is only
+    /// partly written to the agent (its socket was full — writability is
+    /// not in the poll set, and the far end sends nothing more until it is
+    /// answered). 6.1 (62) review: the owner's idle loop sleeps until its
+    /// next keepalive, so "the next pass" is no longer a second away.
+    public var wantsPromptPump: Bool {
+        tunnels.values.contains { $0.isLive && ($0.throttled == .unsent || !$0.toAgent.isEmpty) }
+    }
+
     /// Agent sockets open at once. `ssh -A` hops use one or two; the fds
     /// come from the app's one table, shared by every tab, so a far end
     /// opening thousands must not be able to exhaust it. Tunnels whose fd
@@ -205,6 +215,7 @@ public final class AgentForwarder {
     public init(socketPath: String) { self.socketPath = socketPath }
     deinit {}
     public func owns(_ channel: UInt32) -> Bool { false }
+    public var wantsPromptPump: Bool { false }
     public func channelOpened(_ channel: UInt32, connection: SSHConnection) throws(ConnectionError) {
         try connection.close(channel)
     }

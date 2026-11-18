@@ -313,6 +313,12 @@ struct HostEditSheet: View {
         .frame(width: SheetLayout.width)
         .sheepSheetChrome()
         .noAutoFill()
+        // A credential deleted while the sheet is open (Credentials, Sync):
+        // the pick goes back to None, as GroupCredentialSheet's does — never
+        // a blank popup over a dead id.
+        .onChange(of: credentialStore.credentials) { _, credentials in
+            credentialSelection = HostFormPlan.liveSelection(credentialSelection, in: credentials)
+        }
         .onAppear {
             // Only when this sheet can show a password field. Editing a
             // serial host is Name + Device path — taking the user's input
@@ -446,9 +452,13 @@ struct HostEditSheet: View {
         if trimmedName.isEmpty || trimmedAddress.isEmpty { return false }
         if hasTCPEndpoint, parsedPort == nil || addressError != nil { return false }
         if original.kind == .ssh, forwardError != nil { return false }
-        if original.kind == .ssh, JumpTarget.blocksSave(text: jumpText, jumpHostID: jumpHostID) { return false }
-        // Authentication ▸ Key logs in with a credential's key: none = no Save.
-        if original.kind == .ssh, authMethod == .key, credentialSelection == nil { return false }
+        // Any red line under "Via jump host" — typed text that does not
+        // parse, a saved bastion that is gone or loops back — greys Save out.
+        if original.kind == .ssh, HostFormPlan.jumpBlocksSave(fieldError: jumpError) { return false }
+        // Authentication ▸ Key logs in with a credential's key: none (or one
+        // deleted since it was picked) = no Save.
+        if original.kind == .ssh,
+           HostFormPlan.keyBlocksSave(authMethod, selection: credentialSelection, in: credentialStore.credentials) { return false }
         return true
     }
 
@@ -478,7 +488,9 @@ struct HostEditSheet: View {
             // `HostCompleteness.complete`; opened as a target it can still be
             // handed the credential of another entry on the same endpoint.
             // See the note on `HostCompleteness` in Models.swift.
-            host.credentialID = credentialSelection
+            // Only an id that still resolves: one deleted while the sheet was
+            // open (here or by Sync) is not written back for Sync to spread.
+            host.credentialID = HostFormPlan.liveSelection(credentialSelection, in: model.credentialStore.credentials)
             host.cipherMode = cipherMode
             host.agentForward = agentForward
             host.disablePaging = disablePaging
@@ -493,8 +505,10 @@ struct HostEditSheet: View {
             // `selectedCredential`, not `credentialSelection`: the same
             // question the form asked when it decided to show the password
             // field at all. A host pointing at a deleted credential shows it,
-            // and a password typed there has to be saved, not dropped.
-            if selectedCredential == nil, !password.isEmpty {
+            // and a password typed there has to be saved, not dropped — but
+            // only while it is on screen: typed, then hidden by switching to
+            // Agent, it is neither saved nor attached (Add's rule too).
+            if HostFormPlan.savesTypedPassword(password, method: authMethod, credentialResolves: selectedCredential != nil) {
                 // The trimmed username, like the host's: an untrimmed one
                 // would be stored in the credential and inherited by every
                 // host that later picks it.

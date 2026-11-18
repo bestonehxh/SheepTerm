@@ -324,12 +324,22 @@ public nonisolated struct TFTPTransfer: Sendable {
             self.maxStrayReplies = maxStrayReplies
         }
 
+        /// How long the File Server holds a slot for a peer that has not
+        /// answered at all — fixed, whatever `timeout` the request asked for.
+        public static let serverUnprovenLimit: TimeInterval = 5
+
         /// The File Server. `timeout` = the RFC 2349 value the client asked
-        /// for, which sets the retransmit interval.
+        /// for, which sets the retransmit interval and how long a peer that
+        /// HAS answered may go quiet. It never stretches `unprovenLimit`: an
+        /// RRQ with `timeout=255` that nobody follows up held a session slot
+        /// 510 s, and 32 of them kept the server "busy" for minutes (6.1 (62)
+        /// review). A real client answers its first packet within a round
+        /// trip; one whose answer was lost repeats its request, which opens a
+        /// new transfer.
         public static func server(timeout: Int? = nil) -> Policy {
             let interval = TimeInterval(timeout ?? 1)
             return Policy(interval: interval, maxInterval: max(interval, 4),
-                          stallLimit: max(20, interval * 6), unprovenLimit: max(5, interval * 2),
+                          stallLimit: max(20, interval * 6), unprovenLimit: serverUnprovenLimit,
                           retransmitUnproven: false, repeatBeforeFirstData: false,
                           firstDataWait: 30, dally: 3)
         }

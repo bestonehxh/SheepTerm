@@ -43,6 +43,9 @@ nonisolated final class SerialWorker: Sendable {
         var pendingTransfer: Transfer?
         var transferActive = false
         var cancelTransfer = false
+        /// A ZMODEM transfer (or its question) has the line (`claimLine`).
+        var lineClaimed = false
+        var ownedByTransfer: Bool { transferActive || lineClaimed }
     }
 
     /// One XMODEM/YMODEM send, as handed to the loop. The callbacks run on
@@ -241,8 +244,8 @@ nonisolated final class SerialWorker: Sendable {
     func sendBreak() -> Bool {
         state.withLock { state in
             // A break in the middle of a block corrupts it: not while a
-            // file transfer owns the line.
-            guard state.running, !state.transferActive else { return false }
+            // file transfer owns the line (XMODEM's or ZMODEM's).
+            guard state.running, !state.ownedByTransfer else { return false }
             state.pendingBreak = true
             if state.wakeFD >= 0 {
                 var byte: UInt8 = 0
@@ -261,7 +264,7 @@ nonisolated final class SerialWorker: Sendable {
     func setBaud(_ baudRate: Int) -> Bool {
         guard Self.rejection(forBaud: baudRate) == nil else { return false }
         return state.withLock { state in
-            guard state.running, !state.transferActive else { return false }
+            guard state.running, !state.ownedByTransfer else { return false }
             state.pendingBaud = baudRate
             if state.wakeFD >= 0 {
                 var byte: UInt8 = 0
@@ -287,10 +290,12 @@ nonisolated final class SerialWorker: Sendable {
     /// false = no live session, a transfer is already running, or bytes the
     /// session took are still queued for the line (`hasQueuedWrites`): the
     /// transfer would have thrown them away unreported — a paste cut short.
+    /// A ZMODEM transfer's claim refuses it too: its blocks would land in
+    /// the middle of that one.
     @discardableResult
     func startTransfer(_ transfer: Transfer) -> Bool {
         state.withLock { state in
-            guard state.running, !state.transferActive, state.pendingWrites.isEmpty else { return false }
+            guard state.running, !state.ownedByTransfer, state.pendingWrites.isEmpty else { return false }
             state.transferActive = true
             state.cancelTransfer = false
             state.pendingTransfer = transfer
@@ -319,6 +324,22 @@ nonisolated final class SerialWorker: Sendable {
 
     var isTransferring: Bool {
         state.withLock { $0.transferActive }
+    }
+
+    /// ZMODEM (6.1 (62)): the tab's `ZModemDriver` claims the line while a
+    /// question or a transfer is up. Its bytes go through `write` like
+    /// typing, so nothing is refused there — but a break, a speed change or
+    /// an XMODEM start would land inside it. Set on main; read here under
+    /// the lock; cleared with the session.
+    func claimLine(_ claimed: Bool) {
+        state.withLock { $0.lineClaimed = claimed }
+    }
+
+    /// The line is a transfer's — XMODEM's (`isTransferring`) or a ZMODEM
+    /// claim. The one answer Break, the speed menu, Send File, the menus,
+    /// `lineBusy` and the wrong-speed hint read.
+    var lineOwnedByTransfer: Bool {
+        state.withLock { $0.ownedByTransfer }
     }
 
     /// Bytes the session accepted that the loop has not taken yet.
@@ -374,6 +395,7 @@ nonisolated final class SerialWorker: Sendable {
                 state.runActive = false
                 state.transferActive = false
                 state.cancelTransfer = false
+                state.lineClaimed = false
                 defer { state.pendingTransfer = nil }
                 return state.pendingTransfer
             }
@@ -416,8 +438,8 @@ nonisolated final class SerialWorker: Sendable {
         }
         defer { close(fd) }
 
-        // Self-pipe so write() can wake the poll loop immediately; lets the
-        // idle timeout be a full second with zero added input latency.
+        // Self-pipe so write() can wake the poll loop immediately; lets an
+        // idle loop sleep with zero added input latency.
         var pipeFDs: [Int32] = [0, 0]
         guard pipe(&pipeFDs) == 0 else {
             onClosed?("pipe failed: \(String(cString: strerror(errno)))")
@@ -698,20 +720,25 @@ nonisolated final class SerialWorker: Sendable {
             }
 
             // Sleep in the kernel until bytes arrive or write() pokes the
-            // self-pipe. The pipe wake covers pending writes, so the idle
-            // timeout only needs to notice unplug (POLLHUP) and stop() —
-            // 1 wakeup/sec, zero added input latency.
+            // self-pipe. The pipe wake covers pending writes, a break, a
+            // speed change, a transfer and stop(); unplug arrives as POLLHUP
+            // or a read of 0 — so with no transfer running nothing here runs
+            // on a clock and the loop sleeps (6.1 (62); the timeout pass did
+            // nothing but wake once a second, forever).
             var pfds = [
                 pollfd(fd: fd, events: Int16(POLLIN), revents: 0),
                 pollfd(fd: pipeRead, events: Int16(POLLIN), revents: 0),
             ]
             // A transfer has deadlines (a 0.1 s start settle, 10 s answers):
             // wake for the next one instead of the idle second.
-            var timeout: Int32 = 1000
+            var timeout: Int32 = transfer == nil ? Self.idlePollCapMS : 1000
             if let deadline = transfer?.nextDeadline {
                 timeout = Int32(max(5, min(1000, (deadline - Self.clock()) * 1000 + 1)))
             }
             let ready = poll(&pfds, 2, timeout)
+#if SHEEPTERM_TESTING
+            _testLoopPasses.add(1, ordering: .relaxed)
+#endif
             if ready < 0 {
                 if errno == EINTR { continue }
                 onClosed?("poll failed: \(String(cString: strerror(errno)))")
@@ -750,7 +777,13 @@ nonisolated final class SerialWorker: Sendable {
         ProcessInfo.processInfo.systemUptime
     }
 
+    /// An idle loop's poll timeout: a guard, not a deadline.
+    static let idlePollCapMS: Int32 = 60_000
+
 #if SHEEPTERM_TESTING
+    /// Idle-poll returns, for the idle-wake check.
+    let _testLoopPasses = Atomic<Int>(0)
+
     /// Compiled only by the standalone worker regression harness.
     func _testLifecycleSnapshot() -> (
         running: Bool,

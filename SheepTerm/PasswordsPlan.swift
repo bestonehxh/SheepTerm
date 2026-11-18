@@ -58,4 +58,55 @@ nonisolated enum PasswordsPlan {
     static func revealed(_ ids: Set<UUID>, until: Date?, now: Date) -> Set<UUID> {
         isUnlocked(until: until, now: now) ? ids : []
     }
+
+    enum KeyEditOutcome: Equatable {
+        case saved
+        /// The credential is not there any more (deleted here or by Sync):
+        /// nothing was written.
+        case gone
+        /// The vault refused the key, or the old key could not be read to
+        /// undo with (a read the user denied, or a vault that could not
+        /// answer): nothing was changed.
+        case keyRefused
+        /// credentials.json refused the change; the vault was put back as it
+        /// was (`restored` false only if the vault then refused that too).
+        case updateFailed(restored: Bool)
+    }
+
+    /// Edit credential ▸ Save with a key change (`change`: nil = none,
+    /// `.some(nil)` = remove the key, else the new key). The key goes into
+    /// the vault BEFORE the credential names it, so a credential never points
+    /// at a missing key — and when the credential's own write then fails, the
+    /// old key is put back, so the vault and credentials.json never disagree
+    /// (review 6.1 (62): the new key stayed, or the old one stayed deleted).
+    /// `hadKey` = the credential names a key now; `current` reads it;
+    /// `absent` = the vault positively says there is no such entry (asked
+    /// only after `current` came back empty). A credential whose key is not
+    /// in the vault at all — a Backup restored from another Mac — has nothing
+    /// to put back, so it is repaired like a credential without a key rather
+    /// than refused forever (review 6.1 (62)).
+    static func applyKeyEdit<Key>(_ change: Key??, exists: Bool, hadKey: Bool, current: () -> Key?,
+                                  absent: () -> Bool,
+                                  set: (Key) -> Bool, remove: () -> Bool, update: () -> Bool) -> KeyEditOutcome {
+        guard exists else { return .gone }
+        guard let change else { return update() ? .saved : .updateFailed(restored: true) }
+        var previous: Key?
+        if hadKey {
+            if let old = current() {
+                previous = old
+            } else if !absent() {
+                // A key we cannot read is a key we cannot put back.
+                return .keyRefused
+            }
+        }
+        let wrote: Bool
+        // Nothing stored = nothing to delete: a removal only updates the metadata.
+        if let new = change { wrote = set(new) } else { wrote = previous != nil ? remove() : true }
+        guard wrote else { return .keyRefused }
+        guard update() else {
+            let restored = previous.map(set) ?? (change == nil ? true : remove())
+            return .updateFailed(restored: restored)
+        }
+        return .saved
+    }
 }

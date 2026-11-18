@@ -9,9 +9,8 @@ import Foundation
 @MainActor
 final class CommandHistoryStore: ObservableObject {
     private(set) var data = CommandHistoryData()
-    private var suppressWrites = false
-    private var backedUpThisRun = false
-    private let url: URL
+    /// Writes, coalesced and off the main thread (`CommandHistorySaver`).
+    private let saver: CommandHistorySaver
 
     static var defaultURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -21,13 +20,23 @@ final class CommandHistoryStore: ObservableObject {
     }
 
     init(url: URL = CommandHistoryStore.defaultURL) {
-        self.url = url
         let loaded = CommandHistoryFile.load(from: url)
         data = loaded.data
-        suppressWrites = loaded.suppressWrites
+        saver = CommandHistorySaver(url: url, suppressed: loaded.suppressWrites) { reason in
+            // History is a convenience: say it once, do not interrupt typing.
+            NSLog("SheepTerm: could not write history.json: %@", reason)
+            Self.report(title: String(localized: "Command history not saved"),
+                        String(localized: "SheepTerm could not write history.json (\(reason)). History is kept for this run only."))
+        }
         if let warning = loaded.warning {
             NSLog("SheepTerm: %@", warning)
             DispatchQueue.main.async { Self.report(title: String(localized: "Command history could not be read"), warning) }
+        }
+        // The last couple of seconds of typing land before the process
+        // ends (after applicationShouldTerminate has closed the sessions).
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saver.flush() }
         }
     }
 
@@ -37,29 +46,15 @@ final class CommandHistoryStore: ObservableObject {
     func record(_ command: String, for key: String) {
         guard CommandHistory.add(command, for: key, to: &data) else { return }
         objectWillChange.send()
-        save()
+        saver.changed(data)
     }
 
     /// An explicit change: it also re-arms saving after an unreadable file.
     func clear(_ key: String) {
-        suppressWrites = false
+        saver.rearm()
         guard CommandHistory.clear(key, in: &data) else { return }
         objectWillChange.send()
-        save()
-    }
-
-    private func save() {
-        guard !suppressWrites else { return }
-        do {
-            try CommandHistoryFile.save(data, to: url, backup: !backedUpThisRun)
-            backedUpThisRun = true
-        } catch {
-            // History is a convenience: say it once, do not interrupt typing.
-            NSLog("SheepTerm: could not write history.json: %@", error.localizedDescription)
-            suppressWrites = true
-            Self.report(title: String(localized: "Command history not saved"),
-                        String(localized: "SheepTerm could not write history.json (\(error.localizedDescription)). History is kept for this run only."))
-        }
+        saver.changed(data)
     }
 
     private static func report(title: String, _ text: String) {

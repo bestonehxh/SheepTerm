@@ -621,6 +621,23 @@ nonisolated final class SessionLogger: Sendable {
         fileTail = opened.tail
         handle = FileHandle(fileDescriptor: opened.fd, closeOnDealloc: true)
         state = Mutex(State())
+        Self.live.withLock { $0[ObjectIdentifier(self)] = LiveRef(logger: self) }
+    }
+
+    deinit { Self.live.withLock { _ = $0.removeValue(forKey: ObjectIdentifier(self)) } }
+
+    /// Every logger not closed yet, for File ▸ Logs…: Move to Trash is a
+    /// rename, and a session keeps writing to its file in the Trash — Empty
+    /// Trash then loses the rest of the log (review 6.1 (62)). Weak, so a
+    /// logger nobody closed cannot be kept alive by this list.
+    private struct LiveRef: @unchecked Sendable { weak var logger: SessionLogger? }
+    private static let live = Mutex<[ObjectIdentifier: LiveRef]>([:])
+
+    /// The paths (`standardizedFileURL`) of the logs a session is still
+    /// writing — after a prompt-name rename, the new one.
+    static var livePaths: Set<String> {
+        let loggers = live.withLock { $0.values.compactMap(\.logger) }
+        return Set(loggers.map { $0.url.standardizedFileURL.path })
     }
 
     /// A session name made safe to be a file name: no path separator, none
@@ -971,6 +988,9 @@ nonisolated final class SessionLogger: Sendable {
     /// the wait.
     @discardableResult
     func close() -> Bool {
+        // No longer a live log (the Logs window may trash it); the flush
+        // below still lands in the same file, whatever its name.
+        Self.live.withLock { _ = $0.removeValue(forKey: ObjectIdentifier(self)) }
         // Whichever of append/close wins the Mutex first enqueues its
         // ioQueue work first, so FIFO order on ioQueue matches call order
         // even though the two run on different threads (log queue vs.

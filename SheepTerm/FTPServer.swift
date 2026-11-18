@@ -54,6 +54,8 @@ nonisolated final class FTPServer: @unchecked Sendable {
 
     /// Largest single upload accepted. Settable before `start` (the harness lowers it).
     nonisolated(unsafe) var maximumUploadBytes: Int64 = FileServerPlan.maximumUpload
+    /// `dataStallTimeout` for this server. Settable before `start` (the harness lowers it).
+    nonisolated(unsafe) var dataStallLimit: TimeInterval = FTPServer.dataStallTimeout
 
     private let access: FileServerAccess
     private let lock = NSLock()
@@ -626,7 +628,8 @@ nonisolated final class FTPServer: @unchecked Sendable {
             guard requireEndpoint(), reply("150 Here comes the directory listing") else { return }
             guard let data = acquireData() else { return }
             setData(data)
-            let ok = FTPSocket.writeAll(data, Array(text.utf8), timeoutMs: Int32(FTPServer.dataStallTimeout * 1000),
+            let stallMs = Int32((server?.dataStallLimit ?? FTPServer.dataStallTimeout) * 1000)
+            let ok = FTPSocket.writeAll(data, Array(text.utf8), timeoutMs: stallMs,
                                         abort: { self.isAborted })
             finishData(data)
             reply(ok ? "226 Directory send OK" : "426 Connection closed; transfer aborted")
@@ -686,6 +689,7 @@ nonisolated final class FTPServer: @unchecked Sendable {
             guard let data = acquireData() else { return }
             setData(data)
             report(meter, name: name, upload: false, done: 0, total: f.size, state: .active, force: true)
+            let stallMs = Int32((server?.dataStallLimit ?? FTPServer.dataStallTimeout) * 1000)
             var sent: Int64 = 0
             var ok = true
             var carryCR = false
@@ -697,7 +701,7 @@ nonisolated final class FTPServer: @unchecked Sendable {
                 if count == 0 { break }
                 var out = Array(chunk[..<count])
                 if ascii { out = FTPServer.toNetworkASCII(out, previousWasCR: &carryCR) }
-                ok = FTPSocket.writeAll(data, out, timeoutMs: Int32(FTPServer.dataStallTimeout * 1000),
+                ok = FTPSocket.writeAll(data, out, timeoutMs: stallMs,
                                         abort: { self.isAborted })
                 sent += Int64(count)
                 report(meter, name: name, upload: false, done: sent, total: f.size, state: .active)
@@ -746,12 +750,18 @@ nonisolated final class FTPServer: @unchecked Sendable {
             var pendingCR = false
             var failure: String?
             var chunk = [UInt8](repeating: 0, count: 256 * 1024)
-            let stall = Int32(FTPServer.dataStallTimeout * 1000)
+            let stall = server?.dataStallLimit ?? FTPServer.dataStallTimeout
+            // The stall clock starts with the data connection: it was a
+            // member set when the session began and when a STOR ended, so
+            // a STOR more than a minute after login (or after the last one)
+            // failed "426" the first time its data paused 250 ms
+            // (review 6.1 (59)).
+            var lastByte = Date()
             loop: while true {
                 if isAborted || uploadWasAborted || clientAborted() { failure = "426 Transfer aborted"; break }
                 switch FTPSocket.poll(data, events: Int16(POLLIN), timeoutMs: 250) {
                 case 0:
-                    if Date().timeIntervalSince(meterLastByte) > Double(stall) / 1000 {
+                    if Date().timeIntervalSince(lastByte) > stall {
                         failure = "426 Connection closed; transfer aborted"; break loop
                     }
                     continue
@@ -765,7 +775,7 @@ nonisolated final class FTPServer: @unchecked Sendable {
                     if errno == EINTR || errno == EAGAIN { continue }
                     failure = "426 Connection closed; transfer aborted"; break
                 }
-                meterLastByte = Date()
+                lastByte = Date()
                 var bytes = Array(chunk[..<count])
                 if ascii { bytes = FTPServer.fromNetworkASCII(bytes, pendingCR: &pendingCR) }
                 if !FTPSocket.writeToFile(file, bytes) { failure = "451 Write failed"; break }
@@ -773,7 +783,6 @@ nonisolated final class FTPServer: @unchecked Sendable {
                 if received > cap { failure = "552 Exceeded the upload size limit"; break }
                 report(meter, name: name, upload: true, done: received, total: 0, state: .active)
             }
-            meterLastByte = Date()
             if failure == nil, uploadWasAborted { failure = "426 Transfer aborted" }
             if failure == nil, pendingCR, !FTPSocket.writeToFile(file, [0x0D]) { failure = "451 Write failed" }
             finishData(data)
@@ -809,7 +818,6 @@ nonisolated final class FTPServer: @unchecked Sendable {
             reply("226 Transfer complete")
         }
 
-        private var meterLastByte = Date()
     }
 
     /// Bare LF → CRLF (TYPE A on the wire); a CR already there stays.

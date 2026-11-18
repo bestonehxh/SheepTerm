@@ -87,14 +87,25 @@ public struct SyncSnapshot: Sendable {
     /// The same for whole families of records (every record of a file the
     /// app quarantined).
     public var wantCloudPrefixes: [String]
+    /// Records the app never deletes because the cloud says so (SheepTerm's
+    /// settings: only an OLDER build, which does not list a key, ever
+    /// uploads a setting's deletion). A cloud tombstone on one of these,
+    /// while this Mac holds a value, stays in the cloud and is not applied;
+    /// the shadow keeps the value here at the tombstone's stamp, so the next
+    /// sync does not take the untouched value for a fresh edit and upload
+    /// it over a newer one from another Mac. A real edit here, or a value
+    /// another Mac writes after the tombstone, still wins as usual.
+    public var keepOnRemoteDeletePrefixes: [String]
 
     public init(records: [String: Data], unavailable: Set<String> = [], unavailablePrefixes: [String] = [],
-                wantCloudCopy: Set<String> = [], wantCloudPrefixes: [String] = []) {
+                wantCloudCopy: Set<String> = [], wantCloudPrefixes: [String] = [],
+                keepOnRemoteDeletePrefixes: [String] = []) {
         self.records = records
         self.unavailable = unavailable.union(wantCloudCopy)
         self.unavailablePrefixes = unavailablePrefixes + wantCloudPrefixes
         self.wantCloudCopy = wantCloudCopy
         self.wantCloudPrefixes = wantCloudPrefixes
+        self.keepOnRemoteDeletePrefixes = keepOnRemoteDeletePrefixes
     }
 
     public func isUnavailable(_ id: String) -> Bool {
@@ -103,6 +114,10 @@ public struct SyncSnapshot: Sendable {
 
     public func wantsCloudCopy(_ id: String) -> Bool {
         wantCloudCopy.contains(id) || wantCloudPrefixes.contains { id.hasPrefix($0) }
+    }
+
+    public func keepsOnRemoteDelete(_ id: String) -> Bool {
+        keepOnRemoteDeletePrefixes.contains { id.hasPrefix($0) }
     }
 }
 
@@ -207,6 +222,15 @@ public enum SyncMerge {
                !snapshot.wantsCloudCopy(id) {
                 newShadow[id] = ShadowEntry(stamp: t.stamp, deleted: t.deleted,
                                             digest: t.payload.map { digest(id, $0) })
+                continue
+            }
+            // A cloud deletion the app never applies to this record: what
+            // is here stays, unchanged and in step with the tombstone (it
+            // ties with it next time, and the tombstone keeps winning
+            // quietly) — not "changed since the last sync", which would
+            // stamp it now and upload it over a newer edit made elsewhere.
+            if winner.deleted, let current = snapshot.records[id], snapshot.keepsOnRemoteDelete(id) {
+                newShadow[id] = ShadowEntry(stamp: winner.stamp, deleted: false, digest: digest(id, current))
                 continue
             }
             if winner != mine {

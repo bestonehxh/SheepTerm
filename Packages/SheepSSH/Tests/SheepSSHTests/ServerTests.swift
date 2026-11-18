@@ -297,6 +297,87 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(pair.clientData(c), sent, "800 KB across three automatic rekeys")
     }
 
+    /// A client sends KEXINIT and never finishes the exchange (review 6.1
+    /// (59)): it is seen as a rekey, and what `send` holds meanwhile is
+    /// capped — in bytes, and in payloads (tiny replies cost one each) —
+    /// then the transport fails instead of growing.
+    func testStalledRekeyHoldsAtMostTheCaps() throws {
+        for (size, cap) in [(64 * 1024, "bytes"), (1, "payloads")] {
+            let pair = Pair(client: .modern, signers: signers)
+            XCTAssertTrue(try pair.login())
+            XCTAssertFalse(pair.server.isRekeying)
+            // The client's KEXINIT, sealed under the current keys like any
+            // message; the server's answer is never delivered.
+            let offer = AlgorithmPreferences.modern
+            let kexInit = KexInit(cookie: [UInt8](repeating: 7, count: 16), kexAlgorithms: offer.kex.map(\.rawValue),
+                                  hostKeyAlgorithms: offer.hostKeys.map(\.rawValue),
+                                  ciphers: offer.ciphers.map(\.rawValue), macs: offer.macs.map(\.rawValue))
+            try pair.client.send(kexInit.payload)
+            try pair.server.receive(pair.client.takeOutgoing())
+            XCTAssertTrue(pair.server.isRekeying, cap)
+            var sent = 0
+            var failure: SSHTransportError?
+            while failure == nil, sent < SSHServerTransport.maximumHeldPayloads + 10 {
+                do { try pair.server.send([SSHMessage.ignore] + [UInt8](repeating: 0, count: size - 1)) ; sent += 1 }
+                catch { failure = error }
+                XCTAssertLessThanOrEqual(pair.server.heldPayloadBytes, SSHServerTransport.maximumHeldBytes, cap)
+            }
+            XCTAssertEqual(failure, .protocolError("too much output held during a key exchange"), cap)
+            if size == 1 { XCTAssertEqual(sent, SSHServerTransport.maximumHeldPayloads, cap) }
+            else { XCTAssertEqual(sent, SSHServerTransport.maximumHeldBytes / size, cap) }
+            XCTAssertThrowsError(try pair.server.send([SSHMessage.ignore]), "failed for good (\(cap))")
+            XCTAssertFalse(pair.server.isRekeying, cap)
+        }
+    }
+
+    /// Review 6.1 (62): the File Server's rekey deadline is for a client that
+    /// stalls an exchange, so it starts at the CLIENT's KEXINIT. A rekey the
+    /// server starts is not waiting on the client until that arrives — our
+    /// own KEXINIT may still sit behind data the client has not read.
+    func testServerStartedRekeyWaitsOnTheClientOnlyOnceItsKexInitIsIn() throws {
+        let pair = Pair(client: .modern, signers: signers, rekeyAfterBytes: 256 * 1024)
+        XCTAssertTrue(try pair.login())
+        let (_, s) = try pair.openExec("scp -f /x")
+        try pair.serverConnection.write(s, [UInt8](repeating: 1, count: 300_000))
+        XCTAssertTrue(pair.server.isRekeying, "the server started a rekey by bytes")
+        XCTAssertFalse(pair.server.isRekeyingWithClientKexInit, "…which waits on nothing from the client yet")
+        try pair.client.receive(pair.server.takeOutgoing())     // the client reads down to our KEXINIT
+        _ = pair.client.takeEvents()
+        try pair.server.receive(pair.client.takeOutgoing())     // its KEXINIT (and kex init) in
+        XCTAssertTrue(pair.server.isRekeyingWithClientKexInit, "the client's KEXINIT is in: now it waits on the client")
+        pair.pump()
+        XCTAssertNil(pair.serverError); XCTAssertNil(pair.clientError)
+        XCTAssertFalse(pair.server.isRekeying)
+        XCTAssertFalse(pair.server.isRekeyingWithClientKexInit)
+        // A client-started rekey waits on the client from its first packet.
+        pair.client.requestRekey()
+        try pair.server.receive(pair.client.takeOutgoing())
+        XCTAssertTrue(pair.server.isRekeyingWithClientKexInit, "a client-started rekey: the clock runs at once (as before)")
+        pair.pump()
+        XCTAssertFalse(pair.server.isRekeyingWithClientKexInit)
+    }
+
+    /// Must stay quiet: a client-started rekey with a few MB written during
+    /// it (held, under the caps) finishes and delivers every byte in order.
+    func testRekeyWithOutputHeldUnderTheCapCompletes() throws {
+        let pair = Pair(client: .modern, signers: signers)
+        XCTAssertTrue(try pair.login())
+        let (c, s) = try pair.openExec("scp -f /x")
+        pair.client.requestRekey()
+        try pair.server.receive(pair.client.takeOutgoing())     // the server is in the exchange now
+        XCTAssertTrue(pair.server.isRekeying)
+        var sent: [UInt8] = []
+        for round in 0..<4 {
+            let chunk = [UInt8](repeating: UInt8(round), count: 600_000)
+            sent += chunk
+            try pair.serverConnection.write(s, chunk)
+        }
+        pair.pump()
+        XCTAssertNil(pair.serverError); XCTAssertNil(pair.clientError)
+        XCTAssertFalse(pair.server.isRekeying)
+        XCTAssertEqual(pair.clientData(c), sent, "2.4 MB through a rekey, byte for byte")
+    }
+
     // MARK: Authentication
 
     func testWrongPasswordIsRefusedAndTheThirdEndsTheConnection() throws {

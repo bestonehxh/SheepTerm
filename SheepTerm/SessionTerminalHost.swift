@@ -165,8 +165,8 @@ final class SessionTerminalHost {
     /// Set around a `sendCommand(confirmed: true)`: its paste is not asked
     /// about again.
     private var guardConfirmedSend = false
-    /// Set by `shouldPaste` when Safe Paste sent a one-line body's CLEANED
-    /// text itself during a `sendCommand`: that send's acceptance
+    /// Set by `shouldPaste` when it sent a body's CLEANED text itself during
+    /// a `sendCommand` (`GuardedPaste.sendCleaned`): that send's acceptance
     /// (`CommandSendPlan.bodyAccepted`).
     private var commandCleanedSend: Bool?
 
@@ -189,9 +189,10 @@ final class SessionTerminalHost {
         let plan = CommandSendPlan.split(text)
         // One dangerous line that would run: ask in the tab first. Several
         // lines go through `shouldPaste`, whose review marks them.
-        if !confirmed, safePasteAvailable, AppModel.shared.confirmDangerousCommands, plan.thenReturn,
-           !plan.body.contains(where: \.isNewline), CommandGuard.isDangerous(plan.body, vendor: vendor) {
-            askAboutCommand(plan.body) { [weak self] send in
+        let vendor = vendor
+        if !confirmed, safePasteAvailable, AppModel.shared.confirmDangerousCommands,
+           let command = CommandSendPlan.askFirst(plan, isDangerous: { CommandGuard.isDangerous($0, vendor: vendor) }) {
+            askAboutCommand(command) { [weak self] send in
                 if send { self?.sendCommand(text, confirmed: true) }
             }
             return false
@@ -610,8 +611,9 @@ final class SessionTerminalHost {
         }
         // Danger Command Guard looks at every paste, Safe Paste on or
         // off — but with Safe Paste off it only ever ADDS a question for a
-        // dangerous line; everything else pastes exactly as before.
-        let guardOn = AppModel.shared.confirmDangerousCommands && !guardConfirmedSend
+        // dangerous line; everything else pastes as before, CLEANED: what
+        // the guard checked is what goes out (`GuardedPaste`, 6.1 (62)).
+        let guardOn = AppModel.shared.confirmDangerousCommands
         let reviewAll = AppModel.shared.safePasteEnabled
         guard reviewAll || guardOn else { return true }
         guard !pastePromptPresented else {
@@ -623,48 +625,37 @@ final class SessionTerminalHost {
         // sequences, controls and bidi marks out, U+2028/U+2029/NEL as line
         // breaks — so the review's lines, its count and its red marks are
         // exactly what is sent (6.0 (12)).
-        let cleanText = PasteHygiene.cleaned(text)
-        let plan: SafePastePlan
-        do {
-            plan = try SafePastePlan.parseClipboard(text)
-        } catch SafePastePlan.ParseError.singleLine {
-            // One line runs only when it carries its own line break; without
-            // one the user's Return is checked like any typed line.
-            let line = cleanText.trimmingCharacters(in: .newlines)
-            guard guardOn, line != cleanText, CommandGuard.isDangerous(line, vendor: vendor) else {
-                // Safe Paste on: one line still goes out clean (an ESC or a
-                // NUL in it would reach the device unseen).
-                guard reviewAll, cleanText != text else { return true }
-                let sent = !cleanText.isEmpty && sendImmediatePaste(cleanText)
-                // The view's copy is vetoed (false) but the cleaned text went
-                // out: a command's Return must still follow it.
-                if sendingCommand { commandCleanedSend = sent }
-                return false
-            }
+        let vendor = vendor
+        switch GuardedPaste.decide(text, safePaste: reviewAll, guardOn: guardOn, guardAsks: !guardConfirmedSend,
+                                   isDangerous: { CommandGuard.isDangerous($0, vendor: vendor) }) {
+        case .asBefore:
+            return true
+        case .sendCleaned(let cleanText):
+            // An ESC, a NUL or a backspace in it would reach the device
+            // unseen — and a backspace would rewrite what was checked.
+            let sent = !cleanText.isEmpty && sendImmediatePaste(cleanText)
+            // The view's copy is vetoed (false) but the cleaned text went
+            // out: a command's Return must still follow it.
+            if sendingCommand { commandCleanedSend = sent }
+            return false
+        case .askLine(let line, let cleanText):
             askAboutCommand(line) { [weak self] send in
                 if send { self?.sendImmediatePaste(cleanText) }
             }
             return false
-        } catch _ where !reviewAll {
-            return true
-        } catch SafePastePlan.ParseError.tooManyBytes {
-            showPasteLimitAlert(String(localized: "The clipboard is larger than 5 MB."))
+        case .review(let plan, let cleanText, let dangerous):
+            // A snippet's body: the review sends its Return, or none (bug: the
+            // last line lost or gained one).
+            let reviewed = CommandSendPlan.reviewed(plan, text: cleanText, thenReturn: sendingCommand ? sendingCommandReturn : nil)
+            presentSafePasteConfirmation(reviewed, dangerous: dangerous)
             return false
-        } catch SafePastePlan.ParseError.tooManyLines {
+        case .limit(.tooManyLines):
             showPasteLimitAlert(String(localized: "The clipboard contains more than 10,000 lines."))
             return false
-        } catch {
-            NSSound.beep()
+        case .limit:
+            showPasteLimitAlert(String(localized: "The clipboard is larger than 5 MB."))
             return false
         }
-
-        let dangerous = guardOn ? CommandGuard.dangerousLines(plan.lines, vendor: vendor) : []
-        guard reviewAll || !dangerous.isEmpty else { return true }
-        // A snippet's body: the review sends its Return, or none (bug: the
-        // last line lost or gained one).
-        let reviewed = CommandSendPlan.reviewed(plan, text: cleanText, thenReturn: sendingCommand ? sendingCommandReturn : nil)
-        presentSafePasteConfirmation(reviewed, dangerous: dangerous)
-        return false
     }
 
     func cancelSafePaste(reason: SafePastePacer.EndReason = .sessionEnded) {
@@ -823,7 +814,8 @@ final class SessionTerminalHost {
     /// A Safe Paste paced run is starting (serial tabs: the wrong-speed
     /// detector starts over — `ConsoleBaudGuess.Detector.feed`).
     var onPacedRunStart: (() -> Void)?
-    /// The serial controller's "a file transfer owns the line" (XMODEM).
+    /// The controller's "a file transfer owns the line": serial = XMODEM or
+    /// ZMODEM (`ConsoleWorker.lineOwnedByTransfer`), SSH = ZMODEM.
     var lineBusy: (() -> Bool)?
 
     /// Pastes, snippets and the AI's paste are refused: a Return is held, a

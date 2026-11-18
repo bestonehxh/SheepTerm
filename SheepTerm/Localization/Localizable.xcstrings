@@ -365,6 +365,58 @@
         }
       }
     },
+    "A device's login banner now prints in the terminal, as OpenSSH shows it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Login-Banner eines Geräts erscheint jetzt im Terminal, wie bei OpenSSH."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El banner de inicio de sesión ahora aparece en el terminal, como en OpenSSH."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La bannière de connexion s’affiche dans le terminal, comme avec OpenSSH."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "機器のログインバナーが OpenSSH と同じようにターミナルに表示されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "장비의 로그인 배너가 이제 OpenSSH처럼 터미널에 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O banner de login de um dispositivo agora aparece no terminal, como o OpenSSH mostra."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Баннер входа устройства теперь выводится в терминал, как в OpenSSH."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备的登录横幅现在会像 OpenSSH 一样显示在终端里。"
+          }
+        }
+      }
+    },
     "A few lines of your own" : {
       "localizations" : {
         "de" : {
@@ -417,6 +469,58 @@
         }
       }
     },
+    "A host or a group you delete is kept for 30 days, everything in it, and can be put back where it was." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein gelöschter Host oder eine gelöschte Gruppe wird 30 Tage lang samt Inhalt aufbewahrt und kann an den alten Platz zurück."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un host o un grupo que eliminas se guarda 30 días, con todo lo que contiene, y puede volver a donde estaba."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un hôte ou un groupe que vous supprimez est conservé 30 jours, avec tout son contenu, et peut être remis à sa place."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除したホストやグループは中身ごと 30 日間保管され、元の場所に戻せます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "삭제한 호스트나 그룹은 안의 내용까지 30일 동안 보관되며 원래 자리로 되돌릴 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um host ou grupo que você apaga fica guardado por 30 dias, com tudo o que tem, e pode voltar para onde estava."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалённый хост или группа хранится 30 дней вместе со всем содержимым, и его можно вернуть на прежнее место."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除的主机或分组会连同其中内容保留 30 天，并可放回原处。"
+          }
+        }
+      }
+    },
     "A lap noted “%@”" : {
       "localizations" : {
         "de" : {
@@ -465,6 +569,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "计次并标注“%@”"
+          }
+        }
+      }
+    },
+    "Add Hosts reads the sessions PuTTY, SecureCRT and MobaXterm export, and hosts files — every row to look over before Add. Passwords are never read." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hosts hinzufügen liest die Sitzungen, die PuTTY, SecureCRT und MobaXterm exportieren, und Hosts-Dateien – jede Zeile zum Prüfen vor dem Hinzufügen. Passwörter werden nie gelesen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir hosts lee las sesiones que exportan PuTTY, SecureCRT y MobaXterm, y archivos hosts: cada fila para revisar antes de Añadir. Nunca se leen contraseñas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter des hôtes lit les sessions exportées par PuTTY, SecureCRT et MobaXterm, et les fichiers hosts — chaque ligne à vérifier avant Ajouter. Les mots de passe ne sont jamais lus."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ホストを追加は PuTTY・SecureCRT・MobaXterm が書き出すセッションと hosts ファイルを読み込みます — 追加の前に全行を確認できます。パスワードは読み込みません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "호스트 추가는 PuTTY, SecureCRT, MobaXterm이 내보낸 세션과 hosts 파일을 읽습니다 — 추가하기 전에 모든 행을 확인합니다. 암호는 읽지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar Hosts lê as sessões que PuTTY, SecureCRT e MobaXterm exportam, e arquivos hosts — cada linha para conferir antes de Adicionar. Senhas nunca são lidas."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Добавить хосты» читает сеансы, которые экспортируют PuTTY, SecureCRT и MobaXterm, и файлы hosts — каждую строку можно проверить до добавления. Пароли не читаются никогда."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加主机可读取 PuTTY、SecureCRT 和 MobaXterm 导出的会话以及 hosts 文件 — 添加前逐行查看。从不读取密码。"
           }
         }
       }
@@ -725,6 +881,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "波特率"
+          }
+        }
+      }
+    },
+    "Broadcast several commands" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehrere Befehle senden (Broadcast)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Difundir varios comandos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diffuser plusieurs commandes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複数コマンドをブロードキャスト"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여러 명령 브로드캐스트"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transmitir vários comandos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Рассылка нескольких команд"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "广播多条命令"
           }
         }
       }
@@ -1141,6 +1349,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部连接"
+          }
+        }
+      }
+    },
+    "Connecting through a jump server no longer stalls." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verbindungen über einen Jump-Server hängen nicht mehr."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectar a través de un servidor de salto ya no se atasca."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La connexion via un serveur de rebond ne se bloque plus."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jump サーバー経由の接続が止まらなくなりました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "점프 서버를 거친 연결이 더 이상 멈추지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectar por um servidor de salto não trava mais."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение через jump-сервер больше не зависает."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过跳板机连接不再卡住。"
           }
         }
       }
@@ -1827,6 +2087,58 @@
         }
       }
     },
+    "Faster and steadier" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schneller und stabiler"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Más rápido y más estable"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plus rapide et plus stable"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "より速く、より安定"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "더 빠르고 더 안정적으로"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mais rápido e mais estável"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Быстрее и стабильнее"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更快、更稳"
+          }
+        }
+      }
+    },
     "File Server: a tidier card — the server chips on top, one command box, the interface beside the address." : {
       "localizations" : {
         "de" : {
@@ -1927,6 +2239,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "修复"
+          }
+        }
+      }
+    },
+    "Groups seven levels deep" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gruppen in sieben Ebenen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos de siete niveles"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Des groupes sur sept niveaux"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "グループは 7 階層まで"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7단계까지 그룹"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos em sete níveis"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Группы в семь уровней"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "七层分组"
           }
         }
       }
@@ -2087,6 +2451,58 @@
         }
       }
     },
+    "Home, search and the Logs window stay quick, even with many groups." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start, die Suche und das Protokolle-Fenster bleiben flott, auch mit vielen Gruppen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicio, la búsqueda y la ventana Registros siguen ágiles, incluso con muchos grupos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’accueil, la recherche et la fenêtre Journaux restent rapides, même avec beaucoup de groupes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "グループが多くても、ホーム、検索、ログウインドウはすばやく動きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그룹이 많아도 홈, 검색, 로그 창이 빠르게 반응합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Início, a busca e a janela Registros continuam rápidos, mesmo com muitos grupos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Главная, поиск и окно журналов работают быстро даже при множестве групп."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "即使群组很多，主页、搜索和日志窗口也依然流畅。"
+          }
+        }
+      }
+    },
     "Host key CHANGED" : {
       "localizations" : {
         "de" : {
@@ -2187,6 +2603,110 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "主机密钥类型已更改"
+          }
+        }
+      }
+    },
+    "Idle tabs no longer wake your Mac every second." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Untätige Tabs wecken deinen Mac nicht mehr jede Sekunde."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las pestañas inactivas ya no despiertan tu Mac cada segundo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les onglets inactifs ne réveillent plus votre Mac chaque seconde."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何もしていないタブが毎秒 Mac を起こさなくなりました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "쉬고 있는 탭이 더 이상 매초 Mac을 깨우지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abas ociosas não acordam mais o seu Mac a cada segundo."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неактивные вкладки больше не будят Mac каждую секунду."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空闲的标签页不再每秒唤醒你的 Mac。"
+          }
+        }
+      }
+    },
+    "Import from other apps" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import aus anderen Apps"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importar desde otras apps"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importer depuis d’autres apps"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "他のアプリから読み込む"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 앱에서 가져오기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importar de outros apps"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Импорт из других приложений"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从其他应用导入"
           }
         }
       }
@@ -2347,6 +2867,58 @@
         }
       }
     },
+    "It is the ＋ menu, right at the pointer." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das ist das ＋-Menü, direkt am Zeiger."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es el menú ＋, justo en el puntero."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "C’est le menu ＋, juste sous le pointeur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ポインタの位置に ＋ メニューが開きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "포인터 위치에 ＋ 메뉴가 열립니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "É o menu ＋, bem no ponteiro."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это меню ＋ прямо у указателя."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "就是 ＋ 菜单，出现在指针处。"
+          }
+        }
+      }
+    },
     "JSON" : {
       "localizations" : {
         "de" : {
@@ -2395,6 +2967,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "JSON"
+          }
+        }
+      }
+    },
+    "Keep a tab of several panes as one row in the sidebar. Open it and the same panes come back, laid out as saved, each connecting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Behalten Sie einen Tab mit mehreren Bereichen als eine Zeile in der Seitenleiste. Beim Öffnen kommen dieselben Bereiche wieder, wie gesichert angeordnet, und verbinden sich."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guarda una pestaña de varios paneles como una fila en la barra lateral. Ábrela y vuelven los mismos paneles, dispuestos como se guardaron, cada uno conectándose."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gardez un onglet de plusieurs volets comme une ligne de la barre latérale. Ouvrez-la et les mêmes volets reviennent, disposés comme enregistrés, chacun se connectant."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複数ペインのタブをサイドバーの 1 行として保存できます。開くと同じペインが保存したとおりに並び、それぞれ接続します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여러 패널로 나뉜 탭을 사이드바의 한 줄로 보관합니다. 열면 같은 패널이 저장한 배치 그대로 돌아와 각각 연결됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guarde uma aba de vários painéis como uma linha na barra lateral. Abra-a e os mesmos painéis voltam, dispostos como salvos, cada um conectando."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохраните вкладку из нескольких панелей одной строкой в боковой панели. Откройте её — те же панели вернутся в сохранённой раскладке и начнут подключаться."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把含多个窗格的标签页存为侧边栏中的一行。打开它，同样的窗格按存储时的布局回来，并各自连接。"
           }
         }
       }
@@ -2711,6 +3335,58 @@
         }
       }
     },
+    "Login banners" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Login-Banner"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Banners de inicio de sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bannières de connexion"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ログインバナー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인 배너"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Banners de login"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Баннеры входа"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录横幅"
+          }
+        }
+      }
+    },
     "Loss" : {
       "localizations" : {
         "de" : {
@@ -2759,6 +3435,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "丢包"
+          }
+        }
+      }
+    },
+    "Make a host a Jump server and pick the groups it Reaches — every host in them connects through it. A route can pass up to four, one behind another." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Machen Sie einen Host zum Jump-Server und wählen Sie die Gruppen, die er erreicht – jeder Host darin verbindet sich über ihn. Eine Route kann über bis zu vier führen, einer hinter dem anderen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convierte un host en servidor de salto y elige los grupos que alcanza: cada host en ellos se conecta a través de él. Una ruta puede pasar por hasta cuatro, uno detrás de otro."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faites d’un hôte un serveur de rebond et choisissez les groupes qu’il atteint : chaque hôte qu’ils contiennent se connecte via lui. Un trajet peut en traverser jusqu’à quatre, l’un derrière l’autre."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ホストを Jump サーバーにして到達するグループを選ぶと、その中のホストはすべてそれを経由して接続します。経路は最大 4 台まで、前後につなげられます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "호스트를 점프 서버로 만들고 도달할 그룹을 고르면 그 안의 모든 호스트가 이를 거쳐 연결됩니다. 경로는 최대 네 대까지, 하나 뒤에 또 하나를 거칠 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Torne um host um servidor de salto e escolha os grupos que ele alcança — cada host neles se conecta por ele. Uma rota pode passar por até quatro, um atrás do outro."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сделайте хост Jump-сервером и выберите группы, к которым он даёт доступ, — каждый хост в них подключается через него. Маршрут может пройти через четыре таких сервера, один за другим."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把主机设为跳板机，再选择它可达的分组 — 这些分组里的每台主机都经由它连接。一条路线最多可经过四台，一台接一台。"
           }
         }
       }
@@ -4739,6 +5467,58 @@
         }
       }
     },
+    "Right-click a group ▸ Add Subgroup…, down to seven levels." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rechtsklick ▸ Untergruppe hinzufügen …: bis zu sieben Ebenen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clic derecho en un grupo ▸ Añadir subgrupo…, hasta siete niveles."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clic droit sur un groupe ▸ Ajouter un sous-groupe…, jusqu’à sept niveaux."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "グループを右クリック ▸ サブグループを追加…、7 階層まで作れます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그룹 오른쪽 클릭 ▸ 하위 그룹 추가…, 7단계까지 만들 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clique direito em um grupo ▸ Adicionar Subgrupo…, até sete níveis."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Правый щелчок по группе ▸ Добавить подгруппу… — до семи уровней."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "右键点按群组 ▸ 添加子分组…，最多七层。"
+          }
+        }
+      }
+    },
     "Right-click an IP ▸ Rename…: a name for this tab only, nothing saved." : {
       "localizations" : {
         "de" : {
@@ -4787,6 +5567,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "右键点按 IP ▸ 重命名…：名称仅用于此标签页，不会保存。"
+          }
+        }
+      }
+    },
+    "Right-click the top bar" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rechtsklick auf die obere Leiste"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clic derecho en la barra superior"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clic droit sur la barre du haut"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上部バーを右クリック"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "상단 막대 오른쪽 클릭"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clique direito na barra superior"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Правый щелчок по верхней панели"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "右键点按顶栏"
           }
         }
       }
@@ -5051,6 +5883,58 @@
         }
       }
     },
+    "Settings ▸ Optimization ▸ Tab Bar: the tabs open at quit come back. Off unless turned on." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einstellungen ▸ Optimierung ▸ Tableiste: Die beim Beenden offenen Tabs kommen wieder. Standardmäßig aus."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustes ▸ Optimización ▸ Barra de pestañas: vuelven las pestañas abiertas al salir. Desactivado por omisión."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réglages ▸ Optimisation ▸ Barre d’onglets : les onglets de la dernière fois reviennent. Désactivé par défaut."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定 ▸ 最適化 ▸ タブバー: 終了時に開いていたタブが戻ります。オンにするまでオフです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설정 ▸ 최적화 ▸ 탭 막대: 종료할 때 열려 있던 탭이 돌아옵니다. 켜기 전까지는 꺼져 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustes ▸ Otimização ▸ Barra de Abas: as abas abertas ao sair voltam. Desligado por padrão."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Настройки ▸ Оптимизация ▸ Панель вкладок: вкладки, открытые при выходе, вернутся. По умолчанию выключено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置 ▸ 优化 ▸ 标签栏：退出时打开的标签页会回来。默认关闭。"
+          }
+        }
+      }
+    },
     "Show the hosts" : {
       "localizations" : {
         "de" : {
@@ -5207,6 +6091,58 @@
         }
       }
     },
+    "Snippets ▸ Broadcast to Tabs… sends every line, one at a time, to each ticked tab." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snippets ▸ An Tabs senden (Broadcast) … schickt jede Zeile einzeln an jeden markierten Tab."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fragmentos ▸ Difundir a pestañas… envía cada línea, una a una, a cada pestaña marcada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extraits ▸ Diffuser vers les onglets… envoie chaque ligne, une à une, à chaque onglet coché."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スニペット ▸ タブにブロードキャスト… は各行を 1 行ずつ、チェックしたタブに送ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스니펫 ▸ 탭에 브로드캐스트…가 각 줄을 하나씩, 선택한 탭마다 보냅니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snippets ▸ Transmitir para Abas… envia cada linha, uma de cada vez, a cada aba marcada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сниппеты ▸ Рассылка по вкладкам… шлёт строки по одной во все отмеченные вкладки."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码片段 ▸ 向标签页广播… 会把每一行逐条发送到每个勾选的标签页。"
+          }
+        }
+      }
+    },
     "Speed" : {
       "localizations" : {
         "de" : {
@@ -5307,6 +6243,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "合并分屏"
+          }
+        }
+      }
+    },
+    "Split your hosts into sets of work — a customer, the lab, General for the rest — and switch with the chip at the head of the sidebar's search field." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teilen Sie Ihre Hosts in Workspaces auf – ein Kunde, das Labor, General für den Rest – und wechseln Sie mit dem Chip vorn im Suchfeld der Seitenleiste."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reparte tus hosts en espacios de trabajo —un cliente, el laboratorio, General para el resto— y cambia con el chip al principio del campo de búsqueda de la barra lateral."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Répartissez vos hôtes en espaces de travail — un client, le labo, General pour le reste — et changez avec la puce en tête du champ de recherche de la barre latérale."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ホストを仕事ごとのワークスペースに分けられます — 顧客、ラボ、残りは General。サイドバーの検索フィールドの先頭にあるチップで切り替えます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "호스트를 작업 공간으로 나눕니다 — 고객, 랩, 나머지는 General. 사이드바 검색 필드 앞의 칩으로 전환합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Separe seus hosts em espaços de trabalho — um cliente, o laboratório, General para o resto — e alterne com o chip no início do campo de busca da barra lateral."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разделите хосты на рабочие пространства — клиент, лаборатория, General для остального — и переключайтесь чипом в начале поля поиска боковой панели."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把主机分到不同工作区 — 一个客户、实验室，其余放在 General — 用侧边栏搜索框开头的标签切换。"
           }
         }
       }
@@ -5519,6 +6507,58 @@
         }
       }
     },
+    "Stopwatch and Rack Fill" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stoppuhr und Rack Fill"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cronómetro y Rack Fill"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chronomètre et Rack Fill"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ストップウォッチと Rack Fill"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스톱워치와 Rack Fill"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cronômetro e Rack Fill"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Секундомер и Rack Fill"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秒表和 Rack Fill"
+          }
+        }
+      }
+    },
     "Stopwatch Button" : {
       "localizations" : {
         "de" : {
@@ -5623,6 +6663,58 @@
         }
       }
     },
+    "Sync keeps your newest change when two Macs edit the same setting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync behält deine neueste Änderung, wenn zwei Macs dieselbe Einstellung ändern."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync conserva tu cambio más reciente cuando dos Mac editan el mismo ajuste."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync garde votre modification la plus récente quand deux Mac changent le même réglage."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "2 台の Mac で同じ設定を変えたとき、Sync は新しいほうの変更を残します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "두 Mac에서 같은 설정을 바꾸면 Sync가 가장 최근 변경을 지킵니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Sync mantém sua alteração mais recente quando dois Macs editam o mesmo ajuste."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync сохраняет самое новое изменение, когда два Mac меняют одну настройку."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两台 Mac 修改同一项设置时，Sync 会保留你最新的更改。"
+          }
+        }
+      }
+    },
     "Tabs ▸ Rack Fill opens it too" : {
       "localizations" : {
         "de" : {
@@ -5723,6 +6815,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "也可通过“标签页 ▸ 秒表”(⌥⌘T)或右键点按标签页打开"
+          }
+        }
+      }
+    },
+    "Tabs ▸ Stopwatch (⌥⌘T) times a reload; Tabs ▸ Rack Fill is a puzzle for the wait." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tabs ▸ Stoppuhr (⌥⌘T) misst einen Neustart; Tabs ▸ Rack Fill verkürzt die Wartezeit."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pestañas ▸ Cronómetro (⌥⌘T) mide un reinicio; Pestañas ▸ Rack Fill, un puzle para esperar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Onglets ▸ Chronomètre (⌥⌘T) mesure un redémarrage ; Onglets ▸ Rack Fill fait patienter."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タブ ▸ ストップウォッチ（⌥⌘T）で再起動を計測、タブ ▸ Rack Fill は待ち時間のパズルです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "탭 ▸ 스톱워치(⌥⌘T)로 재부팅 시간을 재고, 탭 ▸ Rack Fill은 기다리는 동안 하는 퍼즐입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abas ▸ Cronômetro (⌥⌘T) mede um reinício; Abas ▸ Rack Fill é um quebra-cabeça para a espera."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вкладки ▸ Секундомер (⌥⌘T) засекает перезагрузку; Вкладки ▸ Rack Fill скрасит ожидание."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签页 ▸ 秒表（⌥⌘T）为重启计时；标签页 ▸ Rack Fill 是等待时的拼图游戏。"
           }
         }
       }
@@ -5987,6 +7131,318 @@
         }
       }
     },
+    "Try it: Hosts ▸ Add Hosts… ▸ Import…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausprobieren: Hosts ▸ Hosts hinzufügen … ▸ Importieren …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruébalo: Hosts ▸ Añadir hosts… ▸ Importar…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essayez : Hôtes ▸ Ajouter des hôtes… ▸ Importer…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試す: ホスト ▸ ホストを追加… ▸ 読み込む…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "해 보기: 호스트 ▸ 호스트 추가… ▸ 가져오기…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimente: Hosts ▸ Adicionar Hosts… ▸ Importar…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Попробуйте: Хосты ▸ Добавить хосты… ▸ Импорт…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试试：主机 ▸ 添加主机… ▸ 导入…"
+          }
+        }
+      }
+    },
+    "Try it: Hosts ▸ Add Host… ▸ Jump" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausprobieren: Hosts ▸ Host hinzufügen … ▸ Jump"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruébalo: Hosts ▸ Añadir host… ▸ Salto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essayez : Hôtes ▸ Ajouter un hôte… ▸ Rebond"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試す: ホスト ▸ ホストを追加… ▸ 踏み台"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "해 보기: 호스트 ▸ 호스트 추가… ▸ 점프"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimente: Hosts ▸ Adicionar Host… ▸ Salto"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Попробуйте: Хосты ▸ Добавить хост… ▸ Шлюз"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试试：主机 ▸ 添加主机… ▸ 跳板"
+          }
+        }
+      }
+    },
+    "Try it: connect to a device over SSH" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausprobieren: mit einem Gerät per SSH verbinden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruébalo: conéctate a un dispositivo por SSH"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essayez : connectez-vous à un appareil en SSH"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試す: SSH で機器に接続"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "해 보기: SSH로 장비에 연결"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimente: conecte-se a um dispositivo por SSH"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Попробуйте: подключитесь к устройству по SSH"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试试：通过 SSH 连接设备"
+          }
+        }
+      }
+    },
+    "Try it: right-click a group ▸ Move to Workspace" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausprobieren: Rechtsklick auf eine Gruppe ▸ In Workspace verschieben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruébalo: clic derecho en un grupo ▸ Mover al espacio de trabajo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essayez : clic droit sur un groupe ▸ Déplacer vers l’espace de travail"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試す: グループを右クリック ▸ ワークスペースへ移動"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "해 보기: 그룹 오른쪽 클릭 ▸ 작업 공간으로 이동"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimente: clique direito em um grupo ▸ Mover para o espaço de trabalho"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Попробуйте: правый щелчок по группе ▸ Переместить в рабочее пространство"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试试：右键点按群组 ▸ 移动到工作区"
+          }
+        }
+      }
+    },
+    "Try it: right-click a split tab ▸ Save Split…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausprobieren: Rechtsklick auf einen geteilten Tab ▸ Teilung sichern …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruébalo: clic derecho en una pestaña dividida ▸ Guardar división…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essayez : clic droit sur un onglet divisé ▸ Enregistrer la division…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試す: 分割したタブを右クリック ▸ 分割を保存…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "해 보기: 분할된 탭 오른쪽 클릭 ▸ 분할 저장…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimente: clique direito em uma aba dividida ▸ Salvar divisão…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Попробуйте: правый щелчок по разделённой вкладке ▸ Сохранить разделение…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试试：右键点按分屏标签页 ▸ 存储分屏…"
+          }
+        }
+      }
+    },
+    "Try it: the sidebar's ≡ ▸ Recently Deleted…, once something is deleted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausprobieren: ≡ der Seitenleiste ▸ Zuletzt gelöscht …, sobald etwas gelöscht ist"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruébalo: ≡ de la barra lateral ▸ Eliminados recientemente…, cuando hayas eliminado algo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essayez : ≡ de la barre latérale ▸ Supprimés récemment…, dès que quelque chose est supprimé"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試す: サイドバーの ≡ ▸ 最近削除した項目…（何か削除したあと）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "해 보기: 사이드바의 ≡ ▸ 최근 삭제된 항목… (무언가 삭제한 뒤)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimente: ≡ da barra lateral ▸ Apagados recentemente…, depois de apagar algo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Попробуйте: ≡ боковой панели ▸ Недавно удалённые… — когда что-то удалено"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试试：侧边栏的 ≡ ▸ 最近删除…（删除过内容后）"
+          }
+        }
+      }
+    },
     "Type a whole number" : {
       "localizations" : {
         "de" : {
@@ -6087,6 +7543,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "输入到会话"
+          }
+        }
+      }
+    },
+    "Type sz or rz on the far end of an SSH or console tab to receive or send a file." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tippe sz oder rz auf der Gegenseite eines SSH- oder Konsolen-Tabs, um eine Datei zu empfangen oder zu senden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribe sz o rz en el otro extremo de una pestaña SSH o de consola para recibir o enviar un archivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tapez sz ou rz à l’autre bout d’un onglet SSH ou console pour recevoir ou envoyer un fichier."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH またはコンソールのタブで、相手側で sz か rz を入力するとファイルを受信・送信します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 또는 콘솔 탭의 원격 쪽에서 sz나 rz를 입력하면 파일을 받거나 보냅니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Digite sz ou rz na outra ponta de uma aba SSH ou de console para receber ou enviar um arquivo."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sz или rz на удалённой стороне вкладки SSH или консоли — приём или отправка файла."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 SSH 或控制台标签页的远端输入 sz 或 rz，即可接收或发送文件。"
           }
         }
       }
@@ -42534,6 +44042,58 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "ZMODEM" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZMODEM"
           }
         }
       }
@@ -89750,54 +91310,54 @@
         }
       }
     },
-    "What's new in SheepTerm 6.1" : {
+    "What's new in SheepTerm 6.2" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Neu in SheepTerm 6.1"
+            "value" : "Neu in SheepTerm 6.2"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Novedades de SheepTerm 6.1"
+            "value" : "Novedades de SheepTerm 6.2"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nouveautés de SheepTerm 6.1"
+            "value" : "Nouveautés de SheepTerm 6.2"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SheepTerm 6.1 の新機能"
+            "value" : "SheepTerm 6.2 の新機能"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SheepTerm 6.1의 새로운 기능"
+            "value" : "SheepTerm 6.2의 새로운 기능"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Novidades do SheepTerm 6.1"
+            "value" : "Novidades do SheepTerm 6.2"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Что нового в SheepTerm 6.1"
+            "value" : "Что нового в SheepTerm 6.2"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SheepTerm 6.1 新功能"
+            "value" : "SheepTerm 6.2 新功能"
           }
         }
       }
@@ -91410,110 +92970,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Start Optimize：选择你的角色，或关闭从不使用的功能。"
-          }
-        }
-      }
-    },
-    "Give a host the Jump badge, then pick the groups it Reaches — every host in them connects through it. Reaches ▸ New Host… adds one behind it." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Geben Sie einem Host das Jump-Badge und wählen Sie die Gruppen, die er erreicht – jeder Host darin verbindet sich über ihn. Reaches ▸ New Host… fügt einen dahinter hinzu."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dale a un host la insignia Jump y elige los grupos que alcanza: cada host en ellos se conecta a través de él. Reaches ▸ New Host… añade uno detrás."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Donnez à un hôte le badge Jump, puis choisissez les groupes qu’il atteint : chaque hôte qu’ils contiennent se connecte via lui. Reaches ▸ New Host… en ajoute un derrière."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ホストに Jump バッジを付け、到達するグループを選ぶと、その中のホストはすべてそれを経由して接続します。Reaches ▸ New Host… でその先にホストを追加できます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "호스트에 Jump 배지를 붙이고 도달할 그룹을 고르면 그 안의 모든 호스트가 이 호스트를 거쳐 연결됩니다. Reaches ▸ New Host…로 그 뒤에 호스트를 추가합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dê a um host o selo Jump e escolha os grupos que ele alcança — cada host neles se conecta por ele. Reaches ▸ New Host… adiciona um atrás dele."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Дайте хосту значок Jump и выберите группы, которые он достигает, — каждый хост в них подключается через него. Reaches ▸ New Host… добавляет хост за ним."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "给主机加上 Jump 标记，再选择它可达的分组 — 这些分组里的每台主机都经由它连接。Reaches ▸ New Host… 可在它后面添加主机。"
-          }
-        }
-      }
-    },
-    "Try it: the badge in front of a host's name ▸ Jump" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Probieren: das Badge vor dem Hostnamen ▸ Jump"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pruébalo: la insignia delante del nombre del host ▸ Jump"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Essayez : le badge devant le nom de l’hôte ▸ Jump"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "試す：ホスト名の前のバッジ ▸ Jump"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "해보기: 호스트 이름 앞 배지 ▸ Jump"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Experimente: o selo antes do nome do host ▸ Jump"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Попробуйте: значок перед именем хоста ▸ Jump"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "试试：主机名称前的标记 ▸ Jump"
           }
         }
       }

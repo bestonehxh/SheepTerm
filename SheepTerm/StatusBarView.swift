@@ -15,15 +15,12 @@ struct StatusBarView: View {
     @EnvironmentObject var model: AppModel
     /// The status bar is switched off but a transfer is moving.
     var onlyTransfer = false
-    // Empty until onAppear — getifaddrs isn't free, so don't run it in the
-    // initializer that every re-render of the parent evaluates.
+    // Empty until the first read — getifaddrs isn't free, so don't run it in
+    // the initializer that every re-render of the parent evaluates.
     @State private var localAddress = ""
-    // Hoisted so the publisher isn't recreated on every re-render.
-    /// `static`, not an instance `let`: an instance initializer runs on every
-    /// struct init, so every AppModel publish built a fresh publisher and
-    /// resubscribed — restarting the 15 s phase each time, which a chattier
-    /// model would turn into an IP that never refreshes.
-    private static let ipTimer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
+    /// Something of the app is on screen (`MainWindowKeyMonitor.isVisible`),
+    /// copied so only a change of it re-renders the bar (not every key change).
+    @State private var onScreen = MainWindowKeyMonitor.shared.isVisible
 
     var body: some View {
         HStack(spacing: 12) {
@@ -83,30 +80,19 @@ struct StatusBarView: View {
                 .fill(Theme.chromeLine)
                 .frame(height: 1)
         }
-        .onAppear {
-            // Same guard as the tick below: no getifaddrs for a segment that
-            // isn't shown (it starts hidden).
-            guard model.statusShowIP else { return }
-            localAddress = NetworkInfo.summary()
-        }
-        // Switching "This Mac IP" on used to show whatever was read at
-        // onAppear — the ticks in between were skipped, so on a laptop that
-        // had changed networks meanwhile the bar displayed the old address
-        // until the next tick up to 15 s later.
-        .onChange(of: model.statusShowIP) { _, shown in
-            if shown { localAddress = NetworkInfo.summary() }
-        }
-        .onReceive(Self.ipTimer) { _ in
-            // getifaddrs isn't free — skip while the IP segment is hidden or
-            // nothing of the app is on screen to show it on.
-            guard model.statusShowIP, MainWindowKeyMonitor.shared.isVisible else { return }
-            localAddress = NetworkInfo.summary()
-        }
-        .onReceive(MainWindowKeyMonitor.shared.$isVisible) { visible in
-            // Coming back on screen: refresh the address that went stale
-            // while the ticks were skipped.
-            guard visible, model.statusShowIP else { return }
-            localAddress = NetworkInfo.summary()
+        .onReceive(MainWindowKeyMonitor.shared.$isVisible.removeDuplicates()) { onScreen = $0 }
+        // "This Mac IP": read at once when the segment is switched on or the
+        // app comes back on screen (a laptop may have changed networks
+        // meanwhile), then every 15 s — and NOTHING while the segment is off
+        // or nothing of the app is on screen: the clock itself stops (6.1
+        // (62); was a 15 s Timer that kept firing, its ticks skipped). A task
+        // per (shown, on screen), so no publisher is rebuilt per body pass.
+        .task(id: model.statusShowIP && onScreen) {
+            guard model.statusShowIP, onScreen else { return }
+            while !Task.isCancelled {
+                localAddress = NetworkInfo.summary()
+                try? await Task.sleep(for: .seconds(15))
+            }
         }
     }
 }

@@ -131,6 +131,11 @@ struct WebHostSheet: View {
         .frame(width: SheetLayout.width)
         .sheepSheetChrome()
         .noAutoFill()
+        // Save already writes only a credential that resolves (`makeHost`);
+        // this keeps the popup from going blank over one deleted meanwhile.
+        .onChange(of: credentialStore.credentials) { _, credentials in
+            credentialSelection = HostFormPlan.liveSelection(credentialSelection, in: credentials)
+        }
     }
 
     private var isEditing: Bool {

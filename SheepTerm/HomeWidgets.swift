@@ -32,20 +32,22 @@ struct HomeWidgetBody: View {
 
 /// One number, big, centred in the tile (the small tile's look, like the host counts).
 struct HomeBigNumber: View {
+    @Environment(\.homeScale) private var s
     let value: String
     let caption: String
     var body: some View {
         VStack(spacing: 0) {
-            Text(value).font(.system(size: 34, weight: .semibold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.5)
-            Text(caption).font(.system(size: 11)).foregroundStyle(Theme.dimText).lineLimit(1)
+            Text(value).font(.system(size: 34 * s, weight: .semibold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.5)
+            Text(caption).font(.system(size: 11 * s)).foregroundStyle(Theme.dimText).lineLimit(1)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.bottom, 22)
+        .padding(.bottom, 22 * s)
     }
 }
 
 /// A row in a widget's list: a dot, a title, a detail on the right; clickable when given an action.
 struct HomeWidgetRow: View {
+    @Environment(\.homeScale) private var s
     var dot: Color? = nil
     let title: String
     var detail: String = ""
@@ -53,16 +55,16 @@ struct HomeWidgetRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let dot { Circle().fill(dot).frame(width: 7, height: 7) }
-            Text(title).font(.system(size: 12)).lineLimit(1)
-            Spacer(minLength: 6)
-            Text(detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.dimText).lineLimit(1)
+        HStack(spacing: 8 * s) {
+            if let dot { Circle().fill(dot).frame(width: 7 * s, height: 7 * s) }
+            Text(title).font(.system(size: 12 * s)).lineLimit(1)
+            Spacer(minLength: 6 * s)
+            Text(detail).font(.system(size: 11 * s, design: .monospaced)).foregroundStyle(Theme.dimText).lineLimit(1)
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 6)
-        .frame(height: HomePlan.rowHeight)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hovering && action != nil ? 0.05 : 0)))
+        .padding(.vertical, 4 * s)
+        .padding(.horizontal, 6 * s)
+        .frame(height: HomePlan.rowHeight * s)
+        .background(RoundedRectangle(cornerRadius: 6 * s).fill(Color.white.opacity(hovering && action != nil ? 0.05 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { action?() }
@@ -79,11 +81,12 @@ private func rowsFitting<T>(_ items: [T], _ size: HomePlan.Size) -> (shown: [T],
 }
 
 private struct MoreLine: View {
+    @Environment(\.homeScale) private var s
     let more: Int
     var body: some View {
         if more > 0 {
-            Text(String(localized: "+\(more) more")).font(.system(size: 11)).foregroundStyle(Theme.dimText)
-                .padding(.horizontal, 6).padding(.top, 4)
+            Text(String(localized: "+\(more) more")).font(.system(size: 11 * s)).foregroundStyle(Theme.dimText)
+                .padding(.horizontal, 6 * s).padding(.top, 4 * s)
         }
     }
 }
@@ -91,20 +94,21 @@ private struct MoreLine: View {
 // MARK: Clock
 
 struct ClockTile: View {
+    @Environment(\.homeScale) private var s
     let zones: [String]
     let size: HomePlan.Size
 
     var body: some View {
         TimelineView(.everyMinute) { context in
             if size == .small || zones.isEmpty {
-                VStack(spacing: 2) {
+                VStack(spacing: 2 * s) {
                     Text(context.date, format: .dateTime.hour().minute())
-                        .font(.system(size: size == .small ? 30 : 40, weight: .semibold).monospacedDigit())
+                        .font(.system(size: (size == .small ? 30 : 40) * s, weight: .semibold).monospacedDigit())
                     Text(context.date, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
-                        .font(.system(size: 11)).foregroundStyle(Theme.dimText)
+                        .font(.system(size: 11 * s)).foregroundStyle(Theme.dimText)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.bottom, 22)
+                .padding(.bottom, 22 * s)
             } else {
                 VStack(spacing: 0) {
                     zoneRow(String(localized: "Here"), TimeZone.current, context.date, bold: true)
@@ -120,12 +124,12 @@ struct ClockTile: View {
         var style = Date.FormatStyle.dateTime.hour().minute()
         style.timeZone = zone
         return HStack {
-            Text(name).font(.system(size: 12, weight: bold ? .semibold : .regular)).lineLimit(1)
-            Spacer(minLength: 6)
-            Text(date, format: style).font(.system(size: 13, weight: .medium).monospacedDigit())
+            Text(name).font(.system(size: 12 * s, weight: bold ? .semibold : .regular)).lineLimit(1)
+            Spacer(minLength: 6 * s)
+            Text(date, format: style).font(.system(size: 13 * s, weight: .medium).monospacedDigit())
         }
-        .padding(.horizontal, 6)
-        .frame(height: HomePlan.rowHeight)
+        .padding(.horizontal, 6 * s)
+        .frame(height: HomePlan.rowHeight * s)
     }
 
 }
@@ -133,6 +137,7 @@ struct ClockTile: View {
 // MARK: Sessions
 
 struct SessionsTile: View {
+    @Environment(\.homeScale) private var s
     let size: HomePlan.Size
     @EnvironmentObject private var model: AppModel
 
@@ -141,7 +146,7 @@ struct SessionsTile: View {
         if size == .small {
             HomeBigNumber(value: "\(tabs.count)", caption: tabs.count == 1 ? String(localized: "session") : String(localized: "sessions"))
         } else if tabs.isEmpty {
-            Text("No tab open").font(.system(size: 11)).foregroundStyle(Theme.dimText).padding(.horizontal, 6)
+            Text("No tab open").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText).padding(.horizontal, 6 * s)
         } else {
             let fit = rowsFitting(tabs, size)
             VStack(spacing: 0) {
@@ -188,6 +193,7 @@ private struct SessionRow: View {
 // MARK: Ping
 
 struct PingTile: View {
+    @Environment(\.homeScale) private var s
     let size: HomePlan.Size
     @EnvironmentObject private var model: AppModel
 
@@ -201,10 +207,10 @@ struct PingTile: View {
     var body: some View {
         let all = rows
         if all.isEmpty {
-            VStack(spacing: 6) {
-                Text("No Ping tab").font(.system(size: 11)).foregroundStyle(Theme.dimText)
+            VStack(spacing: 6 * s) {
+                Text("No Ping tab").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText)
                 Button("New Ping Tab") { model.openPing([]) }
-                    .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain).font(.system(size: 12 * s, weight: .semibold)).foregroundStyle(Theme.accent)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if size == .small {
@@ -235,8 +241,10 @@ private struct PingTileRow: View {
 // MARK: Console
 
 struct ConsoleTile: View {
+    @Environment(\.homeScale) private var s
     let size: HomePlan.Size
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var screen = MainWindowKeyMonitor.shared
     @State private var cables: [String] = []
 
     var body: some View {
@@ -244,7 +252,7 @@ struct ConsoleTile: View {
             if size == .small {
                 HomeBigNumber(value: "\(cables.count)", caption: String(localized: "plugged in"))
             } else if cables.isEmpty {
-                Text("No console cable").font(.system(size: 11)).foregroundStyle(Theme.dimText).padding(.horizontal, 6)
+                Text("No console cable").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText).padding(.horizontal, 6 * s)
             } else {
                 let fit = rowsFitting(cables, size)
                 VStack(spacing: 0) {
@@ -257,8 +265,11 @@ struct ConsoleTile: View {
                 }
             }
         }
-        // Plugged in / pulled: read again while the tile is up (cheap — a /dev listing).
-        .task {
+        // Plugged in / pulled: read again while the tile is up and something
+        // of the app is on screen (cheap — a /dev listing; but it woke the
+        // app every 2 s while nobody could see it). Coming back reads at once.
+        .task(id: screen.isVisible) {
+            guard screen.isVisible else { return }
             while !Task.isCancelled {
                 let now = ConsoleTile.plugged()
                 if now != cables { cables = now }
@@ -277,6 +288,7 @@ struct ConsoleTile: View {
 // MARK: Snippets
 
 struct SnippetsTile: View {
+    @Environment(\.homeScale) private var s
     let size: HomePlan.Size
     @ObservedObject private var store = AppModel.shared.snippetStore
     @EnvironmentObject private var model: AppModel
@@ -286,7 +298,7 @@ struct SnippetsTile: View {
         if size == .small {
             HomeBigNumber(value: "\(snippets.count)", caption: String(localized: "snippets"))
         } else if snippets.isEmpty {
-            Text("No snippet saved").font(.system(size: 11)).foregroundStyle(Theme.dimText).padding(.horizontal, 6)
+            Text("No snippet saved").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText).padding(.horizontal, 6 * s)
         } else {
             let fit = rowsFitting(snippets, size)
             VStack(spacing: 0) {
@@ -301,15 +313,15 @@ struct SnippetsTile: View {
                         }
                     } label: {
                         HStack {
-                            Text(snippet.name).font(.system(size: 12)).lineLimit(1)
-                            Spacer(minLength: 6)
-                            Image(systemName: "arrow.turn.down.right").font(.system(size: 10)).foregroundStyle(Theme.dimText)
+                            Text(snippet.name).font(.system(size: 12 * s)).lineLimit(1)
+                            Spacer(minLength: 6 * s)
+                            Image(systemName: "arrow.turn.down.right").font(.system(size: 10 * s)).foregroundStyle(Theme.dimText)
                         }
-                        .padding(.horizontal, 6)
-                        .frame(height: HomePlan.rowHeight)
+                        .padding(.horizontal, 6 * s)
+                        .frame(height: HomePlan.rowHeight * s)
                         .contentShape(Rectangle())
                     }
-                    .menuStyle(.borderlessButton)
+                    .homeMenuStyle(s)
                     .menuIndicator(.hidden)
                     .disabled(model.tabs.allSatisfy { model.terminalHost(ofSession: $0.id) == nil })
                     .help(String(localized: "Type it into a session"))
@@ -323,16 +335,18 @@ struct SnippetsTile: View {
 // MARK: Logs
 
 struct LogsTile: View {
+    @Environment(\.homeScale) private var s
     let size: HomePlan.Size
     @EnvironmentObject private var model: AppModel
     @State private var entries: [LogLibrary.Entry] = []
+    @ObservedObject private var screen = MainWindowKeyMonitor.shared
 
     var body: some View {
         Group {
             if size == .small {
                 HomeBigNumber(value: "\(entries.count)", caption: String(localized: "logs"))
             } else if entries.isEmpty {
-                Text("No session log yet").font(.system(size: 11)).foregroundStyle(Theme.dimText).padding(.horizontal, 6)
+                Text("No session log yet").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText).padding(.horizontal, 6 * s)
             } else {
                 let fit = rowsFitting(entries, size)
                 VStack(spacing: 0) {
@@ -346,8 +360,10 @@ struct LogsTile: View {
                 }
             }
         }
-        // Newest first; read again now and then while the tile is up.
-        .task {
+        // Newest first; read again now and then while the tile is up and
+        // something of the app is on screen (coming back reads at once).
+        .task(id: screen.isVisible) {
+            guard screen.isVisible else { return }
             while !Task.isCancelled {
                 // Off the main thread: a folder of thousands of logs (Fable).
                 let directory = SessionLogger.logsDirectory
@@ -362,43 +378,44 @@ struct LogsTile: View {
 // MARK: File Server
 
 struct FileServerTile: View {
+    @Environment(\.homeScale) private var s
     let size: HomePlan.Size
     @ObservedObject private var server = FileServerModel.shared
 
     var body: some View {
         let active = server.transfers.filter { $0.state == .active }
         if size == .small {
-            VStack(spacing: 2) {
-                Circle().fill(server.running.isEmpty ? Theme.dimText : Theme.ok).frame(width: 10, height: 10)
+            VStack(spacing: 2 * s) {
+                Circle().fill(server.running.isEmpty ? Theme.dimText : Theme.ok).frame(width: 10 * s, height: 10 * s)
                 Text(server.running.isEmpty ? String(localized: "off") : String(localized: "on"))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13 * s, weight: .semibold))
                 Text(active.isEmpty ? " " : String(localized: "\(active.count) moving"))
-                    .font(.system(size: 11)).foregroundStyle(Theme.dimText)
+                    .font(.system(size: 11 * s)).foregroundStyle(Theme.dimText)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 22)
+            .padding(.bottom, 22 * s)
             .contentShape(Rectangle())
             .onTapGesture { server.popoverShown = true }
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4 * s) {
                 // Which servers run; a click opens the File Server popover to change it.
-                HStack(spacing: 10) {
+                HStack(spacing: 10 * s) {
                     ForEach(FileServerModel.Server.allCases) { kind in
-                        HStack(spacing: 4) {
-                            Circle().fill(server.running[kind] != nil ? Theme.ok : Theme.dimText.opacity(0.5)).frame(width: 7, height: 7)
-                            Text(kind.chipLabel).font(.system(size: 11))
+                        HStack(spacing: 4 * s) {
+                            Circle().fill(server.running[kind] != nil ? Theme.ok : Theme.dimText.opacity(0.5)).frame(width: 7 * s, height: 7 * s)
+                            Text(kind.chipLabel).font(.system(size: 11 * s))
                         }
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 6)
-                .frame(height: HomePlan.rowHeight)
+                .padding(.horizontal, 6 * s)
+                .frame(height: HomePlan.rowHeight * s)
                 .contentShape(Rectangle())
                 .onTapGesture { server.popoverShown = true }
                 .help(String(localized: "File Server"))
                 let recent = Array(server.transfers.suffix(max(size.capacity - 1, 1)).reversed())
                 if recent.isEmpty {
-                    Text("No transfer yet").font(.system(size: 11)).foregroundStyle(Theme.dimText).padding(.horizontal, 6)
+                    Text("No transfer yet").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText).padding(.horizontal, 6 * s)
                 }
                 ForEach(recent) { transfer in TransferLine(transfer: transfer) }
             }
@@ -408,25 +425,26 @@ struct FileServerTile: View {
 
 /// One transfer: up / down, the file, the peer; a bar while it moves; ✓ or the reason when done.
 private struct TransferLine: View {
+    @Environment(\.homeScale) private var s
     let transfer: ServerTransfer
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Image(systemName: transfer.isUpload ? "arrow.up" : "arrow.down").font(.system(size: 10, weight: .semibold))
+        VStack(alignment: .leading, spacing: 2 * s) {
+            HStack(spacing: 6 * s) {
+                Image(systemName: transfer.isUpload ? "arrow.up" : "arrow.down").font(.system(size: 10 * s, weight: .semibold))
                     .foregroundStyle(Theme.accent)
-                Text(transfer.name).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 6)
+                Text(transfer.name).font(.system(size: 12 * s)).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 6 * s)
                 switch transfer.state {
                 case .active:
                     Text(transfer.total > 0 ? "\(Int(Double(transfer.done) / Double(transfer.total) * 100))%"
                          : ByteCountFormatter.string(fromByteCount: transfer.done, countStyle: .file))
-                        .font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.dimText)
+                        .font(.system(size: 11 * s).monospacedDigit()).foregroundStyle(Theme.dimText)
                 case .done:
-                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.ok)
+                    Image(systemName: "checkmark").font(.system(size: 10 * s, weight: .bold)).foregroundStyle(Theme.ok)
                 case .failed:
                     Text(transfer.detail.isEmpty ? String(localized: "failed") : transfer.detail)
-                        .font(.system(size: 11)).foregroundStyle(Theme.destructive).lineLimit(1)
+                        .font(.system(size: 11 * s)).foregroundStyle(Theme.destructive).lineLimit(1)
                 }
             }
             if transfer.state == .active, transfer.total > 0 {
@@ -434,7 +452,7 @@ private struct TransferLine: View {
                     .progressViewStyle(.linear).controlSize(.mini).tint(Theme.accent)
             }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 6 * s)
         .help("\(transfer.peer) · \(transfer.name)")
     }
 }
@@ -445,6 +463,7 @@ private struct TransferLine: View {
 /// focus or the tile goes — not on every key (Fable: each key rewrote the
 /// whole board, a synced setting).
 struct NoteTile: View {
+    @Environment(\.homeScale) private var s
     let saved: String
     let commit: (String) -> Void
     @State private var text = ""
@@ -461,13 +480,13 @@ struct NoteTile: View {
                 try? await Task.sleep(for: .seconds(1))
                 if !Task.isCancelled, text != saved { commit(text) }
             }
-            .font(.system(size: 12))
+            .font(.system(size: 12 * s))
             .scrollContentBackground(.hidden)
             .focused($focused)
             .overlay(alignment: .topLeading) {
                 if text.isEmpty && !focused {
-                    Text("A few lines of your own").font(.system(size: 12)).foregroundStyle(Theme.dimText)
-                        .padding(.leading, 5).allowsHitTesting(false)
+                    Text("A few lines of your own").font(.system(size: 12 * s)).foregroundStyle(Theme.dimText)
+                        .padding(.leading, 5 * s).allowsHitTesting(false)
                 }
             }
     }
@@ -478,6 +497,7 @@ struct NoteTile: View {
 /// hosts as rows (two clicks open one, as everywhere on Home). The line on
 /// top is the way back. Where it is is not saved: the tile opens at the top.
 struct WorkspaceTile: View {
+    @Environment(\.homeScale) private var s
     let workspace: UUID
     let size: HomePlan.Size
     @EnvironmentObject private var model: AppModel
@@ -503,12 +523,12 @@ struct WorkspaceTile: View {
             HomeBigNumber(value: "\(level.folders.reduce(0) { $0 + HomePlan.folderCount($1.id, groups: store.groups) })",
                           caption: String(localized: "hosts"))
         } else {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6 * s) {
                 if !level.crumbs.isEmpty { crumbs(level.crumbs) }
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 6 * s) {
                         if !level.folders.isEmpty {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)], spacing: 6) {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104 * s), spacing: 6 * s)], spacing: 6 * s) {
                                 ForEach(level.folders) { folder in
                                     WorkspaceFolder(group: folder, depth: level.crumbs.count + 1,
                                                     count: HomePlan.folderCount(folder.id, groups: store.groups)) {
@@ -531,37 +551,38 @@ struct WorkspaceTile: View {
 
     /// "‹ Bangkok › DC 1": the arrow goes up one, a name goes to that group.
     private func crumbs(_ crumbs: [HostGroup]) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 4 * s) {
             Button { group = crumbs.dropLast().last?.id; picked = nil } label: {
-                Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
-                    .frame(width: 18, height: 18)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(Theme.controlFill))
+                Image(systemName: "chevron.left").font(.system(size: 10 * s, weight: .semibold))
+                    .frame(width: 18 * s, height: 18 * s)
+                    .background(RoundedRectangle(cornerRadius: 5 * s).fill(Theme.controlFill))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Back")
             .accessibilityLabel("Back")
             ForEach(Array(crumbs.enumerated()), id: \.element.id) { index, crumb in
-                if index > 0 { Text("›").font(.system(size: 11)).foregroundStyle(Theme.dimText) }
+                if index > 0 { Text("›").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText) }
                 if index == crumbs.count - 1 {
-                    Text(crumb.name).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                    Text(crumb.name).font(.system(size: 11 * s, weight: .semibold)).lineLimit(1)
                 } else {
                     Button(crumb.name) { group = crumb.id; picked = nil }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(.system(size: 11 * s))
                         .foregroundStyle(Theme.dimText)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
         }
-        .frame(height: 18)
+        .frame(height: 18 * s)
     }
 }
 
 /// One folder of a Workspace tile: the group's icon (a folder when it has
 /// none) in its colour, its name, and the hosts under it.
 private struct WorkspaceFolder: View {
+    @Environment(\.homeScale) private var s
     let group: HostGroup
     let depth: Int
     let count: Int
@@ -574,22 +595,22 @@ private struct WorkspaceFolder: View {
 
     var body: some View {
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4 * s) {
                 HStack(spacing: 0) {
                     if let icon = group.icon {
-                        GroupIconView(icon: icon, size: 16, color: color)
+                        GroupIconView(icon: icon, size: 16 * s, color: color)
                     } else {
-                        Image(systemName: "folder").font(.system(size: 14)).foregroundStyle(color)
+                        Image(systemName: "folder").font(.system(size: 14 * s)).foregroundStyle(color)
                     }
-                    Spacer(minLength: 4)
-                    Text("\(count)").font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.dimText)
+                    Spacer(minLength: 4 * s)
+                    Text("\(count)").font(.system(size: 11 * s).monospacedDigit()).foregroundStyle(Theme.dimText)
                 }
-                .frame(height: 16)
-                Text(group.name).font(.system(size: 12)).lineLimit(1)
+                .frame(height: 16 * s)
+                Text(group.name).font(.system(size: 12 * s)).lineLimit(1)
             }
-            .padding(8)
+            .padding(8 * s)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering ? 0.09 : 0.05)))
+            .background(RoundedRectangle(cornerRadius: 8 * s).fill(Color.white.opacity(hovering ? 0.09 : 0.05)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -600,6 +621,7 @@ private struct WorkspaceFolder: View {
 
 /// A host of the group a Workspace tile is in: Home's row — one click picks, two open.
 private struct WorkspaceHostRow: View {
+    @Environment(\.homeScale) private var s
     let host: Host
     let picked: Bool
     let pick: () -> Void
@@ -607,22 +629,22 @@ private struct WorkspaceHostRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 8 * s) {
             Text(host.badge)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: 9 * s, weight: .bold, design: .monospaced))
                 .foregroundStyle(Theme.badgeColor(for: host))
-                .frame(width: 32, height: 16)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.badgeColor(for: host).opacity(0.18)))
-            Text(host.name).font(.system(size: 12)).lineLimit(1)
-            Spacer(minLength: 6)
+                .frame(width: 32 * s, height: 16 * s)
+                .background(RoundedRectangle(cornerRadius: 4 * s).fill(Theme.badgeColor(for: host).opacity(0.18)))
+            Text(host.name).font(.system(size: 12 * s)).lineLimit(1)
+            Spacer(minLength: 6 * s)
             Text(SidebarOutlineCoordinator.detail(of: host) ?? "")
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11 * s, design: .monospaced))
                 .foregroundStyle(Theme.dimText)
                 .lineLimit(1)
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(picked ? 0.1 : hovering ? 0.05 : 0)))
+        .padding(.vertical, 4 * s)
+        .padding(.horizontal, 6 * s)
+        .background(RoundedRectangle(cornerRadius: 6 * s).fill(Color.white.opacity(picked ? 0.1 : hovering ? 0.05 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { pick(); open() }

@@ -1180,6 +1180,10 @@ extension WebTabController: WKDownloadDelegate {
         guard let entry = downloads.removeValue(forKey: ObjectIdentifier(download)),
               let temporary = entry.temporary, let destination = entry.destination else { return }
         do {
+            // Marked like a browser download BEFORE the rename — the mark
+            // moves with it (a replace keeps the new file's), so the real
+            // name never exists unmarked. Not marked is not a failure.
+            Quarantine.markIfNeeded(temporary)
             try WebDownloadPath.finish(temporary: temporary, destination: destination)
             view.bar.notice(String(localized: "Download finished"))
         } catch {

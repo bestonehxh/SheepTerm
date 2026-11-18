@@ -1,5 +1,8 @@
 import Foundation
 import Network
+#if canImport(AppKit)
+import AppKit
+#endif
 import SheepSSH
 import SheepJump
 import Synchronization
@@ -53,10 +56,13 @@ nonisolated struct JumpStep: Sendable {
     var authMethod: SSHAuthMethod = .automatic
 }
 
-/// What one run has learnt about a hop (6.1 (48)): a legacy retry builds
+/// What one run has learnt about a hop (6.1 (48)): a legacy retry built
 /// the hops before it AGAIN, and without this each was asked for the same
 /// username and password again and tried modern algorithms again — the
-/// logins doubled with every level. Lives for one `run`, never stored.
+/// logins doubled with every level. Since 6.1 (62) a legacy retry reopens
+/// only the channel (`reopenTunnel`) and nothing is built twice in a run;
+/// this stays as the guard should a rebuild ever come back (it cannot carry
+/// a one-time code or a Connect Once key). Lives for one `run`, never stored.
 nonisolated struct JumpRouteMemo: Sendable {
     struct Hop: Sendable, Equatable {
         var username = ""
@@ -129,6 +135,11 @@ nonisolated final class SSHWorker: Sendable {
         var writeOverflowNotified = false
         var onData: (@Sendable ([UInt8]) -> Void)?
         var onNotice: (@Sendable (String) -> Void)?
+        /// The device's login banner — and a keyboard-interactive round's
+        /// name + instruction, a password-change request's words — already
+        /// split and made printable (`LoginBanner`): one call per block that
+        /// has lines left in the login's budget and was not printed before.
+        var onBanner: (@Sendable ([String]) -> Void)?
         /// Fired when a write was refused. A paced paste has to stop: the
         /// pacer counts lines it HANDED OVER, so without this the HUD
         /// reports a full send while the device got a config with holes.
@@ -217,6 +228,10 @@ nonisolated final class SSHWorker: Sendable {
     var onNotice: (@Sendable (String) -> Void)? {
         get { state.withLock { $0.onNotice } }
         set { state.withLock { $0.onNotice = newValue } }
+    }
+    var onBanner: (@Sendable ([String]) -> Void)? {
+        get { state.withLock { $0.onBanner } }
+        set { state.withLock { $0.onBanner = newValue } }
     }
 
     var onInputDiscarded: (@Sendable () -> Void)? {
@@ -493,26 +508,13 @@ nonisolated final class SSHWorker: Sendable {
     /// Server-controlled text (version line, DISCONNECT reason, algorithm
     /// names — all accepted in cleartext before the host key is checked)
     /// with its control characters made harmless before it reaches the
-    /// terminal: an escape sequence there could rewrite the clipboard
-    /// (OSC 52) or repaint a forged host-key warning over our prefix.
-    /// C0/C1 controls, DEL and bidi controls become U+FFFD; line breaks and
-    /// tabs a space. (OpenSSH strnvis-escapes the same strings.) The bidi
-    /// set is every explicit directional formatting character: the
-    /// embeddings/overrides (U+202A–202E), the isolates (U+2066–2069) AND the
-    /// three marks — LRM U+200E, RLM U+200F, ALM U+061C — which reorder
-    /// neutral runs (digits, "-", ":") just as well and are enough to make
-    /// "host key refused" text or a fingerprint read differently.
+    /// terminal, as ONE line: an escape sequence there could rewrite the
+    /// clipboard (OSC 52) or repaint a forged host-key warning over our
+    /// prefix. The table — controls, DEL and bidi controls become U+FFFD,
+    /// line breaks and tabs a space — is `LoginBanner.printable`, shared
+    /// with the banner, which keeps its line breaks.
     static func printable(_ text: String) -> String {
-        var out = String.UnicodeScalarView()
-        for scalar in text.unicodeScalars {
-            switch scalar.value {
-            case 0x09, 0x0A, 0x0D: out.append(" ")
-            case 0x00...0x1F, 0x7F, 0x80...0x9F, 0x061C, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069:
-                out.append("\u{FFFD}")
-            default: out.append(scalar)
-            }
-        }
-        return String(out)
+        String(String.UnicodeScalarView(text.unicodeScalars.map(LoginBanner.printable)))
     }
 
     private func closeSession(_ message: String, hostKeyRefusal: Bool = false, endedNormally: Bool = false) {
@@ -603,24 +605,31 @@ nonisolated final class SSHWorker: Sendable {
         // and the real host's SSH then runs over a direct-tcpip channel of it.
         var tunnel: SSHLink.Tunnel?
         let steps = config.jumpSteps
+        defer { routeUnderQuestion = nil }
         if !steps.isEmpty {
             guard let made = establishRoute(steps[...], toHost: config.host, port: config.port, wake: pipeRead) else { return }
             tunnel = made
         }
+        routeUnderQuestion = tunnel.map { ($0, pipeRead) }
 
         var usedLegacy = config.mode == .legacy
         let link: SSHLink
-        switch connectAndExchangeKeys(config, legacy: usedLegacy, wake: pipeRead, via: tunnel) {
+        switch connectAndExchangeKeys(config, legacy: usedLegacy, wake: pipeRead, via: tunnel,
+                                      keepingRoute: config.mode == .auto) {
         case .success(let established):
             link = established
         case .failure(.negotiation(let why)) where config.mode == .auto:
             notice("modern negotiation failed (\(why)) — retrying with legacy algorithms…")
             usedLegacy = true
             // A failed negotiation took the bastion channel with it (the far
-            // end hung up on the channel): a retry needs a fresh tunnel.
-            if !steps.isEmpty {
-                guard let made = establishRoute(steps[...], toHost: config.host, port: config.port, wake: pipeRead) else { return }
+            // end hung up on the channel) and nothing else: the hops under it
+            // are still up and logged in, so the retry gets a fresh channel
+            // on the same bastion. Building the route again logged into every
+            // hop again — a one-time code or a Connect Once key asked twice.
+            if let old = tunnel {
+                guard let made = reopenTunnel(old, toHost: config.host, port: config.port, wake: pipeRead) else { return }
                 tunnel = made
+                routeUnderQuestion = (made, pipeRead)
             }
             switch connectAndExchangeKeys(config, legacy: true, wake: pipeRead, via: tunnel) {
             case .success(let established):
@@ -641,7 +650,8 @@ nonisolated final class SSHWorker: Sendable {
         // The server's LoginGraceTime runs while the user types, as it does
         // for the password.
         if config.username.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let user = usernamePrompt?("Username for \(config.host)")?
+            let ask = usernamePrompt, question = "Username for \(config.host)"
+            guard let user = keepingRouteAlive({ ask?(question) })?
                 .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
                 if isRunning { closeSession("connection cancelled — no username given") }
                 return
@@ -854,8 +864,9 @@ nonisolated final class SSHWorker: Sendable {
     ///
     /// `steps` = this hop (the last) and the hops before it: the hop is
     /// reached through a tunnel of THOSE (6.1 (34)), built here by the same
-    /// function — and built again for a legacy retry, since a failed
-    /// negotiation takes the channel under it along.
+    /// function. A legacy retry of the hop reopens only the channel under it
+    /// (`reopenTunnel`): a failed negotiation takes that channel along and
+    /// nothing below it.
     private func establishRoute(_ steps: ArraySlice<JumpStep>, toHost nextHost: String, port nextPort: Int, wake: Int32) -> SSHLink.Tunnel? {
         guard let step = steps.last else { return nil }
         let earlier = steps.dropLast()
@@ -878,6 +889,7 @@ nonisolated final class SSHWorker: Sendable {
             return .success(made)
         }
         guard case .success(let under) = wire() else { return nil }
+        routeUnderQuestion = under.map { ($0, wake) }
         // After the hops before it: their questions were theirs.
         state.withLock { $0.askingForJumpHost = true; $0.jumpInQuestion = hop }
         defer { state.withLock { $0.askingForJumpHost = false; $0.jumpInQuestion = nil } }
@@ -885,16 +897,22 @@ nonisolated final class SSHWorker: Sendable {
         let prefix = "jump host \(hop.label): "
         var usedLegacy = hopConfig.mode == .legacy || (hopConfig.mode == .auto && state.withLock { $0.routeMemo[hop, depth: depth].legacy })
         let link: SSHLink
-        switch connectAndExchangeKeys(hopConfig, legacy: usedLegacy, wake: wake, via: under) {
+        switch connectAndExchangeKeys(hopConfig, legacy: usedLegacy, wake: wake, via: under,
+                                      keepingRoute: hopConfig.mode == .auto && !usedLegacy) {
         case .success(let established):
             link = established
-        case .failure(.negotiation(let why)) where hopConfig.mode == .auto:
+        case .failure(.negotiation(let why)) where hopConfig.mode == .auto && !usedLegacy:
             notice("jump host \(hop.label): modern negotiation failed (\(why)) — retrying with legacy algorithms…")
             usedLegacy = true
             state.withLock { $0.routeMemo[hop, depth: depth].legacy = true }
-            state.withLock { $0.askingForJumpHost = false; $0.jumpInQuestion = nil }
-            guard case .success(let again) = wire() else { return nil }
-            state.withLock { $0.askingForJumpHost = true; $0.jumpInQuestion = hop }
+            // As for the target (see `run`): the hops before this one stay
+            // logged in; only the channel to this hop is opened again.
+            var again: SSHLink.Tunnel?
+            if let under {
+                guard let made = reopenTunnel(under, toHost: hop.host, port: hop.port, wake: wake) else { return nil }
+                again = made
+                routeUnderQuestion = (made, wake)
+            }
             switch connectAndExchangeKeys(hopConfig, legacy: true, wake: wake, via: again) {
             case .success(let established): link = established
             case .failure(let failure): report(failure, prefix: prefix); return nil
@@ -905,7 +923,8 @@ nonisolated final class SSHWorker: Sendable {
         }
         // The bastion's username, after its host key — as for the target.
         if hopConfig.username.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let user = usernamePrompt?("Username for jump host \(hop.host)")?
+            let ask = usernamePrompt, question = "Username for jump host \(hop.host)"
+            guard let user = keepingRouteAlive({ ask?(question) })?
                 .trimmingCharacters(in: .whitespaces), !user.isEmpty else {
                 if isRunning { closeSession("connection cancelled — no username given for jump host \(hop.host)") }
                 link.close()
@@ -929,7 +948,8 @@ nonisolated final class SSHWorker: Sendable {
         defer { onPasswordWorked = targetDoor }
         // A refusal of THIS hop's saved password, not an earlier hop's.
         let refusedBefore = configuredRefusedThisRun.filter { $0 == .jumpHost }.count
-        guard authenticate(link, hopConfig, side: .jumpHost, legacy: usedLegacy, wake: wake) else {
+        guard authenticate(link, hopConfig, side: .jumpHost, legacy: usedLegacy, wake: wake,
+                           bannerHeading: "jump host \(hop.label) — login banner:") else {
             if isRunning {
                 if let refusal = hostKeyRefusedDuringAuth {
                     closeSession(refusal, hostKeyRefusal: true)
@@ -960,6 +980,25 @@ nonisolated final class SSHWorker: Sendable {
             link.close()
             return nil
         }
+        return openTunnel(on: link, connection: connection, label: hop.label, toHost: nextHost, port: nextPort, wake: wake)
+    }
+
+    /// A fresh direct-tcpip channel on the bastion of `old`, for a legacy
+    /// retry of the host behind it. The old channel is already closed
+    /// (`SSHLink.closeKeepingRoute`); whatever the far end still sends on it
+    /// is dropped by the tunnel's read like any other channel's.
+    private func reopenTunnel(_ old: SSHLink.Tunnel, toHost nextHost: String, port nextPort: Int, wake: Int32) -> SSHLink.Tunnel? {
+        openTunnel(on: old.bastion, connection: old.adapter.connection, label: old.label,
+                   toHost: nextHost, port: nextPort, wake: wake)
+    }
+
+    /// Asks the logged-in bastion `link` for a direct-tcpip channel to
+    /// `nextHost:nextPort` and wraps it as the wire for the next transport.
+    /// A failure is reported with the bastion named, closes the bastion (and
+    /// everything under it) and returns nil.
+    private func openTunnel(on link: SSHLink, connection: SSHConnection, label: String,
+                            toHost nextHost: String, port nextPort: Int, wake: Int32) -> SSHLink.Tunnel? {
+        let prefix = "jump host \(label): "
         let channel: UInt32
         do {
             channel = try ChannelTunnel.open(on: connection, host: nextHost, port: nextPort)
@@ -985,13 +1024,14 @@ nonisolated final class SSHWorker: Sendable {
                 return nil
             }
         }
-        notice("tunnel to \(nextHost):\(nextPort) open through \(hop.label)")
+        notice("tunnel to \(nextHost):\(nextPort) open through \(label)")
         let adapter = ChannelTunnel(connection: connection, channel: channel)
         // The target's first bytes (its version line) routinely arrive in
         // the same read as OPEN_CONFIRMATION; `waitFor` collected them into
-        // `pending`, and they are the inner transport's to read.
+        // `pending`, and they are the inner transport's to read (the next
+        // `step` feeds them: `SSHLink.hasBufferedInbound`).
         adapter.absorb(pending)
-        return SSHLink.Tunnel(bastion: link, adapter: adapter, label: hop.label)
+        return SSHLink.Tunnel(bastion: link, adapter: adapter, label: label)
     }
 
     private func report(_ failure: HandshakeFailure, prefix: String = "") {
@@ -1005,6 +1045,12 @@ nonisolated final class SSHWorker: Sendable {
     }
 
 #if SHEEPTERM_TESTING
+    /// Passes of the interactive loop (= its poll returns): the idle-wake
+    /// count the worker harness checks.
+    let _testLoopPasses = Atomic<Int>(0)
+    /// The most far-host bytes parked in the tunnel during a held question.
+    let _testMostParkedDuringQuestion = Mutex<Int>(0)
+
     /// Compiled only by the standalone worker regression harness.
     func _testLifecycleSnapshot() -> (
         running: Bool,
@@ -1025,6 +1071,79 @@ nonisolated final class SSHWorker: Sendable {
     /// Set by authenticate() when a rekey during authentication presented a
     /// different host key. Worker-queue only.
     nonisolated(unsafe) private var hostKeyRefusedDuringAuth: String?
+
+    /// The hops under the link a question to the user is about (6.1 (62)),
+    /// with the worker's wake pipe: nil = straight there. Set where each link
+    /// of a route starts its handshake; worker-queue only.
+    nonisolated(unsafe) private var routeUnderQuestion: (tunnel: SSHLink.Tunnel, wake: Int32)?
+
+    /// One question to the user (`ask` blocks until the card is answered or
+    /// the session stops) while the hops under the link it is about stay
+    /// served: their keepalives and channel requests answered, window
+    /// updates taken, the next host's bytes parked in its channel for later
+    /// (`SSHLink.hasBufferedInbound`). Left unread, a bastion with
+    /// ClientAliveInterval hung up while the user typed, and the answer went
+    /// into a dead tunnel. `ask` runs on another thread; the link waiting for
+    /// the answer is never touched, and what `ask` returns is returned as is.
+    /// A stopped worker is freed exactly as before: `ask` sees the stop and
+    /// returns. A hop that fails here stops being served — the link that
+    /// rides it finds out on its next step, as without this.
+    ///
+    /// Bounded (6.1 (62) review): the tunnel's window is automatic, so while
+    /// the card is up nothing held the far host back — a broken or hostile
+    /// one could park bytes here at link speed. Once `maximumParkedDuringQuestion`
+    /// are parked the route is no longer read until the answer: TCP flow
+    /// control holds the far end again, as before 6.1 (62), and past that
+    /// point the bastion's keepalives go unanswered as they did then.
+    private func keepingRouteAlive<T: Sendable>(_ ask: @escaping @Sendable () -> T) -> T {
+        guard let route = routeUnderQuestion else { return ask() }
+        let answer = Mutex<T?>(nil)
+        let answered = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let value = ask()
+            answer.withLock { $0 = value }
+            // Wakes the poll below at once. Written BEFORE the signal: run()
+            // cannot have closed the pipe until this wait is over.
+            self.state.withLock { state in
+                if state.wakeFD >= 0 {
+                    var byte: UInt8 = 0
+                    _ = Darwin.write(state.wakeFD, &byte, 1)
+                }
+            }
+            answered.signal()
+        }
+        var serving = true
+        while answered.wait(timeout: .now()) == .timedOut {
+            guard serving else { answered.wait(); break }
+            let parked = route.tunnel.adapter.inboundCount
+#if SHEEPTERM_TESTING
+            _testMostParkedDuringQuestion.withLock { $0 = max($0, parked) }
+#endif
+            guard parked < Self.maximumParkedDuringQuestion else {
+                // Full: leave the socket unread until the answer (the poll
+                // below would only spin on bytes we will not take).
+                answered.wait()
+                break
+            }
+            do {
+                try route.tunnel.bastion.step(timeoutMS: 200, wake: route.wake, extra: [])
+                // The bastion's other channels' events are dropped, as by
+                // the tunnel's own read.
+                _ = route.tunnel.adapter.absorb(route.tunnel.adapter.connection.takeEvents())
+            } catch {
+                serving = false
+            }
+        }
+#if SHEEPTERM_TESTING
+        _testMostParkedDuringQuestion.withLock { $0 = max($0, route.tunnel.adapter.inboundCount) }
+#endif
+        return answer.withLock { $0 }!
+    }
+
+    /// The far host's bytes parked in the tunnel while a question is up,
+    /// past which the route is left unread until the answer: one step reads
+    /// at most `SSHLink.maxReadsPerStep` buffers more.
+    static let maximumParkedDuringQuestion = 1 << 20
 
     /// A lookup's result, handed between the resolver thread and the worker.
     /// The list travels as a bit pattern: an Int is Sendable, a pointer is not.
@@ -1094,8 +1213,12 @@ nonisolated final class SSHWorker: Sendable {
     /// Time spent waiting on the first-connection trust question is NOT
     /// counted: the deadline moves out by exactly that long (the password
     /// prompt gets the same treatment by running before its own clock).
+    /// `keepingRoute`: a negotiation failure over a tunnel closes only the
+    /// channel and leaves the bastion up, for the caller's legacy retry
+    /// (`reopenTunnel`); every other failure closes the route as before.
     private func connectAndExchangeKeys(_ config: SSHConfig, legacy: Bool, wake: Int32,
-                                        via tunnel: SSHLink.Tunnel? = nil) -> Result<SSHLink, HandshakeFailure> {
+                                        via tunnel: SSHLink.Tunnel? = nil,
+                                        keepingRoute: Bool = false) -> Result<SSHLink, HandshakeFailure> {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: Self.connectBudget)
         var fd: Int32 = -1
@@ -1145,11 +1268,15 @@ nonisolated final class SSHWorker: Sendable {
         switch outcome {
         case .success:
             return .success(link)
-        case .failure(let failure):
-            link.close()
+        case .failure(var failure):
             if case .message(let text) = failure, text == Self.hostKeyRejectedMarker,
                let reason = refusal.reason.withLock({ $0 }) {
-                return .failure(reason)
+                failure = reason
+            }
+            if keepingRoute, case .negotiation = failure {
+                link.closeKeepingRoute()
+            } else {
+                link.close()
             }
             return .failure(failure)
         }
@@ -1736,7 +1863,8 @@ nonisolated final class SSHWorker: Sendable {
                 let clock = ContinuousClock()
                 let asked = clock.now
                 defer { waited(asked.duration(to: clock.now)) }
-                let answer = prompt(q) { [weak self] in !(self?.isRunning ?? false) }
+                let cancelled: @Sendable () -> Bool = { [weak self] in !(self?.isRunning ?? false) }
+                let answer = keepingRouteAlive { prompt(q, cancelled) }
                 return isRunning ? answer : .stopped
             }
             let id = "\(key.keyType) \(Self.fingerprint(of: key))"
@@ -1767,7 +1895,8 @@ nonisolated final class SSHWorker: Sendable {
             let clock = ContinuousClock()
             let asked = clock.now
             defer { waited(asked.duration(to: clock.now)) }
-            let answer = prompt(q) { [weak self] in !(self?.isRunning ?? false) }
+            let cancelled: @Sendable () -> Bool = { [weak self] in !(self?.isRunning ?? false) }
+            let answer = keepingRouteAlive { prompt(q, cancelled) }
             // A stop that landed while the question was open wins over the
             // answer: the tab is gone, nothing may be pinned on its behalf.
             return isRunning ? answer : .stopped
@@ -2045,7 +2174,10 @@ nonisolated final class SSHWorker: Sendable {
     /// keeps the connection open — it hangs up at its own MaxAuthTries
     /// (OpenSSH 6, network gear usually 3–5) — and the user keeps answering.
     /// `side` names the login for `refusedLogin` / `onConfiguredPasswordRefused`.
-    private func authenticate(_ link: SSHLink, _ config: SSHConfig, side: RefusedLogin, legacy: Bool, wake: Int32) -> Bool {
+    /// `bannerHeading`: a notice printed once before this login's banner
+    /// (a jump hop's names the hop); nil = the banner alone.
+    private func authenticate(_ link: SSHLink, _ config: SSHConfig, side: RefusedLogin, legacy: Bool, wake: Int32,
+                              bannerHeading: String? = nil) -> Bool {
         let auth = SSHUserAuth(transport: link.transport, username: config.username)
         hostKeyRefusedDuringAuth = nil
         // Replies park on the link and are taken one at a time, so whatever
@@ -2068,8 +2200,30 @@ nonisolated final class SSHWorker: Sendable {
         /// The server closed while the user was still answering (its login
         /// grace time ran out): a lost connection, never a refusal.
         var droppedWhileAsking = false
-        /// Runs `start`, then pumps until the userauth layer answers (banners
-        /// are skipped — libssh never showed them either). nil = stop
+        /// This login's banner allowance (`LoginBanner.Budget`): every banner
+        /// message the server sends before success draws on it.
+        var banner = LoginBanner.Budget()
+        var bannerHeadingShown = false
+        /// Hands one banner message to the terminal, sanitised and within
+        /// budget — or a keyboard-interactive name + instruction, or the
+        /// words of a password-change request (`LoginBanner`). Nothing after
+        /// the tab was stopped.
+        func showBanner(_ text: String) {
+            let taken = banner.take(text)
+            guard isRunning else { return }
+            if !taken.lines.isEmpty {
+                if let heading = bannerHeading, !bannerHeadingShown {
+                    bannerHeadingShown = true
+                    notice(heading)
+                }
+                onBanner?(taken.lines)
+            }
+            if taken.truncated { notice("login banner truncated") }
+        }
+        /// Runs `start`, then pumps until the userauth layer answers. A
+        /// banner on the way is printed (`showBanner`) and the wait goes on —
+        /// it is not an answer, and neither ends the loop nor moves the
+        /// deadline. nil = stop
         /// authenticating: tab closed, or the transport died (recorded in
         /// `authTransportError` unless a credential was already refused).
         /// `waitsForPerson`: the answer may wait on a human or a slow
@@ -2103,7 +2257,9 @@ nonisolated final class SSHWorker: Sendable {
             while true {
                 while events.isEmpty, let payload = link.nextParked() {
                     do {
-                        events += try auth.handle(payload).filter { if case .banner = $0 { return false }; return true }
+                        for event in try auth.handle(payload) {
+                            if case .banner(let text) = event { showBanner(text) } else { events.append(event) }
+                        }
                     } catch {
                         return transportDied(error)
                     }
@@ -2290,7 +2446,8 @@ nonisolated final class SSHWorker: Sendable {
             }
             let rejected = failedRounds > 0 && !askedThisRound
             askedThisRound = true
-            guard let entered = passwordPrompt?("Password for \(config.username)@\(config.host)", rejected), !entered.isEmpty else {
+            let ask = passwordPrompt, question = "Password for \(config.username)@\(config.host)"
+            guard let entered = keepingRouteAlive({ ask?(question, rejected) }), !entered.isEmpty else {
                 authCancelled = true
                 return nil
             }
@@ -2303,7 +2460,8 @@ nonisolated final class SSHWorker: Sendable {
         func askChallenge(_ display: String, secure: Bool) -> String? {
             let rejected = failedRounds > 0 && !askedThisRound
             askedThisRound = true
-            guard let entered = challengePrompt?(display, secure, rejected) else { return nil }
+            let ask = challengePrompt
+            guard let entered = keepingRouteAlive({ ask?(display, secure, rejected) }) else { return nil }
             answeredThisRound = true
             return entered
         }
@@ -2357,11 +2515,13 @@ nonisolated final class SSHWorker: Sendable {
             if tryPassword {
                 guard let currentPassword = needPassword() else { return false }
                 guard let result = exchange(waitsForPerson: true, carriesCredential: true, { try auth.tryPassword(currentPassword) }) else { return hungUp() }
-                if case .passwordChangeRequested? = result.first {
+                if case .passwordChangeRequested(let prompt)? = result.first {
                     // The password method cannot change it (SheepTerm does not
                     // speak PASSWD_CHANGEREQ). Keyboard-interactive can — PAM
                     // asks "New password:" there — so go on if offered; else
                     // every further try would fail and count toward lockout.
+                    // The server's own words first (the banner path), then ours.
+                    showBanner(prompt)
                     credentialRefused = true
                     changeRequested = true
                     guard offers("keyboard-interactive") else {
@@ -2398,6 +2558,10 @@ nonisolated final class SSHWorker: Sendable {
                 guard var interactive = exchange(waitsForPerson: true, { try auth.startKeyboardInteractive() }) else { return hungUp() }
                 while case .infoRequest(let request)? = interactive.first {
                     guard isRunning else { return false }
+                    // Its name and instruction are for the person (PAM's "expires
+                    // in 3 days", a disclaimer): printed like the banner, before
+                    // the card asks this round's prompts. Not twice in a login.
+                    showBanner(LoginBanner.interactiveText(name: request.name, instruction: request.instruction))
                     if request.prompts.isEmpty {
                         emptyRounds += 1
                         if emptyRounds > 8 {
@@ -2675,15 +2839,16 @@ nonisolated final class SSHWorker: Sendable {
     /// nil for a normal/remote close.
     ///
     /// Waiting happens in poll() on the socket, the self-pipe and any agent
-    /// sockets, so typing has zero added latency while idle wakeups stay at
-    /// 1/sec.
+    /// sockets, so typing has zero added latency. An idle session sleeps
+    /// until its next keepalive is due (`idleTimeoutMS`) — about one wake a
+    /// minute instead of one a second; everything else that needs the loop
+    /// pokes the self-pipe.
     private func ioLoop(link: SSHLink, connection: SSHConnection, channel: UInt32, pipeRead: Int32,
                         forwarder: AgentForwarder?, ports: PortForwarder?, watcher: SessionPathWatcher) -> LoopFailure? {
         // ContinuousClock, not Date: these are internal deadlines, and a wall
         // clock can jump (NTP, time zone, a laptop lid closed and reopened).
         let clock = ContinuousClock()
         var lastKeepalive = clock.now
-        var lastAddressCheck = clock.now
         // Liveness. A link can die without anyone hanging up — a firewall that
         // drops the flow, a middlebox that keeps ACKing an association it has
         // already forgotten, an RST that arrives out of window during a flood
@@ -2721,15 +2886,16 @@ nonisolated final class SSHWorker: Sendable {
             }
             probesSinceInbound = 0
         }
-        /// 1 s, then 15 s, then every 60 s.
-        func probeDue() -> Bool {
-            let waited = lastKeepalive.duration(to: clock.now)
+        /// 1 s, then 15 s, then every 60 s (`probeSchedule`).
+        let schedule = Self.probeSchedule
+        func probeInterval() -> Duration {
             switch probesSent {
-            case 0: return waited > .seconds(1)
-            case 1: return waited > .seconds(14)
-            default: return waited > .seconds(60)
+            case 0: return schedule.first
+            case 1: return schedule.second
+            default: return schedule.every
             }
         }
+        func probeDue() -> Bool { lastKeepalive.duration(to: clock.now) > probeInterval() }
         /// Channel data waiting for the server's window. Input is moved from
         /// the worker's (bounded) queue into the channel only while this is
         /// small, so a stalled link fills the bounded queue — and the user is
@@ -2766,6 +2932,9 @@ nonisolated final class SSHWorker: Sendable {
 
         link.route = { try connection.handle($0) }
         while isRunning {
+#if SHEEPTERM_TESTING
+            _testLoopPasses.add(1, ordering: .relaxed)
+#endif
             // The one network death the socket cannot report: this Mac moved
             // off the network the connection was established from, and no
             // interface holds the local address any more. Checked first —
@@ -2773,12 +2942,10 @@ nonisolated final class SSHWorker: Sendable {
             // keepalive clocks further down own every slower death. The
             // path monitor stays silent when only the address changes (new
             // DHCP lease on the same subnet, a rotated IPv6 temporary
-            // address), so look every 5 s as well — getifaddrs is tens of
-            // µs; the verdict still waits out the watcher's grace.
-            if lastAddressCheck.duration(to: clock.now) > .seconds(5) {
-                lastAddressCheck = clock.now
-                watcher.check()
-            }
+            // address), so the watcher also looks every 5 s on its own
+            // (`SessionPathWatcher.Hub`, one timer for every session) — no
+            // wake of this loop for it; the verdict still waits out the
+            // watcher's grace and then pokes the self-pipe.
             if let lost = watcher.lostConnection() { return .init(message: lost) }
             do {
                 if probeDue() {
@@ -2830,8 +2997,8 @@ nonisolated final class SSHWorker: Sendable {
                 let dataSent = connection.dataSent(channel)
                 if !windowWaiting || dataSent != lastDataSent { lastWindowProgress = clock.now }
                 lastDataSent = dataSent
-                if (sealedWaiting && lastProgress.duration(to: clock.now) > .seconds(60))
-                    || (windowWaiting && lastWindowProgress.duration(to: clock.now) > .seconds(60)) {
+                if (sealedWaiting && lastProgress.duration(to: clock.now) > Self.writeStallLimit)
+                    || (windowWaiting && lastWindowProgress.duration(to: clock.now) > Self.writeStallLimit) {
                     return .init(message: "write stalled for 60 s — connection wedged?")
                 }
 
@@ -2884,9 +3051,22 @@ nonisolated final class SSHWorker: Sendable {
                 // polled, and step's own flush may free it: look again soon.
                 // A forward waiting on a full client socket (its writability
                 // is not in the poll set) or on the unsent budget: the same.
-                let prompt = forwarder?.isThrottledByUnsent == true || ports?.wantsPromptPump == true
+                let prompt = forwarder?.wantsPromptPump == true || ports?.wantsPromptPump == true
                     || bridges.contains { $0.wantsPromptPump }
-                try link.step(timeoutMS: prompt ? 50 : 1000, wake: pipeRead,
+                // Idle = nothing waits on a clock but the next probe: no input
+                // queued (the refill above may have left some for want of
+                // room — step's own flush can make room without any event),
+                // nothing sealed or held for the socket (the stall clock),
+                // nothing waiting on the device's window. Anything else keeps
+                // the one-second tick it always had; what changes the answer
+                // from outside (write, resize, a forward toggle, a Files tab,
+                // stop, the path watcher, the Mac waking) pokes the pipe.
+                let idle = !prompt && !sealedWaiting && connection.pendingOutput(channel) == 0
+                    && state.withLock({ $0.pendingWrites.isEmpty })
+                let timeout = prompt ? 50
+                    : idle ? Self.idleTimeoutMS(untilProbe: probeInterval() - lastKeepalive.duration(to: clock.now))
+                    : 1000
+                try link.step(timeoutMS: timeout, wake: pipeRead,
                               extra: (forwarder?.descriptors ?? []) + (ports?.descriptors ?? []))
                 if link.transport.packetsReceived > before { noteInbound() }
             } catch SSHLink.Failure.closedByPeer {
@@ -2910,6 +3090,36 @@ nonisolated final class SSHWorker: Sendable {
             }
         }
         return nil
+    }
+
+    /// The keepalive probes' spacing: the first two close together so a
+    /// short session is covered, then one a minute.
+    struct ProbeSchedule: Sendable {
+        var first: Duration
+        var second: Duration
+        var every: Duration
+        static let standard = ProbeSchedule(first: .seconds(1), second: .seconds(14), every: .seconds(60))
+    }
+#if SHEEPTERM_TESTING
+    nonisolated(unsafe) static var probeSchedule = ProbeSchedule.standard
+    nonisolated(unsafe) static var writeStallLimit: Duration = .seconds(60)
+#else
+    static let probeSchedule = ProbeSchedule.standard
+    /// Nothing reaching the socket (or the device's window) for this long
+    /// while bytes wait = a wedged link.
+    static let writeStallLimit: Duration = .seconds(60)
+#endif
+    /// The longest an idle loop sleeps (the probe interval; a guard, not a
+    /// deadline — every real one is computed).
+    static let idlePollCapMS: Int32 = 60_000
+
+    /// poll()'s timeout for an idle pass: until just past the next probe's
+    /// due time (`probeDue` is strict `>`), at least 1 ms, at most the cap.
+    static func idleTimeoutMS(untilProbe remaining: Duration) -> Int32 {
+        guard remaining > .zero else { return 1 }
+        let (seconds, attoseconds) = remaining.components
+        let ms = (Double(seconds) * 1000 + Double(attoseconds) / 1e15).rounded(.up) + 1
+        return Int32(min(Double(idlePollCapMS), ms))
     }
 
     private func isCorruption(_ error: Error) -> Bool {
@@ -3107,15 +3317,19 @@ nonisolated final class SessionPathWatcher: @unchecked Sendable {
     }
     private let monitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "sheepterm.pathwatch")
+    private let hub: Hub
 
     /// The defaults are the real thing; tests inject a short grace and
-    /// scripted probes (`pathSatisfied` overrides the monitor's report).
+    /// scripted probes (`pathSatisfied` overrides the monitor's report), and
+    /// a hub of their own with a short period.
     init(grace: DispatchTimeInterval = .seconds(5),
          addressPresent: @escaping @Sendable (Address) -> Bool = { SessionPathWatcher.addressIsStillLocal($0) },
-         pathSatisfied: (@Sendable () -> Bool)? = nil) {
+         pathSatisfied: (@Sendable () -> Bool)? = nil,
+         hub: Hub = .shared) {
         self.grace = grace
         self.addressPresent = addressPresent
         self.pathProbe = pathSatisfied
+        self.hub = hub
     }
 
     /// The socket's local IPv4/IPv6 address, or nil when there is nothing
@@ -3164,13 +3378,15 @@ nonisolated final class SessionPathWatcher: @unchecked Sendable {
     /// Begins watching. `local` is the snapshot `localAddress(of:)` took at
     /// connect time; `wake` is the worker's self-pipe write end (O_NONBLOCK),
     /// written once when the loss is recorded so the I/O loop's poll returns
-    /// immediately.
+    /// immediately — and when the Mac wakes from sleep (`nudge`), with or
+    /// without an address to watch: the loop's keepalive clock jumped.
     func start(local: Address?, wake: Int32) {
-        guard let local else { return }
         state.withLock {
             $0.local = local
             $0.wake = wake
         }
+        hub.add(self)
+        guard local != nil else { return }
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             self.state.withLock { $0.pathSatisfied = path.status == .satisfied }
@@ -3223,6 +3439,18 @@ nonisolated final class SessionPathWatcher: @unchecked Sendable {
     /// The recorded loss, if any.
     func lostConnection() -> String? { state.withLock { $0.loss } }
 
+    /// One wake byte for the I/O loop (the Mac woke from sleep): its clocks
+    /// are read again — a keepalive due during the sleep goes out now, not
+    /// when the poll it slept in runs out (poll's timeout does not count
+    /// sleep). Never after stop(), same lock as the loss write.
+    func nudge() {
+        state.withLock { s in
+            guard !s.stopped, s.wake >= 0 else { return }
+            var byte: UInt8 = 0
+            _ = Darwin.write(s.wake, &byte, 1)
+        }
+    }
+
     /// After this returns nothing writes `wake` — the caller closes it right
     /// away. `monitor.cancel()` is asynchronous (a handler may still run) and
     /// a grace timer may still fire, so a queue barrier is not enough; both
@@ -3232,8 +3460,102 @@ nonisolated final class SessionPathWatcher: @unchecked Sendable {
             defer { s.stopped = true }
             return s.local != nil && !s.stopped
         }
+        hub.remove(self)
         guard wasWatching else { return }
         monitor.cancel()
+    }
+
+    /// The periodic look for every live watcher, on ONE timer for the app
+    /// (6.1 (62); was a 5 s clock inside each session's I/O loop, which then
+    /// had to wake every second to read it). Each tick runs `check()` on
+    /// every watcher — a loss still pokes only its own session — and, when
+    /// the Mac slept since the last tick, `nudge()`s them all. The system's
+    /// wake notification nudges at once; the tick (uptime-based, so at most
+    /// one period after wake) is the fallback that needs no AppKit. The
+    /// timer runs only while a watcher is registered.
+    final class Hub: @unchecked Sendable {
+        static let shared = Hub()
+
+        private let period: DispatchTimeInterval
+        private let leeway: DispatchTimeInterval
+        private let queue = DispatchQueue(label: "sheepterm.pathwatch.hub")
+        private struct Member { weak var watcher: SessionPathWatcher? }
+        private struct State {
+            var members: [ObjectIdentifier: Member] = [:]
+            var timer: DispatchSourceTimer?
+            var last: (awake: SuspendingClock.Instant, total: ContinuousClock.Instant)?
+            var ticks = 0
+        }
+        private let state = Mutex(State())
+
+        init(period: DispatchTimeInterval = .seconds(5), leeway: DispatchTimeInterval = .seconds(1),
+             observeSystemWake: Bool = true) {
+            self.period = period
+            self.leeway = leeway
+#if canImport(AppKit)
+            guard observeSystemWake else { return }
+            // Registered on main (the first watcher starts on a worker queue).
+            DispatchQueue.main.async { [weak self] in
+                NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil,
+                                                                  queue: nil) { [weak self] _ in self?.systemDidWake() }
+            }
+#endif
+        }
+
+        /// The Mac slept between two looks: the continuous clock (which
+        /// counts sleep) ran ahead of the suspending one by more than a
+        /// second.
+        static func slept(total: Duration, awake: Duration) -> Bool { total - awake > .seconds(1) }
+
+        func add(_ watcher: SessionPathWatcher) {
+            state.withLock { s in
+                s.members[ObjectIdentifier(watcher)] = Member(watcher: watcher)
+                guard s.timer == nil else { return }
+                let timer = DispatchSource.makeTimerSource(queue: queue)
+                // The loop's own 5 s clock was read up to a second late; the
+                // same slack lets the system coalesce this one.
+                timer.schedule(deadline: .now() + period, repeating: period, leeway: leeway)
+                timer.setEventHandler { [weak self] in self?.tick() }
+                s.last = (SuspendingClock.now, ContinuousClock.now)
+                s.timer = timer
+                timer.resume()
+            }
+        }
+
+        func remove(_ watcher: SessionPathWatcher) {
+            state.withLock { s in
+                s.members[ObjectIdentifier(watcher)] = nil
+                s.members = s.members.filter { $0.value.watcher != nil }
+                guard s.members.isEmpty, let timer = s.timer else { return }
+                timer.cancel()
+                s.timer = nil
+            }
+        }
+
+        /// Ticking at all (tests: off once the last watcher stopped).
+        var isTicking: Bool { state.withLock { $0.timer != nil } }
+        var ticks: Int { state.withLock { $0.ticks } }
+
+        func systemDidWake() {
+            queue.async { [weak self] in self?.live().forEach { $0.nudge() } }
+        }
+
+        private func live() -> [SessionPathWatcher] {
+            state.withLock { s in s.members.values.compactMap(\.watcher) }
+        }
+
+        private func tick() {
+            let now = (awake: SuspendingClock.now, total: ContinuousClock.now)
+            let slept = state.withLock { s -> Bool in
+                defer { s.last = now; s.ticks += 1 }
+                guard let last = s.last else { return false }
+                return Self.slept(total: last.total.duration(to: now.total), awake: last.awake.duration(to: now.awake))
+            }
+            for watcher in live() {
+                watcher.check()
+                if slept { watcher.nudge() }
+            }
+        }
     }
 }
 
@@ -3328,6 +3650,17 @@ nonisolated final class SSHLink {
         } else {
             _ = Darwin.close(fd)
         }
+    }
+
+    /// Done with this link but not with the route under it (a legacy retry
+    /// over the same bastion): the channel is closed, the bastion stays up.
+    /// A direct link has no route to keep and is simply closed.
+    func closeKeepingRoute() {
+        guard !closed else { return }
+        guard let tunnel else { close(); return }
+        closed = true
+        tunnel.adapter.close()
+        try? tunnel.bastion.flush()
     }
 
     /// Best-effort goodbye: channel close/EOF already queued by the caller,
@@ -3444,6 +3777,13 @@ nonisolated final class SSHLink {
     /// Whether the socket at the bottom has bytes of ours waiting to go out.
     var socketWantsOut: Bool { tunnel.map { $0.bastion.socketWantsOut } ?? !outbound.isEmpty }
 
+    /// Bytes for a transport on this route that are already off the socket
+    /// but not fed yet — parked in a tunnel's channel, here or in a tunnel
+    /// under it. The socket will not say POLLIN for them: a far host that
+    /// sent its version line and KEXINIT in the same read as the channel's
+    /// OPEN_CONFIRMATION, and then waits for ours, sends nothing more.
+    var hasBufferedInbound: Bool { tunnel.map { $0.adapter.hasInbound || $0.bastion.hasBufferedInbound } ?? false }
+
     private func readTunnel(_ tunnel: Tunnel) throws -> Bool {
         do {
             // The bastion's own wire: its socket, or — a hop behind a hop
@@ -3479,10 +3819,12 @@ nonisolated final class SSHLink {
         try flush()
         try takeTransportEvents()
         let wantsOut = socketWantsOut
+        // Parked bytes are read now, socket or no socket (`hasBufferedInbound`).
+        let buffered = hasBufferedInbound
         var fds = [pollfd(fd: fd, events: Int16(POLLIN) | (wantsOut ? Int16(POLLOUT) : 0), revents: 0),
                    pollfd(fd: wake, events: Int16(POLLIN), revents: 0)]
         fds += extra.map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
-        let ready = poll(&fds, nfds_t(fds.count), timeoutMS)
+        let ready = poll(&fds, nfds_t(fds.count), buffered ? 0 : timeoutMS)
         if ready < 0 {
             if errno == EINTR { return false }
             throw Failure.socket("poll failed: \(String(cString: strerror(errno)))")
@@ -3499,7 +3841,7 @@ nonisolated final class SSHLink {
         // buffers per pass, so a flood cannot keep the caller from typing,
         // resizing, probing or stopping — and its output reaches the
         // terminal as it comes.
-        if revents & Int32(POLLIN | POLLHUP | POLLERR) != 0 {
+        if buffered || revents & Int32(POLLIN | POLLHUP | POLLERR) != 0 {
             gotBytes = try readWire()
         }
         if revents & Int32(POLLNVAL) != 0 { throw Failure.socket("socket closed") }

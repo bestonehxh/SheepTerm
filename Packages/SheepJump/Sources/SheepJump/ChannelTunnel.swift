@@ -100,6 +100,12 @@ public final class ChannelTunnel {
 
     public var hasInbound: Bool { !inbound.isEmpty }
 
+    /// Bytes waiting for `takeInbound`. The channel's window is automatic
+    /// (the inner transport parses everything at once), so an owner that
+    /// keeps reading the bastion without taking them — SSHWorker while a
+    /// question to the user is up — bounds this itself.
+    public var inboundCount: Int { inbound.count }
+
     // MARK: - outbound
 
     /// Whether the channel can still carry bytes.

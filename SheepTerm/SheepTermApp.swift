@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import SheepVTRender
 
 /// Handles opened .sheepterm files at the APPLICATION level.
 ///
@@ -66,9 +67,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let marketing = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-        if !scripted, WhatsNewPlan.shouldShow(seen: UserDefaults.standard.string(forKey: WhatsNewPlan.seenKey),
-                                              running: WhatsNewPlan.running(marketing: marketing, build: build)) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.showWhatsNew = true }
+        // 6.1 (64): only what this upgrade brought — read the record this
+        // Mac's last launch left, then write this release over it (never lower).
+        let defaults = UserDefaults.standard
+        let running = WhatsNewPlan.running(marketing: marketing, build: build)
+        let news = WhatsNewPlan.selection(lastRun: defaults.string(forKey: WhatsNewPlan.lastRunKey),
+                                          seen: defaults.string(forKey: WhatsNewPlan.seenKey),
+                                          running: running, usedBefore: AppModel.shared.usedBeforeAtLaunch)
+        if !scripted {
+            defaults.set(WhatsNewPlan.lastRunAfterLaunch(defaults.string(forKey: WhatsNewPlan.lastRunKey), running: running),
+                         forKey: WhatsNewPlan.lastRunKey)
+        }
+        if !scripted, !news.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { AppModel.shared.openWhatsNew(news) }
         } else if !scripted, OptimizationPlan.needsHomeFirstAsk(.standard) {
             // An updater without What's New this time: the Home question now
             // (with What's New it comes as that closes).
@@ -390,7 +401,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 var floor = HostGroup(name: "Floor 2", hosts: (1...3).map { ssh("F2-AP\($0)", "10.0.4.\($0)") }, parentID: bldg.id)
                 core.icon = .rack; fw.icon = .shield; access.icon = .building; bldg.icon = .building; floor.icon = .wifi
                 store.groups = [core, fw, access, bldg, floor]
-                store.recents = Array((core.hosts + fw.hosts + access.hosts.prefix(6)).shuffled().prefix(12))
+                // A fixed order (6.2 (2)): two renders of the same board compare pixel for pixel.
+                store.recents = Array((fw.hosts + access.hosts.prefix(2) + core.hosts + access.hosts.dropFirst(2)).prefix(12))
                 let board: [HomePlan.Widget] = [
                     .init(source: .recent, size: .large), .init(source: .group(core.id), size: .medium),
                     .init(source: .group(fw.id), size: .small), .init(source: .types([HostType.ssh.rawValue]), size: .small),
@@ -412,6 +424,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     volatile[HomePlan.newerKey] = HomePlan.saveNewer(sample)
                     volatile[WorkspacePlan.storageKey] = WorkspacePlan.save(WorkspacePlan())
                     volatile[WorkspacePlan.selectionKey] = WorkspacePlan.allValue
+                } else if env["SHEEPTERM_DEBUG_HOME_WIDGETS"] == "1" {
+                    // SHEEPTERM_DEBUG_HOME_WIDGETS=1: every widget that is not a host list, each in a small and a larger tile (6.2 (2)).
+                    let kinds = HomePlan.extraSources
+                    let sample = kinds.map { HomePlan.Widget(source: $0, size: .small) }
+                        + kinds.map { HomePlan.Widget(source: $0, size: HomePlan.defaultSize($0) == .small ? .medium : HomePlan.defaultSize($0)) }
+                    volatile[HomePlan.storageKey] = HomePlan.save(sample)
                 } else if env["SHEEPTERM_DEBUG_HOME_DEFAULT"] == "1" {
                     volatile[HomePlan.storageKey] = HomePlan.save(HomePlan.defaultWidgets(groups: store.groups))
                 } else {
@@ -441,12 +459,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
                 let width = CGFloat(Double(env["SHEEPTERM_DEBUG_HOME_WIDTH"] ?? "") ?? 900)
-                let view = HomeView().environmentObject(AppModel.shared).frame(width: width, height: 980)
+                let height = CGFloat(Double(env["SHEEPTERM_DEBUG_HOME_HEIGHT"] ?? "") ?? 980)
+                // SHEEPTERM_DEBUG_HOME_EDIT=1: Edit Home on (6.2 (2)).
+                let view = HomeView(editing: env["SHEEPTERM_DEBUG_HOME_EDIT"] == "1").environmentObject(AppModel.shared).frame(width: width, height: height)
                     .background(Theme.tabActive).environment(\.colorScheme, .dark)
                 let host = NSHostingView(rootView: view)
                 host.appearance = NSAppearance(named: .darkAqua)
-                host.frame = NSRect(x: 0, y: 0, width: width, height: 980)
-                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: width, height: 980),
+                host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: width, height: height),
                                       styleMask: .borderless, backing: .buffered, defer: false)
                 window.appearance = NSAppearance(named: .darkAqua)
                 window.contentView = host
@@ -1099,7 +1119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         if env["SHEEPTERM_DEBUG_SHEET"] == "whatsnew" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.showWhatsNew = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.openWhatsNew() }
         }
         if env["SHEEPTERM_DEBUG_SHEET"] == "passwords" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppModel.shared.showCredentials = true }
@@ -1336,6 +1356,10 @@ final class MainWindowKeyMonitor: NSObject, ObservableObject {
     /// window — a clock the user can still see must keep the right time;
     /// one nobody can see must not wake the app once a second.
     @Published private(set) var isVisible = true
+    /// A sheet is up on the main window (`SheetGate`): the menu commands that
+    /// present a sheet are disabled. Not `!isKey` — Logs or the Guide in
+    /// front must still be able to open Add Host on the window behind.
+    @Published private(set) var sheetUp = false
 
     private override init() {
         super.init()
@@ -1354,6 +1378,21 @@ final class MainWindowKeyMonitor: NSObject, ObservableObject {
                 object: nil
             )
         }
+        for name in [NSWindow.willBeginSheetNotification, NSWindow.didEndSheetNotification] {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowSheetDidChange(_:)),
+                name: name,
+                object: nil
+            )
+        }
+    }
+
+    @objc private func windowSheetDidChange(_ note: Notification) {
+        let onMain = (note.object as? NSWindow).map(isMainTerminalWindow) ?? false
+        let next = SheetGate.sheetUp(after: note.name == NSWindow.willBeginSheetNotification ? .willBegin : .didEnd,
+                                     onMainWindow: onMain, was: sheetUp)
+        if next != sheetUp { sheetUp = next }
     }
 
     /// AppKit posts application/window lifecycle notifications on the main
@@ -1416,6 +1455,11 @@ struct SheepTermCommands: Commands {
         return false
     }
 
+    /// A sheet is up on the main window: every command that presents one is
+    /// off (`SheetGate`), so ⌘N can neither replace a half-typed form nor
+    /// queue a second sheet that pops up once the first closes.
+    private var sheetUp: Bool { mainWindowKey.sheetUp }
+
     /// View → Terminal Font: one checkable item per family.
     private func fontToggles(_ families: [String]) -> some View {
         ForEach(families, id: \.self) { family in
@@ -1446,21 +1490,24 @@ struct SheepTermCommands: Commands {
             Button("SheepTerm Guide") { openWindow(id: ManualView.windowID) }
                 .keyboardShortcut("?", modifiers: .command)
             // Adding Hosts… left Help (the user, 6.1 (2)): the Guide covers it.
-            Button("What's New…") { model.showWhatsNew = true }
+            Button("What's New…") { model.openWhatsNew() }
+                .disabled(sheetUp)
         }
 
         CommandGroup(after: .newItem) {
             Button("Quick Connect…") { model.showQuickSearch = true }
                 .keyboardShortcut("k", modifiers: .command)
+                .disabled(sheetUp)
             Button("New Terminal Tab") { model.newLocalTab() }
                 .keyboardShortcut("t", modifiers: .command)
             // One wording for every kind (6.1): "New … Tab".
             Button("New SSH Tab…") { model.openQuickConnect(.ssh) }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(sheetUp)
             // The ＋ menu's order (`NewItemMenu.entries`): one list, read the same everywhere.
-            if serialOn { Button("New Serial Tab…") { model.openQuickConnect(.serial) } }
-            if jumpOn { Button("New Jump Server…") { model.openAddHost(jumpServer: true) } }
-            if telnetOn { Button("New Telnet Tab…") { model.openQuickConnect(.telnet) } }
+            if serialOn { Button("New Serial Tab…") { model.openQuickConnect(.serial) }.disabled(sheetUp) }
+            if jumpOn { Button("New Jump Server…") { model.openAddHost(jumpServer: true) }.disabled(sheetUp) }
+            if telnetOn { Button("New Telnet Tab…") { model.openQuickConnect(.telnet) }.disabled(sheetUp) }
             Divider()
             // No shortcut: ⌘T is New Terminal Tab, ⌘N is Hosts ▸ Add Host….
             Button("New Web Tab") { model.newWebTab() }
@@ -1477,12 +1524,14 @@ struct SheepTermCommands: Commands {
             Button("Logs…") { openWindow(id: LogsView.windowID) }
             Button("Search Logs…") { model.showLogSearch = true }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(sheetUp)
             Divider()
             // Two items, short names (the owner, 5.0 (60)): files ON a device
             // (Open File… — starts on the focused SSH tab's device and rides
             // its connection), files FOR devices (Serve File… → the popover,
             // which also holds the Transfer Log).
             Button("Transfer Client…") { model.showFileTransfer = true }
+                .disabled(sheetUp)
             Button("Transfer Server…") { FileServerModel.shared.popoverShown = true }
             Divider()
             Button("Back Up Configuration…") { BackupManager.backUp() }
@@ -1493,24 +1542,35 @@ struct SheepTermCommands: Commands {
         // adding, groups, import/share, credentials and known hosts (they
         // used to be spread over File and the sidebar's ≡).
         CommandMenu("Hosts") {
+            // Every item that presents a sheet is off while one is up
+            // (`SheetGate`); the panels (Import Group, Export) are app-modal.
             Button("Add Host…") { model.openAddHost() }
                 .keyboardShortcut("n", modifiers: .command)
+                .disabled(sheetUp)
             Button("Add Hosts…") { model.showAddHosts() }
+                .disabled(sheetUp)
             Button("New Group") { model.requestNewGroup() }
+                .disabled(sheetUp)
             Divider()
             Menu("Import") {
                 Button("Import Group…") { model.importGroupViaPanel() }
                 Button("Import from Link…") { model.showImportLink() }
+                    .disabled(sheetUp)
                 // CSV, JSON or an OpenSSH config, looked over in Add Hosts first (6.0 (57)).
                 Button("Import Hosts File…") { model.showAddHosts(importFile: true) }
+                    .disabled(sheetUp)
             }
             Button("Export Hosts…") { model.exportHostsViaPanel() }
             Button("Shared Links…") { model.showSharedLinks = true }
+                .disabled(sheetUp)
             Divider()
             Button("Credentials…") { model.showCredentials = true }
+                .disabled(sheetUp)
             Button("Known Hosts…") { model.openKnownHosts() }
+                .disabled(sheetUp)
             Divider()
             Button("Reorder Groups…") { model.showReorderGroups = true }
+                .disabled(sheetUp)
         }
 
         CommandGroup(after: .pasteboard) {
@@ -1537,16 +1597,16 @@ struct SheepTermCommands: Commands {
             // AppModel.sendFinderAction).
             Button("Find…") { model.showFind() }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+                .disabled(!ViewMenuLayout.findEnabled(model.searchTarget) || !mainWindowKey.isKey)
             Button("Find Next") { model.findNextMatch() }
                 .keyboardShortcut("g", modifiers: .command)
-                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+                .disabled(!ViewMenuLayout.findEnabled(model.searchTarget) || !mainWindowKey.isKey)
             Button("Find Previous") { model.findPreviousMatch() }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+                .disabled(!ViewMenuLayout.findEnabled(model.searchTarget) || !mainWindowKey.isKey)
             Button("Use Selection for Find") { model.useSelectionForFind() }
                 .keyboardShortcut("e", modifiers: .command)
-                .disabled(model.selectedTab == nil || !mainWindowKey.isKey)
+                .disabled(!ViewMenuLayout.findEnabled(model.searchTarget) || !mainWindowKey.isKey)
         }
 
         // View (6.0 (12)): grouped into submenus — the order and every
@@ -1560,6 +1620,9 @@ struct SheepTermCommands: Commands {
                 Label("Toggle Sidebar", systemImage: "sidebar.leading")
             }
             .viewShortcut(.toggleSidebar, webSelected: isWebSelected)
+            // Off only when it would HIDE the sidebar with one of its own
+            // sheets up (`SheetGate.sidebarMayHide`); other sheets leave it on.
+            .disabled(!model.sidebarMayHide && model.sidebarShown)
             Button {
                 model.showHome()
             } label: {
@@ -1584,11 +1647,13 @@ struct SheepTermCommands: Commands {
                 } label: {
                     Label("Reorder Groups…", systemImage: "arrow.up.arrow.down")
                 }
+                .disabled(sheetUp)
                 Button {
                     model.showAddHosts()
                 } label: {
                     Label("Add Hosts…", systemImage: "tablecells")
                 }
+                .disabled(sheetUp)
             }
 
             Menu("Terminal", systemImage: "terminal") {
@@ -1628,7 +1693,7 @@ struct SheepTermCommands: Commands {
                     Label("Clear Scrollback", systemImage: "eraser")
                 }
                 .viewShortcut(.clearScrollback, webSelected: isWebSelected)
-                .disabled(model.selectedTab == nil || isWebSelected)
+                .disabled(!ViewMenuLayout.clearScrollbackEnabled(model.searchTarget))
                 Divider()
                 Menu("Theme", systemImage: "paintpalette") {
                     ForEach(Theme.terminalThemes) { theme in
@@ -1767,6 +1832,7 @@ struct SheepTermCommands: Commands {
                 Label("Network Info…", systemImage: "network")
             }
             .viewShortcut(.networkInfo, webSelected: isWebSelected)
+            .disabled(sheetUp)
         }
 
         // Saved commands (4.2 (4)). The list is the store's, in its order;
@@ -1776,16 +1842,19 @@ struct SheepTermCommands: Commands {
                 Text("No snippets yet")
             } else {
                 ForEach(model.snippetStore.snippets) { snippet in
+                    // A snippet with {{variables}} asks in a sheet first.
                     Button(snippet.name) { model.sendSnippet(snippet) }
-                        .disabled(model.selectedTab == nil || isWebSelected)
+                        .disabled(model.selectedTab == nil || isWebSelected || sheetUp)
                 }
             }
             Divider()
             Button("Edit Snippets…") { model.showSnippets = true }
+                .disabled(sheetUp)
             Divider()
             if broadcastOn {
                 Button("Broadcast to Tabs…") { model.showBroadcast = true }
                     .keyboardShortcut("b", modifiers: [.command, .shift])
+                    .disabled(sheetUp)
             }
         }
 
@@ -1795,7 +1864,7 @@ struct SheepTermCommands: Commands {
         CommandMenu("History") {
             Button("Command History…") { model.openCommandHistory() }
                 .keyboardShortcut("y", modifiers: .command)
-                .disabled(!model.canUseCommandHistory)
+                .disabled(!model.canUseCommandHistory || sheetUp)
             Button("Clear History for This Host…") { model.clearCommandHistoryForCurrentHost() }
                 .disabled(!model.canUseCommandHistory)
         }
@@ -1985,11 +2054,52 @@ private struct MenuShot: View {
     }
 }
 
+/// A menu drawn the way macOS draws one, beside the real view it belongs to
+/// (What's New 6.1 (60)): `lit` is the item under the pointer, `checked` the
+/// ticked one, a title ending in "▸" has a submenu.
+private struct DrawnMenu: View {
+    let items: [String?]
+    var lit: String? = nil
+    var checked: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                if let item {
+                    let submenu = item.hasSuffix(" ▸")
+                    let title = submenu ? String(item.dropLast(2)) : item
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                            .opacity(item == checked ? 1 : 0)
+                        Text(title).font(.system(size: 13))
+                        Spacer()
+                        if submenu { Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)) }
+                    }
+                    .padding(.horizontal, 8).frame(height: 24)
+                    .foregroundStyle(item == lit ? Color.white : Color.primary)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(item == lit ? Theme.accent : Color.clear))
+                } else {
+                    Divider().padding(.vertical, 5).padding(.horizontal, 10)
+                }
+            }
+        }
+        .padding(5)
+        .frame(width: 210)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.22)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.5), radius: 18, y: 8)
+    }
+}
+
 /// `SHEEPTERM_DEBUG_SHOTS`: real views, sample data, drawn into borderless
 /// windows far off screen and written as PNGs (2× for crisp pictures).
 @MainActor enum DebugShots {
     static func render(to dir: String) {
         let model = AppModel.shared
+        // 6.1 (60): SHEEPTERM_SHOTS_SEED=1 fills an EMPTY scratch store with
+        // the sample hosts the What's New pictures show.
+        if ProcessInfo.processInfo.environment["SHEEPTERM_SHOTS_SEED"] == "1" { seedSamples(model.store) }
+        sampleWorkspaces(model.store.groups)
         let credentials = model.credentialStore.credentials
         // A sample saved preset for the Optimization shot (the shots build's
         // own defaults domain — never the user's).
@@ -2023,9 +2133,21 @@ private struct MenuShot: View {
         for topic in ["connect", "jump", "keys"] {
             shots.append(("guide-\(topic)", AnyView(ManualView(topic: topic)), CGSize(width: 920, height: 680)))
         }
-        for page in 0...WhatsNewView.featureCount {
-            shots.append(("whatsnew-\(page)", AnyView(WhatsNewView(page: page)), CGSize(width: 600, height: 600)))
+        for page in 0..<WhatsNewPlan.everything.pageCount {
+            // Two digits: the files sort in page order (Help's whole set).
+            shots.append((String(format: "whatsnew-%02d", page + 1), AnyView(WhatsNewView(page: page)), CGSize(width: 600, height: 600)))
         }
+        // 6.1 (64): the window as an upgrade sees it — SHEEPTERM_SHOTS_WHATSNEW_FROM
+        // is the release the Mac last ran (default the last public one) —
+        // and a one-page window.
+        let from = ProcessInfo.processInfo.environment["SHEEPTERM_SHOTS_WHATSNEW_FROM"] ?? WhatsNewPlan.lastShipped
+        let upgrade = WhatsNewPlan.selection(lastRun: from, seen: nil, running: WhatsNewPlan.release, usedBefore: true)
+        for page in 0..<upgrade.pageCount {
+            shots.append((String(format: "whatsnew-from-%@-%02d", from, page + 1), AnyView(WhatsNewView(selection: upgrade, page: page)),
+                          CGSize(width: 600, height: 600)))
+        }
+        shots.append(("whatsnew-one-page", AnyView(WhatsNewView(selection: WhatsNewPlan.Selection(pages: ["banner"], tips: []))),
+                      CGSize(width: 600, height: 600)))
         if let bastion = model.store.groups.flatMap(\.hosts).first(where: { $0.isJumpServer == true }) {
             shots.append(("jumphost", AnyView(HostEditSheet(host: bastion)), CGSize(width: 460, height: 640)))
         }
@@ -2036,12 +2158,62 @@ private struct MenuShot: View {
             shots.append(("credential-edit", AnyView(CredentialEditSheet(edit: CredentialEdit(credential: keyed)) {}),
                           CGSize(width: 420, height: 420)))
         }
+        // What's New 6.1 (60): Workspaces, Recently Deleted, Save Split, Import.
+        let plan = WorkspacePlan.load(UserDefaults.standard.data(forKey: WorkspacePlan.storageKey))
+        let workspaceMenu = DrawnMenu(items: plan.workspaces.map(\.name) + [String(localized: "All Workspaces"), nil,
+                                                                          String(localized: "Manage Workspaces…")],
+                                      lit: plan.workspaces.dropFirst().first?.name, checked: plan.workspaces.first?.name)
+        shots.append(("workspaces", AnyView(ZStack(alignment: .topLeading) {
+            SidebarView(store: model.store).frame(width: 250, height: 420)
+            workspaceMenu.offset(x: 14, y: 84)
+        }.frame(width: 300, height: 420, alignment: .topLeading)), CGSize(width: 300, height: 420)))
+        if !model.store.trash.isEmpty {
+            shots.append(("recently-deleted", AnyView(RecentlyDeletedSheet(store: model.store)), CGSize(width: 460, height: 400)))
+        }
+        // A tab of several panes, right-clicked (TabStripView's order for an
+        // SSH tab), beside the sidebar that holds its saved row.
+        let tabMenu = DrawnMenu(items: [String(localized: "Split with") + " ▸", String(localized: "Save Split…"), nil,
+                                        String(localized: "Reconnect"), String(localized: "Duplicate"), String(localized: "Open File"),
+                                        String(localized: "Ping"), nil, String(localized: "Copy All Output"), nil,
+                                        String(localized: "Stopwatch"), nil, String(localized: "New Tab") + " ▸", nil,
+                                        String(localized: "Close Tab")],
+                                lit: String(localized: "Save Split…"))
+        shots.append(("save-split", AnyView(HStack(alignment: .top, spacing: 36) {
+            SidebarView(store: model.store).frame(width: 250, height: 420)
+            tabMenu.padding(.top, 24)
+        }.frame(width: 540, height: 420, alignment: .topLeading)), CGSize(width: 540, height: 420)))
+        // Add Hosts ▸ Import… of a PuTTY export, through the real import path.
+        let sessions = URL(fileURLWithPath: dir).appendingPathComponent("Sessions.reg")
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        var windows: [NSWindow] = []
+        try? Self.samplePuTTY.write(to: sessions, atomically: true, encoding: .utf8)
+        shots.append(("import", AnyView(AddHostsSheet(request: AddHostsRequest(groupID: nil, debugImport: sessions))),
+                      CGSize(width: 760, height: 520)))
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        // What's New 6.1 (64), Login banners: a real terminal fed a sample
+        // banner the way SSHTerminalController.printBanner prints one
+        // (LoginBanner.lines), then the device's own first lines. A Metal
+        // layer is not in cacheDisplay's picture: the view's own snapshot.
+        let banner = SessionTerminalHost(safePaste: false)
+        let bannerWindow = NSWindow(contentRect: NSRect(x: -6000, y: -6000, width: 524, height: 220),
+                                    styleMask: [.titled], backing: .buffered, defer: false)
+        bannerWindow.appearance = NSAppearance(named: .darkAqua)
+        bannerWindow.contentView = banner.terminalView
+        bannerWindow.orderFront(nil)
+        let sampleBanner = """
+        **************************************************************
+        *  Authorized access only.                                   *
+        *  Activity on this device is monitored and logged.          *
+        *  Disconnect now if you are not an authorized user.         *
+        **************************************************************
+        """
+        banner.terminalView.feed("\r\n\u{1b}[0m" + LoginBanner.lines(sampleBanner).joined(separator: "\r\n") + "\r\n")
+        banner.terminalView.feed("\r\nLast login: Tue Nov 17 09:41:02 2026 from 10.20.0.50\r\n\r\nCX-Core-01# ")
+        var windows: [NSWindow] = [bannerWindow]
         var hosts: [(String, NSView)] = []
         // A sheet is shot at its own height (no blank band above and below);
         // a page (Home, Settings) at the size given.
-        let fitted: Set<String> = ["addhost", "credential-edit", "credentials", "groupicon", "jumphost", "newmenu", "addhosts"]
+        let fitted: Set<String> = ["addhost", "credential-edit", "credentials", "groupicon", "jumphost", "newmenu", "addhosts",
+                                   "recently-deleted", "import"]
         for (name, view, given) in shots {
             let content = view.environmentObject(model).environment(\.colorScheme, .dark)
             let host: NSView
@@ -2072,9 +2244,120 @@ private struct MenuShot: View {
                 try? rep.representation(using: .png, properties: [:])?
                     .write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
             }
+            // The terminal's own picture on a margin of its background, the
+            // way a tab shows it (the view draws edge to edge).
+            if let data = banner.terminalView.snapshotPNG(), let image = NSBitmapImageRep(data: data)?.cgImage,
+               let space = CGColorSpace(name: CGColorSpace.sRGB),
+               let ctx = CGContext(data: nil, width: image.width + 56, height: image.height + 40, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                // The margin = one of the view's own background pixels, through
+                // the same drawing path (a colour read back drifts a shade).
+                if let pixel = image.cropping(to: CGRect(x: image.width - 4, y: image.height - 4, width: 1, height: 1)) {
+                    ctx.interpolationQuality = .none
+                    ctx.draw(pixel, in: CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
+                }
+                ctx.draw(image, in: CGRect(x: 28, y: 20, width: image.width, height: image.height))
+                if let framed = ctx.makeImage() {
+                    try? NSBitmapImageRep(cgImage: framed).representation(using: .png, properties: [:])?
+                        .write(to: URL(fileURLWithPath: dir).appendingPathComponent("login-banner.png"))
+                }
+            }
             windows.forEach { $0.orderOut(nil) }
             FileManager.default.createFile(atPath: dir + "/done", contents: nil)
         }
     }
+
+    /// Sample hosts only (192.0.2.x / 10.x, made-up names), and only into an
+    /// empty store of a memory-keychain run — never a real hosts.json. Two
+    /// real deletions fill Recently Deleted; Core pair is a saved split.
+    private static func seedSamples(_ store: HostStore) {
+        guard PasswordVault.usesMemoryKeychain, store.groups.isEmpty else { return }
+        func ssh(_ name: String, _ address: String, _ user: String = "admin", badge: SSHBadge? = nil) -> Host {
+            var host = Host(name: name, kind: .ssh, address: address, port: 22)
+            host.username = user
+            host.sshBadge = badge
+            return host
+        }
+        func pane(_ host: Host) -> SavedSplit.Node {
+            .pane(SavedSplit.Pane(hostID: host.id, kind: "ssh", name: host.name, address: host.address, port: 22, username: host.username))
+        }
+        var bastion = ssh("Bastion-01", "192.0.2.10", "jump")
+        bastion.isJumpServer = true
+        let core = ssh("CX-Core-01", "10.20.0.1"), edge = ssh("FG-Edge-01", "10.20.0.254"), retired = ssh("FG-Edge-old", "10.20.0.253")
+        var pair = Host(name: "Core pair", kind: .split, address: "", port: 0)
+        pair.split = SavedSplit(root: .split(vertical: false, children: [pane(core), pane(edge)], fractions: [0.5, 0.5]))
+        let head = HostGroup(name: "Head Office", hosts: [core, edge, bastion, ssh("web-01", "10.30.5.21", "deploy", badge: .server), retired, pair])
+        let floor = HostGroup(name: "Floor 2", hosts: [ssh("AS-F2-01", "10.20.2.11"), ssh("AS-F2-02", "10.20.2.12")], parentID: head.id)
+        let dc = HostGroup(name: "Data Center", hosts: [ssh("NX-Spine-01", "10.40.0.1"), ssh("NX-Leaf-01", "10.40.0.11"), ssh("NX-Leaf-02", "10.40.0.12")])
+        let lab = HostGroup(name: "Lab", hosts: [ssh("lab-sw-01", "10.99.0.1"), ssh("lab-fw-01", "10.99.0.254")])
+        let branches = HostGroup(name: "Branch Sites", hosts: [ssh("BR-North-01", "10.51.0.1"), ssh("BR-South-01", "10.52.0.1")])
+        let old = HostGroup(name: "Old Lab", hosts: [ssh("old-sw-01", "10.98.0.1"), ssh("old-sw-02", "10.98.0.2"), ssh("old-fw-01", "10.98.0.254")])
+        store.noteExplicitUserMutation()
+        store.groups = [head, floor, dc, lab, branches, old]
+        store.setIcon(.building, color: .blue, forGroup: head.id)
+        store.setIcon(.rack, color: .orange, forGroup: dc.id)
+        store.setIcon(.lab, color: .violet, forGroup: lab.id)
+        store.setIcon(.flag, color: .teal, forGroup: branches.id)
+        store.setReaches([dc.id], for: bastion.id)
+        store.save()
+        store.removeHost(retired)
+        if let group = store.groups.first(where: { $0.id == old.id }) { store.deleteGroup(group) }
+    }
+
+    /// General (Head Office, Data Center), Lab, Branches — in the argument
+    /// domain only, so nothing is written to any defaults file.
+    private static func sampleWorkspaces(_ groups: [HostGroup]) {
+        let lab = HostWorkspace(id: UUID(uuidString: "00000000-0000-4000-8000-00000000AB01")!, name: "Lab")
+        let branches = HostWorkspace(id: UUID(uuidString: "00000000-0000-4000-8000-00000000AB02")!, name: "Branches")
+        var membership: [String: String] = [:]
+        for group in groups where group.parentID == nil {
+            if group.name == "Lab" { membership[group.id.uuidString] = lab.id.uuidString }
+            if group.name == "Branch Sites" { membership[group.id.uuidString] = branches.id.uuidString }
+        }
+        let plan = WorkspacePlan(workspaces: [HostWorkspace(id: WorkspacePlan.defaultID, name: WorkspacePlan.defaultName), lab, branches],
+                                 rootMembership: membership)
+        var volatile = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        volatile[WorkspacePlan.storageKey] = WorkspacePlan.save(plan)
+        volatile[WorkspacePlan.selectionKey] = WorkspacePlan.defaultID.uuidString
+        UserDefaults.standard.setVolatileDomain(volatile, forName: UserDefaults.argumentDomain)
+    }
+
+    /// A PuTTY .reg export (HKCU\\Software\\SimonTatham\\PuTTY\\Sessions), sample hosts.
+    static let samplePuTTY = """
+    Windows Registry Editor Version 5.00
+
+    [HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\Default%20Settings]
+    "Protocol"="ssh"
+
+    [HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\Core%20Switch]
+    "HostName"="10.60.0.1"
+    "PortNumber"=dword:00000016
+    "UserName"="admin"
+    "Protocol"="ssh"
+
+    [HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\Edge%20Firewall]
+    "HostName"="10.60.0.254"
+    "PortNumber"=dword:00000016
+    "UserName"="admin"
+    "Protocol"="ssh"
+
+    [HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\Build%20Server]
+    "HostName"="192.0.2.40"
+    "PortNumber"=dword:00000016
+    "UserName"="deploy"
+    "Protocol"="ssh"
+
+    [HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\Console%20Server]
+    "HostName"="10.60.0.50"
+    "PortNumber"=dword:00000017
+    "Protocol"="telnet"
+
+    [HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\Access%20Floor%203]
+    "HostName"="10.60.3.11"
+    "PortNumber"=dword:00000016
+    "UserName"="admin"
+    "Protocol"="ssh"
+
+    """
 }
 #endif

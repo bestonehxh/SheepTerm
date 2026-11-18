@@ -214,6 +214,10 @@ final class SSHTerminalController: NSObject {
         Theme.apply(to: terminalView)
         terminalView.delegate = self
         terminalHost.guardVendor = { [weak self] in self?.host.highlightVendor ?? .auto }
+        // A ZMODEM question or transfer owns the line: a paste, a snippet, a
+        // Broadcast run or the AI's paste is refused up front (`inputBlocked`)
+        // — `send` would drop every line of it, and Broadcast counted the tab.
+        terminalHost.lineBusy = { [weak self] in self?.zmodem.isBusy ?? false }
         // Safe Paste asks after every paced line whether the worker took it.
         terminalHost.takeLastSendAccepted = { [weak self] in
             guard let self else { return false }
@@ -276,6 +280,14 @@ final class SSHTerminalController: NSObject {
         worker.onNotice = { [weak self] message in
             DispatchQueue.main.async {
                 self?.printNotice(message)
+            }
+        }
+        // The device's login texts: the same hop as the notices, so they land
+        // before the shell's first output (and before the card's next
+        // question, which hops the same way). Already sanitised (`LoginBanner`).
+        worker.onBanner = { [weak self] lines in
+            DispatchQueue.main.async {
+                self?.printBanner(lines)
             }
         }
         worker.onForwards = { [weak self] status in
@@ -949,6 +961,18 @@ final class SSHTerminalController: NSObject {
         terminalView.feed("\r\n\(color)\(message)\u{1b}[0m\r\n")
     }
 
+    /// The device's login banner (or a keyboard-interactive instruction, a
+    /// password-change text — `LoginBanner`), printed like `printNotice` but
+    /// in the terminal's default colour — it is the device's text, not ours — as one
+    /// block, its lines one under the other. Terminal only: not logged, like
+    /// the notices. `lines` came through `LoginBanner`, so none holds a
+    /// control character.
+    private func printBanner(_ lines: [String]) {
+        guard !stopped, !lines.isEmpty else { return }
+        drainPendingFeed()
+        terminalView.feed("\r\n\u{1b}[0m" + lines.joined(separator: "\r\n") + "\r\n")
+    }
+
 }
 
 extension SSHTerminalController: TerminalViewDelegate {
@@ -968,8 +992,14 @@ extension SSHTerminalController: TerminalViewDelegate {
         // Every early return below = not taken; a stale true from an earlier
         // keystroke must not answer `takeLastSendAccepted` for these bytes.
         lastWriteAccepted = false
-        // The line is the file's while a ZMODEM transfer runs (or asks).
-        if zmodem.isBusy { NSSound.beep(); return }
+        // The line is the file's while a ZMODEM transfer runs (or asks). A
+        // refused key must not leave `userTyped`'s flag behind for the next
+        // send (the serial tab's rule).
+        if zmodem.isBusy {
+            terminalHost.discardPendingKeystroke()
+            NSSound.beep()
+            return
+        }
         // A typed Return on a dangerous command is held for the user's
         // answer (Danger Command Guard) — and the keys behind it.
         guard terminalHost.admitOutgoing(bytes) else { return }

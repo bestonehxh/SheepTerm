@@ -35,6 +35,14 @@ import Foundation
         /// returns THERE, not wherever the user happens to be looking.
         /// nil = not recorded (the workspace shown is used).
         var workspace: UUID?
+        /// Keys a NEWER build wrote on the deleted host, groups and their
+        /// hosts that this build does not know (`UnknownFields`), by their
+        /// OLD ids, put back on the new ids when restored — the record came
+        /// back without them and synced the loss. nil = none (and every
+        /// entry written before 6.1 (61), and by one: optional keys only,
+        /// so an older build still reads the file).
+        var unknownGroups: [String: Data]?
+        var unknownHosts: [String: Data]?
 
         var name: String { host?.name ?? groups.first?.name ?? "" }
         var isGroup: Bool { host == nil }
@@ -69,6 +77,17 @@ import Foundation
         return out
     }
 
+    /// `entry` with what `extras` keeps for its host, groups and their hosts.
+    static func keepingUnknown(_ entry: Entry, _ extras: UnknownFields.Extras) -> Entry {
+        var copy = entry
+        let hostIDs = (entry.host.map { [$0] } ?? entry.groups.flatMap(\.hosts)).map(\.id.uuidString)
+        let groups = extras.groups.filter { id, _ in entry.groups.contains { $0.id.uuidString == id } }
+        let hosts = extras.hosts.filter { id, _ in hostIDs.contains(id) }
+        copy.unknownGroups = groups.isEmpty ? nil : groups
+        copy.unknownHosts = hosts.isEmpty ? nil : hosts
+        return copy
+    }
+
     // MARK: Thirty days
 
     /// The entries still inside their 30 days (an entry dated in the future —
@@ -94,8 +113,21 @@ import Foundation
     /// otherwise to the top level. A name taken among its new siblings gets
     /// " 2", " 3" … — two groups of one name in one place cannot be told apart.
     static func restored(_ entry: Entry, into groups: [HostGroup]) -> [HostGroup] {
+        restoring(entry, into: groups).groups
+    }
+
+    /// `restored`, plus the entry's kept unknown keys (`Entry.unknownGroups`
+    /// / `unknownHosts`) under the NEW ids, for the store to write back.
+    static func restoring(_ entry: Entry, into groups: [HostGroup]) -> (groups: [HostGroup], unknown: UnknownFields.Extras) {
         var out = groups
+        func unknown(groups groupIDs: [UUID: UUID], hosts hostIDs: [UUID: UUID]) -> UnknownFields.Extras {
+            var extras = UnknownFields.Extras()
+            for (old, new) in groupIDs { if let keep = entry.unknownGroups?[old.uuidString] { extras.groups[new.uuidString] = keep } }
+            for (old, new) in hostIDs { if let keep = entry.unknownHosts?[old.uuidString] { extras.hosts[new.uuidString] = keep } }
+            return extras
+        }
         if var host = entry.host {
+            let old = host.id
             host.id = UUID()
             if let jump = host.jumpHostID, !holdsHost(jump, in: out) { host.jumpHostID = nil }
             // Its group by id; or — the group was deleted and put back, so
@@ -109,9 +141,9 @@ import Foundation
                 let name = freeName(wanted.isEmpty ? host.name : wanted, under: nil, in: out)
                 out.append(HostGroup(name: name, hosts: [host]))
             }
-            return out
+            return (out, unknown(groups: [:], hosts: [old: host.id]))
         }
-        guard let root = entry.groups.first else { return out }
+        guard let root = entry.groups.first else { return (out, UnknownFields.Extras()) }
         // `uniquingKeysWith`, not `uniqueKeysWithValues`: a damaged file with one id twice must not trap.
         let groupIDs = Dictionary(entry.groups.map { ($0.id, UUID()) }, uniquingKeysWith: { first, _ in first })
         let hostIDs = Dictionary(entry.groups.flatMap(\.hosts).map { ($0.id, UUID()) }, uniquingKeysWith: { first, _ in first })
@@ -141,7 +173,7 @@ import Foundation
             }
             out.append(group)
         }
-        return out
+        return (out, unknown(groups: groupIDs, hosts: hostIDs))
     }
 
     private static func holdsHost(_ id: UUID, in groups: [HostGroup]) -> Bool {

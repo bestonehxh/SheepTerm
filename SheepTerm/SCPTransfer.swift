@@ -131,6 +131,26 @@ nonisolated final class SCPTransfer {
         }
     }
 
+    /// Push: most bytes one `feed([])` reads from the file.
+    private static let chunkSize = 96 * 1024
+    /// Push: the file ended before `fileSize` — the reason, reported once
+    /// the padding and the error status went out.
+    private var shortRead: String?
+
+    /// Push: all `fileSize` bytes are out — the end marker (0), or, after a
+    /// short read, an error status in its place (as OpenSSH's scp source
+    /// does: `\1scp: <message>\n`).
+    private func finishData() {
+        try? source?.close()
+        if let shortRead {
+            outgoingBuffer.append(1)
+            outgoingBuffer.append(contentsOf: Array("scp: \(shortRead)\n".utf8))
+        } else {
+            outgoingBuffer.append(0)        // end of file marker
+        }
+        step = .awaitingFinalByte
+    }
+
     private var pushCLine: String {
         "C0644 \(fileSize) \(fileName)\n"
     }
@@ -172,6 +192,26 @@ nonisolated final class SCPTransfer {
                     throw SCPError("scp protocol error (confirm byte \(byte))")
                 }
             case .sendingData:
+                // The C line announced `fileSize`: exactly that many bytes
+                // go out, whatever the file holds now (what
+                // `SCPServerHandler.send` does). A file that grew (a live
+                // session log) sent its extra bytes, which the remote read as
+                // protocol; one that shrank ended early and both sides waited
+                // for bytes that never came (6.1 (62) review).
+                if shortRead != nil {
+                    // Zeros in place of what the file no longer holds, so the
+                    // remote stays in step, then the error in the status.
+                    let pad = Int(min(Int64(Self.chunkSize), fileSize - done))
+                    outgoingBuffer.append(contentsOf: [UInt8](repeating: 0, count: pad))
+                    done += Int64(pad)
+                    if done >= fileSize { finishData() }
+                    return
+                }
+                let want = Int(min(Int64(Self.chunkSize), fileSize - done))
+                guard want > 0 else {
+                    finishData()
+                    return
+                }
                 guard let source else {
                     throw SCPError("scp source file closed")
                 }
@@ -179,27 +219,29 @@ nonisolated final class SCPTransfer {
                 // Return after one chunk so the owner can flush and read.
                 let chunk: Data?
                 do {
-                    chunk = try source.read(upToCount: 96 * 1024)
+                    chunk = try source.read(upToCount: want)
                 } catch {
                     throw SCPError("cannot read the local file: \(error)")
                 }
                 if let chunk, !chunk.isEmpty {
                     outgoingBuffer.append(contentsOf: chunk)
                     done += Int64(chunk.count)
-                    if done >= fileSize {
-                        try? source.close()
-                        outgoingBuffer.append(0)    // end of file marker
-                        step = .awaitingFinalByte
-                    }
+                    if done >= fileSize { finishData() }
                 } else {
+                    // Early EOF: the file shrank after the C line went out.
                     try? source.close()
-                    outgoingBuffer.append(0)
-                    step = .awaitingFinalByte
+                    shortRead = "\(fileName) shrank while it was being sent (\(done) of \(fileSize) bytes)"
                 }
                 return
             case .awaitingFinalByte:
                 guard !rest.isEmpty else { return }
                 let byte = rest.removeFirst()
+                if let shortRead {
+                    // Padded, so the remote answered in step; the file it holds
+                    // is not ours whatever it says.
+                    step = .failed(shortRead)
+                    return
+                }
                 if byte == 0 {
                     step = .done
                 } else if byte == 1 || byte == 2 {

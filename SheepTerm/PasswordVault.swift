@@ -96,6 +96,20 @@ nonisolated final class PasswordVault: @unchecked Sendable {
         return legacy
     }
 
+    /// Whether a secret is stored under `key`, never with a prompt and never
+    /// writing (`value` moves an old item in as it reads): true / false, or
+    /// nil when that cannot be known without asking — the vault is not open
+    /// yet. For counts shown in a view body (Share Link's logins).
+    func contains(_ key: String) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        if let all = load(interactive: false), all[key] != nil { return true }
+        switch backend.read(key, interactive: false) {
+        case .found: return true
+        case .missing: return cache == nil ? nil : false
+        case .unavailable: return nil
+        }
+    }
+
     @discardableResult
     func set(_ value: Data, for key: String, interactive: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }

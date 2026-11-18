@@ -294,8 +294,11 @@ struct TabStripView: View {
         withTransaction(transaction) {
             if let id = dragID, let merge {
                 model.mergeWorkspace(id, beside: merge.pane, merge.direction)
-            } else if let id = dragID, let source = dragSourceIndex, let target = dragTargetIndex {
-                model.moveTab(id: id, toGap: TabOrder.gap(forFinalIndex: target, from: source))
+            } else if let id = dragID, let target = dragTargetIndex,
+                      let gap = TabOrder.gap(dropping: id, atFinalIndex: target, startOrder: dragStartOrder,
+                                             current: model.workspaces.map(\.id)) {
+                // Against the order NOW: the list may have changed since the drag began.
+                model.moveTab(id: id, toGap: gap)
             }
             resetDrag()
         }

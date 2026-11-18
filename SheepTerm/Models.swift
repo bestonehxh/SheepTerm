@@ -719,6 +719,105 @@ enum GroupTree {
         return out
     }
 
+    /// The tree read ONCE (6.1 (62)): every reader below re-read the whole
+    /// list per call, so anything that asked per group — Home's workspace
+    /// filter, a sidebar search, the sidebar's width — was groups² (300
+    /// groups: 22 ms for `rootsByHost`). Build one per pass over a list and
+    /// hand it to the overloads; it answers exactly what the list-taking
+    /// readers answer, cycles and dangling parents included (they forward
+    /// here). A value of ONE list: build a new one after any change.
+    struct Index {
+        let groups: [HostGroup]
+        /// Each id's FIRST position, as `positions`.
+        let positions: [UUID: Int]
+        let childIDs: [UUID: [UUID]]
+        /// The parent's position by position; nil = top level (none, itself,
+        /// or not in the list).
+        private let parentAt: [Int?]
+        /// The depth by position (1 = top level) of a group whose chain ends
+        /// at the top; 0 = its chain runs into a cycle (a list not repaired
+        /// yet), which is walked per call as before — each member of a cycle
+        /// sees a different chain.
+        private let depthAt: [Int]
+        private let rootAt: [Int]
+
+        init(_ groups: [HostGroup]) {
+            self.groups = groups
+            let at = GroupTree.positions(groups)
+            positions = at
+            childIDs = GroupTree.childIDs(groups)
+            let parents: [Int?] = groups.map { group in
+                group.parentID.flatMap { $0 == group.id ? nil : at[$0] }
+            }
+            parentAt = parents
+            // 0 unread, 1 on the walk, 2 reaches the top, 3 runs into a cycle.
+            var state = [UInt8](repeating: 0, count: groups.count)
+            var depths = [Int](repeating: 0, count: groups.count)
+            var roots = Array(groups.indices)
+            var walk: [Int] = []
+            for start in groups.indices where state[start] == 0 && at[groups[start].id] == start {
+                walk.removeAll(keepingCapacity: true)
+                var current = start
+                var top: Bool
+                while true {
+                    if state[current] == 2 { top = true; break }
+                    if state[current] != 0 { top = false; break }
+                    state[current] = 1
+                    walk.append(current)
+                    guard let parent = parents[current] else { top = true; break }
+                    current = parent
+                }
+                for index in walk.reversed() {
+                    guard top else { state[index] = 3; continue }
+                    state[index] = 2
+                    if let parent = parents[index] {
+                        depths[index] = depths[parent] + 1
+                        roots[index] = roots[parent]
+                    } else {
+                        depths[index] = 1
+                    }
+                }
+            }
+            depthAt = depths
+            rootAt = roots
+        }
+
+        /// The chain above `id`, top level first, `id` itself not included.
+        func ancestors(of id: UUID) -> [HostGroup] {
+            guard let at = positions[id] else { return [] }
+            guard depthAt[at] > 0 else { return GroupTree.ancestors(of: id, in: groups, positions: positions) }
+            var chain: [HostGroup] = []
+            chain.reserveCapacity(depthAt[at] - 1)
+            var next = parentAt[at]
+            while let parent = next {
+                chain.append(groups[parent])
+                next = parentAt[parent]
+            }
+            return chain.reversed()
+        }
+
+        /// 1 = top level.
+        func depth(of id: UUID) -> Int {
+            guard let at = positions[id] else { return 1 }
+            return depthAt[at] > 0 ? depthAt[at] : ancestors(of: id).count + 1
+        }
+
+        /// The top-level group `id` is under (itself when top level).
+        func root(of id: UUID) -> UUID {
+            guard let at = positions[id] else { return id }
+            guard depthAt[at] > 0 else { return ancestors(of: id).first?.id ?? id }
+            return rootAt[at] == at ? id : groups[rootAt[at]].id
+        }
+
+        /// The children of `parent` in list order; nil = the top level.
+        func children(of parent: UUID?) -> [HostGroup] {
+            guard let parent else {
+                return groups.filter { group in group.parentID.map { positions[$0] == nil || $0 == group.id } ?? true }
+            }
+            return groups.filter { $0.parentID == parent && $0.id != parent }
+        }
+    }
+
     /// The children of `parent` in list order; nil = the top level, which
     /// also takes every group whose parent is not in the list.
     static func children(of parent: UUID?, in groups: [HostGroup]) -> [HostGroup] {
@@ -729,10 +828,14 @@ enum GroupTree {
         return groups.filter { $0.parentID == parent && $0.id != parent }
     }
 
+    static func children(of parent: UUID?, in index: Index) -> [HostGroup] { index.children(of: parent) }
+
     /// The chain above `id`, top level first, `id` itself not included.
     static func ancestors(of id: UUID, in groups: [HostGroup]) -> [HostGroup] {
         ancestors(of: id, in: groups, positions: positions(groups))
     }
+
+    static func ancestors(of id: UUID, in index: Index) -> [HostGroup] { index.ancestors(of: id) }
 
     private static func ancestors(of id: UUID, in groups: [HostGroup], positions: [UUID: Int]) -> [HostGroup] {
         var chain: [HostGroup] = []
@@ -749,6 +852,8 @@ enum GroupTree {
     static func depth(of id: UUID, in groups: [HostGroup]) -> Int {
         ancestors(of: id, in: groups).count + 1
     }
+
+    static func depth(of id: UUID, in index: Index) -> Int { index.depth(of: id) }
 
     /// `id` and everything below it, in tree order (each group before its
     /// children, siblings in list order).
@@ -768,7 +873,12 @@ enum GroupTree {
     /// The levels from `id` down to its deepest descendant, itself included
     /// (a group with no subgroup is 1) — what a move must fit under the cap.
     static func height(of id: UUID, in groups: [HostGroup]) -> Int {
-        let kids = childIDs(groups)
+        height(of: id, kids: childIDs(groups))
+    }
+
+    static func height(of id: UUID, in index: Index) -> Int { height(of: id, kids: index.childIDs) }
+
+    private static func height(of id: UUID, kids: [UUID: [UUID]]) -> Int {
         var seen = Set<UUID>()
         func levels(_ group: UUID) -> Int {
             guard seen.insert(group).inserted else { return 0 }
@@ -779,8 +889,15 @@ enum GroupTree {
 
     /// The whole tree in sidebar order, each group with its depth.
     static func preorder(_ groups: [HostGroup]) -> [(group: HostGroup, depth: Int)] {
-        let kids = childIDs(groups)
-        let at = positions(groups)
+        preorder(groups, kids: childIDs(groups), at: positions(groups), tops: children(of: nil, in: groups))
+    }
+
+    static func preorder(_ index: Index) -> [(group: HostGroup, depth: Int)] {
+        preorder(index.groups, kids: index.childIDs, at: index.positions, tops: index.children(of: nil))
+    }
+
+    private static func preorder(_ groups: [HostGroup], kids: [UUID: [UUID]], at: [UUID: Int],
+                                 tops: [HostGroup]) -> [(group: HostGroup, depth: Int)] {
         var out: [(group: HostGroup, depth: Int)] = []
         var seen = Set<UUID>()
         func walk(_ id: UUID, _ depth: Int) {
@@ -788,7 +905,7 @@ enum GroupTree {
             out.append((groups[index], depth))
             for child in kids[id] ?? [] { walk(child, depth + 1) }
         }
-        for root in children(of: nil, in: groups) { walk(root.id, 1) }
+        for root in tops { walk(root.id, 1) }
         return out
     }
 
@@ -801,6 +918,15 @@ enum GroupTree {
     /// "Site A › Bldg 1 › Floor 2".
     static func shownPath(of id: UUID, in groups: [HostGroup]) -> String {
         path(of: id, in: groups).joined(separator: shownSeparator)
+    }
+
+    static func path(of id: UUID, in index: Index) -> [String] {
+        guard let at = index.positions[id] else { return [] }
+        return index.ancestors(of: id).map(\.name) + [index.groups[at].name]
+    }
+
+    static func shownPath(of id: UUID, in index: Index) -> String {
+        path(of: id, in: index).joined(separator: shownSeparator)
     }
 
     /// The path of `id` below `root` as typed ("Bldg 1/Floor 2"): "" for
@@ -976,6 +1102,21 @@ enum GroupTree {
     /// Linear: lookups go through maps kept up to date as groups are made. A
     /// hostile file with 20,000 declared sections runs this at LOAD, and a
     /// scan per label was quadratic in it.
+    /// Each group's subgroups by the name they READ as (`HostStore.headingKey`):
+    /// of two siblings that read the same ("Floor 2" / "floor 2") the FIRST in
+    /// list order is the one a label step takes. `fileLabels` and the Add Hosts
+    /// preview (`AddHostsPreview.tree`) both look steps up here, so the preview
+    /// files a row where Add does (review 6.1 (61): the preview took the last).
+    static func childrenByKey(_ groups: [HostGroup]) -> [UUID: [String: UUID]] {
+        var out: [UUID: [String: UUID]] = [:]
+        for group in groups {
+            guard let parent = group.parentID, parent != group.id, let key = HostStore.headingKey(group.name),
+                  out[parent]?[key] == nil else { continue }
+            out[parent, default: [:]][key] = group.id
+        }
+        return out
+    }
+
     @discardableResult
     static func fileLabels(_ groups: inout [HostGroup], splitPaths: Bool, makeUpTo limit: Int) -> Bool {
         let owners = groups.filter { group in
@@ -983,12 +1124,7 @@ enum GroupTree {
         }.map(\.id)
         guard !owners.isEmpty else { return false }
         var at = positions(groups)
-        var childByKey: [UUID: [String: UUID]] = [:]
-        for group in groups {
-            guard let parent = group.parentID, parent != group.id, let key = HostStore.headingKey(group.name),
-                  childByKey[parent]?[key] == nil else { continue }
-            childByKey[parent, default: [:]][key] = group.id
-        }
+        var childByKey = childrenByKey(groups)
         var depthOf: [UUID: Int] = [:]
         func depth(_ id: UUID) -> Int {
             if let known = depthOf[id] { return known }
@@ -1958,9 +2094,9 @@ enum JumpTarget: Equatable {
     /// The red line under the "Via jump host" row, or nil. A saved
     /// reference is checked against the store — `candidates` are the hosts
     /// the form offers, `saved` every saved host; typed text (used only when
-    /// no id is set) against `parse`. The form refuses to save only for typed
-    /// text (`blocksSave`): a stale reference was always saveable, and the
-    /// tab names it at connect time.
+    /// no id is set) against `parse`. Every error here greys Save out
+    /// (`HostFormPlan.jumpBlocksSave`, 6.1 (62)): a stale or looping
+    /// reference used to stay saveable under its own red line.
     static func fieldError(text: String, jumpHostID: UUID?, candidates: [Host], saved: [Host]) -> String? {
         if let jumpHostID {
             if candidates.contains(where: { $0.id == jumpHostID }) { return nil }
@@ -3468,6 +3604,19 @@ final class HostStore: ObservableObject {
     /// AppModel publish, including each frame of a divider drag.
     private(set) var revision = 0
 
+    /// `groups` read once as a tree (`GroupTree.Index`), rebuilt on the
+    /// first read after `revision` moves. It cannot go stale: every change
+    /// to `groups` — an edit, a Sync apply, a reload, a restore, an undo, an
+    /// in-place `groups[i]` change — goes through its `didSet`, which bumps
+    /// `revision`; only `init` assigns without it, before anything can read.
+    var groupIndex: GroupTree.Index {
+        if let cached = groupIndexCache, cached.revision == revision { return cached.index }
+        let index = GroupTree.Index(groups)
+        groupIndexCache = (revision, index)
+        return index
+    }
+    private var groupIndexCache: (revision: Int, index: GroupTree.Index)?
+
     /// Non-nil when a data file existed at launch but failed to decode.
     /// The original is preserved next to it as "<name>.corrupt-<timestamp>";
     /// AppModel can surface this message to the user.
@@ -3616,7 +3765,8 @@ final class HostStore: ObservableObject {
         // Where each was filed, read now: its group is about to go.
         let plan = WorkspaceDefaults.plan()
         let entries = entries.map { entry -> HostTrash.Entry in
-            var copy = entry
+            // A newer build's fields on what is binned go with it (`Entry.unknownHosts`).
+            var copy = HostTrash.keepingUnknown(entry, unknownFields)
             if let anchor = entry.host == nil ? entry.groups.first?.id : entry.origin, groups.contains(where: { $0.id == anchor }) {
                 copy.workspace = plan.workspace(for: WorkspacePlan.root(of: anchor, in: groups))
             }
@@ -3632,7 +3782,10 @@ final class HostStore: ObservableObject {
         noteUserMutation()
         let before = groups
         let tops = Set(GroupTree.children(of: nil, in: before).map(\.id))
-        groups = HostTrash.restored(entry, into: before)
+        let restoring = HostTrash.restoring(entry, into: before)
+        groups = restoring.groups
+        // …and come back on the new ids, so the next write (and Sync) keeps them.
+        unknownFields = unknownFields.merging(restoring.unknown)
         let newRoots = GroupTree.children(of: nil, in: groups).map(\.id).filter { !tops.contains($0) }
         save()
         // In exactly one place: when the list could not be written, the

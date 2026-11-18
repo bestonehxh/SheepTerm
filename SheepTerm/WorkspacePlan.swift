@@ -22,7 +22,15 @@ nonisolated struct HostWorkspace: Codable, Equatable, Identifiable, Sendable {
     /// the owner: "ตัวย่อเดี๋ยวลูกค้าใส่เอง"), at most `WorkspacePlan.shortLength`
     /// characters; nil = made from the name (`WorkspacePlan.short`).
     var code: String?
+    /// Keys a NEWER build wrote on this workspace that this one does not
+    /// know, as JSON object bytes: put back by `WorkspacePlan.save`, so an
+    /// edit here does not drop them and sync the loss (`UnknownFields` does
+    /// the same for hosts). Never encoded as a key of its own.
+    var unknown: Data?
     init(id: UUID = UUID(), name: String, code: String? = nil) { self.id = id; self.name = name; self.code = code }
+
+    /// CaseIterable: `WorkspacePlan.load` keeps every key NOT on this list.
+    enum CodingKeys: String, CodingKey, CaseIterable { case id, name, code }
 }
 
 nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
@@ -41,6 +49,12 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
     /// bytes each launch, a sync upload each time. A group that is not in
     /// here, or names a workspace that is gone, is in the default one.
     var rootMembership: [String: String]
+    /// The plan's own keys a newer build wrote and this one does not know
+    /// (JSON object bytes), put back by `save` — see `HostWorkspace.unknown`.
+    var unknown: Data?
+
+    /// CaseIterable: `load` keeps every key NOT on this list.
+    enum CodingKeys: String, CodingKey, CaseIterable { case workspaces, rootMembership }
 
     init(workspaces: [HostWorkspace] = [HostWorkspace(id: WorkspacePlan.defaultID, name: WorkspacePlan.defaultName)],
          rootMembership: [String: String] = [:]) {
@@ -114,6 +128,16 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
 
     static func load(_ data: Data?) -> WorkspacePlan {
         guard let data, var plan = try? JSONDecoder().decode(WorkspacePlan.self, from: data) else { return WorkspacePlan() }
+        // What a newer build wrote that this one does not know, kept to be
+        // written back (`save`): the plan's own keys, and each workspace's —
+        // by position, which is the decoded list's order.
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            plan.unknown = unknownKeys(object, known: Set(CodingKeys.allCases.map(\.stringValue)))
+            if let list = object[CodingKeys.workspaces.stringValue] as? [[String: Any]], list.count == plan.workspaces.count {
+                let known = Set(HostWorkspace.CodingKeys.allCases.map(\.stringValue))
+                for index in list.indices { plan.workspaces[index].unknown = unknownKeys(list[index], known: known) }
+            }
+        }
         if !plan.workspaces.contains(where: { $0.id == defaultID }) {
             plan.workspaces.insert(HostWorkspace(id: defaultID, name: defaultName), at: 0)
         }
@@ -125,7 +149,29 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
     static func save(_ plan: WorkspacePlan) -> Data? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        return try? encoder.encode(plan)
+        guard let encoded = try? encoder.encode(plan) else { return nil }
+        // Nothing kept from a newer build: the encoder's bytes as they are.
+        guard plan.unknown != nil || plan.workspaces.contains(where: { $0.unknown != nil }),
+              var object = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] else { return encoded }
+        // A key this build wrote itself always wins.
+        for (key, value) in keptObject(plan.unknown) where object[key] == nil { object[key] = value }
+        if var list = object[CodingKeys.workspaces.stringValue] as? [[String: Any]], list.count == plan.workspaces.count {
+            for index in list.indices {
+                for (key, value) in keptObject(plan.workspaces[index].unknown) where list[index][key] == nil { list[index][key] = value }
+            }
+            object[CodingKeys.workspaces.stringValue] = list
+        }
+        return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? encoded
+    }
+
+    private static func unknownKeys(_ object: [String: Any], known: Set<String>) -> Data? {
+        let extra = object.filter { !known.contains($0.key) }
+        guard !extra.isEmpty else { return nil }
+        return try? JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys])
+    }
+
+    private static func keptObject(_ data: Data?) -> [String: Any] {
+        data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] } ?? [:]
     }
 }
 
@@ -198,7 +244,10 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
         for draft in drafts {
             let name = HostStore.cleanGroupName(draft.name)
             guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { return nil }
-            list.append(HostWorkspace(id: draft.id, name: name, code: WorkspacePlan.cleanCode(draft.code)))
+            var workspace = HostWorkspace(id: draft.id, name: name, code: WorkspacePlan.cleanCode(draft.code))
+            // A newer build's keys on it stay with it (`HostWorkspace.unknown`).
+            workspace.unknown = workspaces.first { $0.id == draft.id }?.unknown
+            list.append(workspace)
         }
         if let opened {
             let rows = Set(drafts.map(\.id))
@@ -206,12 +255,16 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
                 // Its name may now be a row's: it keeps a free one.
                 var name = late.name, number = 2
                 while !seen.insert(name.lowercased()).inserted { name = "\(late.name) \(number)"; number += 1 }
-                list.append(HostWorkspace(id: late.id, name: name, code: late.code))
+                var kept = HostWorkspace(id: late.id, name: name, code: late.code)
+                kept.unknown = late.unknown
+                list.append(kept)
             }
         }
         guard list.contains(where: { $0.id == Self.defaultID }) else { return nil }
         let kept = Set(list.map(\.id.uuidString))
-        return WorkspacePlan(workspaces: list, rootMembership: rootMembership.filter { kept.contains($0.value) })
+        var out = WorkspacePlan(workspaces: list, rootMembership: rootMembership.filter { kept.contains($0.value) })
+        out.unknown = unknown
+        return out
     }
 
     /// Deletes a workspace: its groups go back to General (no host or group
@@ -246,22 +299,33 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
         return Set(GroupTree.children(of: nil, in: groups).map(\.id).filter { workspace(for: $0) == selection })
     }
 
+    func visibleRoots(_ selection: UUID?, index: GroupTree.Index) -> Set<UUID>? {
+        guard let selection else { return nil }
+        return Set(index.children(of: nil).map(\.id).filter { workspace(for: $0) == selection })
+    }
+
     /// How deep the tree shown goes (nil = every workspace), the top-level
     /// group counted: 1 = no subgroup anywhere, 0 = no group. `SidebarWidth` reads it.
     func levels(shown: Set<UUID>?, groups: [HostGroup]) -> Int {
-        let roots = GroupTree.children(of: nil, in: groups).map(\.id).filter { shown?.contains($0) ?? true }
-        return roots.map { GroupTree.height(of: $0, in: groups) }.max() ?? 0
+        levels(shown: shown, index: GroupTree.Index(groups))
+    }
+
+    func levels(shown: Set<UUID>?, index: GroupTree.Index) -> Int {
+        let roots = index.children(of: nil).map(\.id).filter { shown?.contains($0) ?? true }
+        return roots.map { GroupTree.height(of: $0, in: index) }.max() ?? 0
     }
 
     /// Every saved host's top-level group, built once (Home filters each
     /// widget's hosts by it — `shows` per host scanned every group's hosts,
     /// which is hosts × hosts on every body pass).
     static func rootsByHost(_ groups: [HostGroup]) -> [UUID: UUID] {
-        var roots: [UUID: UUID] = [:]
+        rootsByHost(GroupTree.Index(groups))
+    }
+
+    static func rootsByHost(_ index: GroupTree.Index) -> [UUID: UUID] {
         var out: [UUID: UUID] = [:]
-        for group in groups {
-            let root = roots[group.id] ?? root(of: group.id, in: groups)
-            roots[group.id] = root
+        for group in index.groups {
+            let root = index.root(of: group.id)
             for host in group.hosts where out[host.id] == nil { out[host.id] = root }
         }
         return out
@@ -286,16 +350,26 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
         GroupTree.ancestors(of: id, in: groups).first?.id ?? id
     }
 
+    static func root(of id: UUID, in index: GroupTree.Index) -> UUID { index.root(of: id) }
+
     /// Whether a Recent entry shows under `visible` roots: one of a saved
     /// host (the same id, or the same connection as `RecentSave.isSaved`
     /// reads it) when any group holding it is under a visible top-level
     /// group; one saved nowhere (a typed connection) always.
     static func shows(_ host: Host, visible: Set<UUID>?, groups: [HostGroup]) -> Bool {
+        shows(host, visible: visible, groups: groups) { root(of: $0, in: groups) }
+    }
+
+    static func shows(_ host: Host, visible: Set<UUID>?, index: GroupTree.Index) -> Bool {
+        shows(host, visible: visible, groups: index.groups, root: index.root(of:))
+    }
+
+    private static func shows(_ host: Host, visible: Set<UUID>?, groups: [HostGroup], root: (UUID) -> UUID) -> Bool {
         guard let visible else { return true }
         // A SAVED host is where it is saved: two customers may both have a
         // 192.168.1.1, and the other one's must not show here.
         if let holder = groups.first(where: { $0.hosts.contains { $0.id == host.id } }) {
-            return visible.contains(root(of: holder.id, in: groups))
+            return visible.contains(root(holder.id))
         }
         func same(_ saved: Host) -> Bool {
             saved.id == host.id || (saved.kind == host.kind && saved.address == host.address && saved.port == host.port
@@ -303,7 +377,7 @@ nonisolated struct WorkspacePlan: Codable, Equatable, Sendable {
         }
         let holders = groups.filter { $0.hosts.contains(where: same) }
         guard !holders.isEmpty else { return true }
-        return holders.contains { visible.contains(root(of: $0.id, in: groups)) }
+        return holders.contains { visible.contains(root($0.id)) }
     }
 }
 

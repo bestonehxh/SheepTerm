@@ -34,25 +34,29 @@ struct RackFillView: View {
     @State private var newBest = false
     @State private var showTop = false
     @State private var playing = false
+    /// Home's scale on a tile (6.2 (2)); 1 in the floating card and the popover.
+    @Environment(\.homeScale) private var s
 
     private var top: [RackFill.Score] { RackFill.loadTop(storedTop) }
     private var best: Int { top.first?.points ?? 0 }
     private static let space = "rackfill"
-    /// The rack's top inside the tile's space: the score bar (26) and the gap (6).
-    private static let boardTop: CGFloat = 32
+    /// The rack's top inside the tile's space: the score bar (26) and the gap (6), at Home's scale.
+    private var boardTop: CGFloat { 32 * s }
 
     var body: some View {
         Group {
             if compact {
-                VStack(spacing: 6) {
-                    Text("\(best)").font(.system(size: 26, weight: .semibold).monospacedDigit())
-                    Text("best").font(.system(size: 11)).foregroundStyle(Theme.dimText)
+                VStack(spacing: 6 * s) {
+                    Text("\(best)").font(.system(size: 26 * s, weight: .semibold).monospacedDigit())
+                    Text("best").font(.system(size: 11 * s)).foregroundStyle(Theme.dimText)
                     Button("Play") { playing = true }
-                        .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                        .buttonStyle(.plain).font(.system(size: 12 * s, weight: .semibold)).foregroundStyle(Theme.accent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .popover(isPresented: $playing, arrowEdge: .bottom) {
                     RackFillView().frame(width: 300, height: 330).padding(12)
+                        // 100 %: the popover is not Home (6.2 (2)).
+                        .environment(\.homeScale, 1)
                 }
             } else {
                 GeometryReader { geo in board(in: geo.size) }
@@ -64,29 +68,29 @@ struct RackFillView: View {
 
     /// The hand's row: taller on a big board (the floating card) so the
     /// pieces read at a size near the rack's own.
-    private static func handHeight(_ size: CGSize) -> CGFloat { size.height > 340 ? 92 : 54 }
+    private func handHeight(_ size: CGSize) -> CGFloat { size.height > 340 * s ? 92 * s : 54 * s }
 
     private func cellSize(_ size: CGSize) -> CGFloat {
-        let handHeight = Self.handHeight(size), header: CGFloat = 32
-        return max(10, min(size.width / CGFloat(RackFill.size), (size.height - handHeight - header) / CGFloat(RackFill.size)).rounded(.down))
+        let handHeight = handHeight(size), header: CGFloat = 32 * s
+        return max(10 * s, min(size.width / CGFloat(RackFill.size), (size.height - handHeight - header) / CGFloat(RackFill.size)).rounded(.down))
     }
 
     @ViewBuilder private func board(in size: CGSize) -> some View {
         let cell = cellSize(size)
         let side = cell * CGFloat(RackFill.size)
         let ghost = ghostSpot(cell: cell)
-        VStack(spacing: 6) {
+        VStack(spacing: 6 * s) {
             // The score bar (the owner: "สวยๆหน่อย"): the best on the left (a click
             // lists the top five), the score big in the middle, the streak on the right.
             ZStack {
                 HStack(spacing: 0) {
                     Button { showTop = true } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "trophy.fill").font(.system(size: 10)).foregroundStyle(Theme.warn)
-                            Text("\(best)").font(.system(size: 11, weight: .medium).monospacedDigit())
+                        HStack(spacing: 4 * s) {
+                            Image(systemName: "trophy.fill").font(.system(size: 10 * s)).foregroundStyle(Theme.warn)
+                            Text("\(best)").font(.system(size: 11 * s, weight: .medium).monospacedDigit())
                         }
-                        .padding(.horizontal, 7)
-                        .frame(height: 20)
+                        .padding(.horizontal, 7 * s)
+                        .frame(height: 20 * s)
                         .background(Capsule().fill(Color.white.opacity(0.06)))
                         .contentShape(Capsule())
                     }
@@ -94,35 +98,35 @@ struct RackFillView: View {
                     .foregroundStyle(Theme.dimText)
                     .help(String(localized: "Top scores"))
                     .accessibilityLabel(String(localized: "Top scores"))
-                    .popover(isPresented: $showTop) { topList }
+                    .popover(isPresented: $showTop) { topList.environment(\.homeScale, 1) }
                     Spacer(minLength: 0)
                     if game.streak > 1 {
-                        HStack(spacing: 3) {
-                            Image(systemName: "flame.fill").font(.system(size: 10))
-                            Text("×\(game.streak)").font(.system(size: 11, weight: .bold).monospacedDigit())
+                        HStack(spacing: 3 * s) {
+                            Image(systemName: "flame.fill").font(.system(size: 10 * s))
+                            Text("×\(game.streak)").font(.system(size: 11 * s, weight: .bold).monospacedDigit())
                         }
                         .foregroundStyle(Theme.ok)
-                        .padding(.horizontal, 7)
-                        .frame(height: 20)
+                        .padding(.horizontal, 7 * s)
+                        .frame(height: 20 * s)
                         .background(Capsule().fill(Theme.ok.opacity(0.14)))
                         .transition(.scale.combined(with: .opacity))
                     }
                 }
                 Text("\(game.score)")
-                    .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
+                    .font(.system(size: 22 * s, weight: .bold, design: .rounded).monospacedDigit())
                     .contentTransition(.numericText(value: Double(game.score)))
                     .animation(.easeOut(duration: 0.3), value: game.score)
             }
-            .frame(height: 26)
+            .frame(height: 26 * s)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: game.streak > 1)
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25))
+                RoundedRectangle(cornerRadius: 6 * s).fill(Color.black.opacity(0.25))
                 ForEach(0..<(RackFill.size * RackFill.size), id: \.self) { index in
                     cellView(index: index, cell: cell, ghost: ghost)
                 }
                 if let combo {
                     Text(combo > 1 ? "Combo ×\(combo)" : "Clear!")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 15 * s, weight: .bold))
                         .foregroundStyle(Theme.ok)
                         .frame(width: side, height: side)
                         .transition(.asymmetric(insertion: .scale(scale: 0.6).combined(with: .opacity),
@@ -131,8 +135,8 @@ struct RackFillView: View {
                 if game.over { gameOver(side: side) }
             }
             .frame(width: side, height: side)
-            .offset(x: shake % 2 == 0 ? 0 : 6)
-            hand(cell: cell, side: side, slotHeight: Self.handHeight(size) - 6)
+            .offset(x: shake % 2 == 0 ? 0 : 6 * s)
+            hand(cell: cell, side: side, slotHeight: handHeight(size) - 6 * s)
         }
         .frame(width: max(side, 0))
         .coordinateSpace(name: Self.space)
@@ -153,14 +157,14 @@ struct RackFillView: View {
         let isGhost = ghost?.cells.contains(index) == true
         let willClear = ghost?.clears.contains(index) == true
         return ZStack(alignment: .topTrailing) {
-            RoundedRectangle(cornerRadius: 3)
+            RoundedRectangle(cornerRadius: 3 * s)
                 .fill(clearing[index] != nil ? Theme.ok
                       : kind.map(Self.color) ?? (isGhost ? (ghost?.fits == true ? Theme.accent.opacity(0.35) : Theme.destructive.opacity(0.35))
                                                 : Color.white.opacity(0.04)))
-                .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(willClear ? Theme.ok : Color.white.opacity(kind == nil ? 0.05 : 0.1), lineWidth: 1))
-            if kind != nil, cell >= 14 {
+                .overlay(RoundedRectangle(cornerRadius: 3 * s).strokeBorder(willClear ? Theme.ok : Color.white.opacity(kind == nil ? 0.05 : 0.1), lineWidth: 1))
+            if kind != nil, cell >= 14 * s {
                 Circle().fill(clearing[index] != nil ? Color.white : Theme.ok.opacity(0.9))
-                    .frame(width: 3, height: 3).padding(3)
+                    .frame(width: 3 * s, height: 3 * s).padding(3 * s)
             }
         }
         .frame(width: cell - 2, height: cell - 2)
@@ -170,7 +174,7 @@ struct RackFillView: View {
     }
 
     private func hand(cell: CGFloat, side: CGFloat, slotHeight: CGFloat) -> some View {
-        let mini = max(6, min(18, cell * 0.55))
+        let mini = max(6 * s, min(18 * s, cell * 0.55))
         return HStack(spacing: 0) {
             ForEach(0..<RackFill.handSize, id: \.self) { slot in
                 ZStack {
@@ -198,16 +202,16 @@ struct RackFillView: View {
     /// The hand's block size: the same for all three, the longest piece (5 blocks) fitting a slot.
     private func handCell(mini: CGFloat, side: CGFloat, slotHeight: CGFloat) -> CGFloat {
         let longest = CGFloat(RackFill.pieces.map { max($0.width, $0.height) }.max() ?? 5)
-        return min(mini, (slotHeight - 4) / longest, (side / CGFloat(RackFill.handSize) - 10) / longest).rounded(.down)
+        return min(mini, (slotHeight - 4 * s) / longest, (side / CGFloat(RackFill.handSize) - 10 * s) / longest).rounded(.down)
     }
 
     /// How far above the pointer a dragged piece is held: its centre, plus a little.
-    private func lift(_ piece: RackFill.Piece, cell: CGFloat) -> CGFloat { cell * CGFloat(piece.height) / 2 + 12 }
+    private func lift(_ piece: RackFill.Piece, cell: CGFloat) -> CGFloat { cell * CGFloat(piece.height) / 2 + 12 * s }
 
     private func pieceView(_ piece: RackFill.Piece, cell: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(piece.cells.enumerated()), id: \.offset) { _, c in
-                RoundedRectangle(cornerRadius: 2).fill(Self.color(piece.kind))
+                RoundedRectangle(cornerRadius: 2 * s).fill(Self.color(piece.kind))
                     .frame(width: max(cell - 2, 0), height: max(cell - 2, 0))
                     .offset(x: CGFloat(c.column) * cell, y: CGFloat(c.row) * cell)
             }
@@ -235,7 +239,7 @@ struct RackFillView: View {
     private func topLeft(slot: Int, at point: CGPoint, cell: CGFloat) -> (row: Int, column: Int)? {
         guard let piece = game.hand[slot] else { return nil }
         let x = point.x - cell * CGFloat(piece.width) / 2
-        let y = point.y - Self.boardTop - lift(piece, cell: cell) - cell * CGFloat(piece.height) / 2
+        let y = point.y - boardTop - lift(piece, cell: cell) - cell * CGFloat(piece.height) / 2
         let column = Int((x / cell).rounded()), row = Int((y / cell).rounded())
         guard row >= -1, column >= -1, row < RackFill.size + 1, column < RackFill.size + 1 else { return nil }
         return (row, column)
@@ -310,14 +314,14 @@ struct RackFillView: View {
     // MARK: pieces of UI
 
     private func gameOver(side: CGFloat) -> some View {
-        VStack(spacing: 6) {
-            if newBest { Text("New best").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.warn) }
-            Text("\(game.score)").font(.system(size: 26, weight: .semibold).monospacedDigit())
+        VStack(spacing: 6 * s) {
+            if newBest { Text("New best").font(.system(size: 11 * s, weight: .bold)).foregroundStyle(Theme.warn) }
+            Text("\(game.score)").font(.system(size: 26 * s, weight: .semibold).monospacedDigit())
             Button("New Game") { newGame() }
-                .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                .buttonStyle(.plain).font(.system(size: 12 * s, weight: .semibold)).foregroundStyle(Theme.accent)
         }
         .frame(width: side, height: side)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.55)))
+        .background(RoundedRectangle(cornerRadius: 6 * s).fill(Color.black.opacity(0.55)))
         .transition(.opacity)
     }
 

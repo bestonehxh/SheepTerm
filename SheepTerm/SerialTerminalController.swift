@@ -25,7 +25,13 @@ final class SerialTerminalController: NSObject {
         muteLog: { [weak self] muted in self?.transferLogMuted.withLock { $0 = muted } },
         isAvailable: { [weak self] in
             guard let self else { return false }
-            return !self.isTelnet && !self.worker.isTransferring
+            return !self.isTelnet && !self.worker.lineOwnedByTransfer
+        },
+        // XMODEM's own flag is not this one: the worker refuses a break, a
+        // speed change and an XMODEM start while either is set.
+        claim: { [weak self] owned in
+            self?.worker.claimLine(owned)
+            self?.onLineOwnerChanged?()
         }), host: terminalHost)
     var terminalView: TerminalView { terminalHost.terminalView }
     private(set) var host: Host
@@ -198,7 +204,7 @@ final class SerialTerminalController: NSObject {
         Theme.apply(to: terminalView)
         terminalView.delegate = self
         terminalHost.guardVendor = { [weak self] in self?.host.highlightVendor ?? .auto }
-        terminalHost.lineBusy = { [weak self] in self?.worker.isTransferring ?? false }
+        terminalHost.lineBusy = { [weak self] in self?.worker.lineOwnedByTransfer ?? false }
         // A Safe Paste paced run takes the top-right corner: the wrong-speed
         // hint goes and the stream is judged afresh after the run.
         terminalHost.onPacedRunStart = { [weak self] in self?.baudGuess.reset(); self?.silenceWatch.reset() }
@@ -420,7 +426,7 @@ final class SerialTerminalController: NSObject {
     /// when the driver accepted it; here only the refusal is worth a line.
     func sendBreak() {
         if !worker.sendBreak() {
-            printNotice(worker.isTransferring ? "a file transfer is running — break not sent"
+            printNotice(worker.lineOwnedByTransfer ? "a file transfer is running — break not sent"
                                               : "no session — break not sent", error: true)
         }
     }
@@ -433,7 +439,7 @@ final class SerialTerminalController: NSObject {
     func setBaud(_ baud: Int) {
         guard let serialWorker, baud != host.port, Host.serialBaudRange.contains(baud) else { return }
         if serialWorker.setBaud(baud) { return }
-        if worker.isTransferring {
+        if worker.lineOwnedByTransfer {
             printNotice("a file transfer is running — speed not changed", error: true)
         } else {
             baudGuessRestart(leaving: host.port)
@@ -474,7 +480,7 @@ final class SerialTerminalController: NSObject {
     }
 
     private var baudLineBusy: Bool {
-        ConsoleBaudGuess.lineBusy(transferring: worker.isTransferring, pacingPaste: terminalHost.isPacingPaste,
+        ConsoleBaudGuess.lineBusy(transferring: worker.lineOwnedByTransfer, pacingPaste: terminalHost.isPacingPaste,
                                   statusHUDShown: terminalHost.hasStatusHUD)
     }
 
@@ -532,7 +538,12 @@ final class SerialTerminalController: NSObject {
     /// already ~6 hours of line, and the whole file is held in memory.
     static let maxTransferBytes = 256 * 1024 * 1024
 
-    var isTransferring: Bool { worker.isTransferring }
+    /// XMODEM or ZMODEM has the line (`ConsoleWorker.lineOwnedByTransfer`):
+    /// the Edit menu's Send Break / Send File items read it.
+    var isTransferring: Bool { worker.lineOwnedByTransfer }
+    /// The answer above changed (a transfer started or ended): AppModel
+    /// redraws the menus that read it.
+    var onLineOwnerChanged: (() -> Void)?
 
     /// Sends `url` to the device, which must already be waiting for it
     /// (ROMMON `xmodem -c flash:x.bin`, a BootROM's download menu). The
@@ -569,18 +580,19 @@ final class SerialTerminalController: NSObject {
         // refused, nothing lost (it used to be stopped and its queued bytes
         // dropped without a word). The worker checks the queue again itself.
         let pasteNotice = "the paste is still being sent — wait for it, then send the file"
-        guard !worker.isTransferring, !terminalHost.isPacingPaste, !worker.hasQueuedWrites else {
-            printNotice(worker.isTransferring ? "a transfer is already running" : pasteNotice, error: true)
+        guard !worker.lineOwnedByTransfer, !terminalHost.isPacingPaste, !worker.hasQueuedWrites else {
+            printNotice(worker.lineOwnedByTransfer ? "a transfer is already running" : pasteNotice, error: true)
             return
         }
         // A dangerous-command question still up: its Send could only be
         // refused once the line is the file's.
         terminalHost.cancelCommandGuard()
         guard worker.startTransfer(job) else {
-            printNotice(worker.isTransferring ? "a transfer is already running"
+            printNotice(worker.lineOwnedByTransfer ? "a transfer is already running"
                         : worker.hasQueuedWrites ? pasteNotice : "no serial session — nothing sent", error: true)
             return
         }
+        onLineOwnerChanged?()
         // The corner is the transfer's; the stream is judged afresh after it.
         terminalHost.hideBaudHint()
         baudGuess.reset()
@@ -609,6 +621,7 @@ final class SerialTerminalController: NSObject {
 
     private func transferEnded(_ phase: XModemSender.Phase, label: String, name: String, total: Int, started: Date) {
         terminalHost.hideStatusHUD()
+        onLineOwnerChanged?()
         // The protocol's bytes are behind it: judge the text afresh.
         baudGuess.reset()
         silenceWatch.reset()
@@ -786,8 +799,8 @@ extension SerialTerminalController: TerminalViewDelegate {
         lastWriteAccepted = false
         let typed = sendIsKeystroke
         sendIsKeystroke = false
-        // The line is the file's while a transfer runs.
-        if worker.isTransferring || zmodem.isBusy {
+        // The line is the file's while a transfer runs (or ZMODEM asks).
+        if worker.lineOwnedByTransfer {
             terminalHost.discardPendingKeystroke()
             NSSound.beep()
             return

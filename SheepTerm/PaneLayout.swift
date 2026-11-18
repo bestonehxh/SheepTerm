@@ -40,6 +40,12 @@ nonisolated indirect enum PaneNode: Equatable, Sendable {
 nonisolated struct PaneLayout: Equatable, Sendable {
     /// Panes per tab, at most: a full 3 × 3 grid (`isGrid`, 6.0 (12)).
     static let maxPanes = 9
+
+    /// Opening `count` hosts at once from the sidebar — right-click ▸ Connect
+    /// / Open in Split, or Return on the selection — asks "Open N hosts?"
+    /// first when they are more than a tab holds side by side.
+    static func asksBeforeOpening(_ count: Int) -> Bool { count > maxPanes }
+
     /// Children of one split, at most: three columns, three rows, three
     /// cells in a column or row.
     static let maxPerSplit = 3
@@ -232,13 +238,14 @@ nonisolated struct PaneLayout: Equatable, Sendable {
     /// split (columns or rows) with ≤ 3 children, each a leaf or a split in
     /// the OTHER axis holding ≤ 3 leaves. Every edit keeps a tab on it; a tab
     /// that is off it (built by an older rule) is left as it is and only
-    /// refuses to grow (`insert`) until closes bring it back.
+    /// refuses to grow (`insert`) until closes bring it back. Every split
+    /// holds two at least: a split of one pane (or none) is not a layout.
     var isGrid: Bool {
         guard case .split(_, let axis, let children, _) = root else { return true }
-        guard children.count <= PaneLayout.maxPerSplit else { return false }
+        guard (2...PaneLayout.maxPerSplit).contains(children.count) else { return false }
         return children.allSatisfy { child in
             guard case .split(_, let inner, let cells, _) = child else { return true }
-            return inner != axis && cells.count <= PaneLayout.maxPerSplit
+            return inner != axis && (2...PaneLayout.maxPerSplit).contains(cells.count)
                 && cells.allSatisfy { if case .leaf = $0 { return true }; return false }
         }
     }
@@ -320,13 +327,24 @@ nonisolated struct PaneLayout: Equatable, Sendable {
     /// `pinned`: a split that directly holds one of these leaves (a Ping
     /// pane) keeps a same-axis child split as a child — splicing it in made
     /// `h[ping, B, C]`, where Ping no longer kept half (review 6.0 (2)).
+    /// A split left with no child is dropped and one left with ONE child
+    /// becomes that child, at every depth — `remove` on `h[v[A], B]` took A
+    /// and left `h[v[], B]`: B drawn in half the tab beside nothing, and no
+    /// zoom (one pane) — the survivors' shares are scaled back to one.
     private mutating func normalize(pinned: Set<UUID> = []) {
-        func walk(_ node: PaneNode) -> PaneNode {
+        func walk(_ node: PaneNode) -> PaneNode? {
             guard case .split(let id, let axis, let children, let fractions) = node else { return node }
+            var kept: [(PaneNode, CGFloat)] = []
+            for (child, share) in zip(children, fractions) {
+                if let made = walk(child) { kept.append((made, share)) }
+            }
+            guard kept.count > 1 else { return kept.first?.0 }
+            let total = kept.reduce(0) { $0 + $1.1 }
             var newChildren: [PaneNode] = []
             var newFractions: [CGFloat] = []
-            let holdsPinned = children.contains { if case .leaf(let leaf) = $0 { return pinned.contains(leaf) }; return false }
-            for (child, share) in zip(children.map(walk), fractions) {
+            let holdsPinned = kept.contains { if case .leaf(let leaf) = $0.0 { return pinned.contains(leaf) }; return false }
+            for (child, raw) in kept {
+                let share = total > 0 ? raw / total : 1 / CGFloat(kept.count)
                 if !holdsPinned, case .split(_, let childAxis, let grandchildren, let grandFractions) = child, childAxis == axis {
                     newChildren.append(contentsOf: grandchildren)
                     newFractions.append(contentsOf: grandFractions.map { $0 * share })
@@ -337,13 +355,14 @@ nonisolated struct PaneLayout: Equatable, Sendable {
             }
             return .split(id: id, axis: axis, children: newChildren, fractions: newFractions)
         }
-        root = walk(root)
+        root = walk(root) ?? root
     }
 
     /// Take `id` out; the siblings left in its split share the length evenly
     /// (the owner, 2026-10-28: every add or close re-evens), a split left
-    /// with one child collapses into it. False for an unknown id or the last
-    /// pane.
+    /// with one child collapses into it and one left with none goes
+    /// (`normalize`, anywhere in the tree). False for an unknown id or the
+    /// last pane.
     @discardableResult
     mutating func remove(_ id: UUID, keepingWhole pinned: Set<UUID> = []) -> Bool {
         guard contains(id), count > 1 else { return false }
@@ -517,5 +536,17 @@ nonisolated struct PaneLayout: Equatable, Sendable {
         fractions[index] = clamped - before
         fractions[index + 1] = pairTotal - fractions[index]
         return setFractions(ofSplit: target, fractions)
+    }
+
+    /// The layout a pane tree shows while a divider is being dragged: this
+    /// (the model's) with the drag's position put back on top. The model hears
+    /// a drag once, on release, so anything else published mid-drag re-applied
+    /// the model's layout and the divider snapped back under the pointer (UI
+    /// review, 6.1 (62)). Nil when the dragged split is gone or no longer has
+    /// `children` panes: the drag is over.
+    func withDivider(ofSplit target: UUID, index: Int, at position: CGFloat, children: Int) -> PaneLayout? {
+        guard splits.first(where: { $0.id == target })?.fractions.count == children else { return nil }
+        var layout = self
+        return layout.moveDivider(ofSplit: target, index: index, to: position) ? layout : nil
     }
 }

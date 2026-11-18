@@ -39,6 +39,37 @@ enum HomePlan {
         let even = fit - fit % 2
         return min(max(even, columnRange.lowerBound), columnRange.upperBound)
     }
+    // MARK: Scale (6.2 (2))
+
+    /// Home grows with the room it has (6.2 (2), the owner on a 4K display:
+    /// the board sat small in the middle). The WHOLE page — search, action
+    /// row, tiles, text, icons, gaps — is drawn at `scale(forWidth:)` times
+    /// its size: every literal inside Home is multiplied by it (the
+    /// `homeScale` environment value), so text is drawn at its real size and
+    /// clicks land where they show. Never `scaleEffect` (see ARCHITECTURE §34).
+    nonisolated static let scaleStep: CGFloat = 0.05
+    nonisolated static let maxScale: CGFloat = 2
+
+    /// The factor for a Home `width` wide (what the sidebar / AI panel
+    /// leave): 1 while the board and its margins fit at 1 (the room ≤
+    /// `maxBoardWidth`) — a MacBook window looks exactly as before; above,
+    /// the scaled board plus its scaled margins fill the width, stepped DOWN
+    /// to a multiple of `scaleStep` (a resize relays out only at a step),
+    /// at most `maxScale` (the board centred beyond it).
+    nonisolated static func scale(forWidth width: CGFloat) -> CGFloat {
+        let raw = width / (maxBoardWidth + 2 * sideMargin)
+        guard raw > 1 else { return 1 }
+        // Whole steps, divided back: 26 / 20 is 1.3, 26 × 0.05 is not quite.
+        let perUnit = (1 / scaleStep).rounded()
+        return min((raw * perUnit + 1e-9).rounded(.down) / perUnit, maxScale)
+    }
+
+    /// Columns for a board `width` wide drawn at `scale`: decided on the
+    /// unscaled width, so a scaled board has the columns it would at 1.
+    nonisolated static func columns(forWidth width: CGFloat, scale: CGFloat) -> Int {
+        columns(forWidth: width / max(scale, 1))
+    }
+
     /// One grid row's height and the gap between cells.
     nonisolated static let unitHeight: CGFloat = 140
     nonisolated static let gap: CGFloat = 12
@@ -74,6 +105,9 @@ enum HomePlan {
         }
         /// The tile's height on the board.
         var height: CGFloat { unitHeight * CGFloat(rows) + gap * CGFloat(rows - 1) }
+        /// …on a board drawn at `scale` (6.2 (2)). Every row inside grows by
+        /// the same factor, so `capacity` stays what it is at 1.
+        func height(scale: CGFloat) -> CGFloat { height * scale }
     }
 
     enum Source: Codable, Equatable, Hashable {
@@ -129,6 +163,22 @@ enum HomePlan {
     /// "Asia/Bangkok" → "Bangkok"; "UTC" stays.
     static func clockCity(_ id: String) -> String {
         (id.split(separator: "/").last.map(String.init) ?? id).replacingOccurrences(of: "_", with: " ")
+    }
+
+    /// Whether the board shows a widget of `source` with workspace `selection`
+    /// chosen (nil = All Workspaces, which shows everything): a group's widget
+    /// only when its top-level group is in `visibleRoots`, a Workspace tile
+    /// only on its own workspace, every other kind always. Add Widget offers
+    /// only what passes (6.1 (62), UI review: a group of another workspace
+    /// could be added, was saved, and never showed).
+    static func shows(_ source: Source, selection: UUID?, visibleRoots: Set<UUID>?, groups: [HostGroup]) -> Bool {
+        switch source {
+        case .workspace(let id): return selection.map { $0 == id } ?? true
+        case .group(let id):
+            guard let visibleRoots else { return true }
+            return visibleRoots.contains(WorkspacePlan.root(of: id, in: groups))
+        default: return true
+        }
     }
 
     /// A new widget's size: what it reads best at.

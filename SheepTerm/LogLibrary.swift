@@ -16,9 +16,30 @@ nonisolated enum LogLibrary {
         var fileName: String { url.lastPathComponent }
     }
 
+    /// Move to Trash is refused for a log a session is still writing
+    /// (`SessionLogger.livePaths`): the logger would go on appending to the
+    /// file in the Trash, and Empty Trash would lose the rest of it.
+    static func canTrash(_ entry: Entry, livePaths: Set<String>) -> Bool {
+        !livePaths.contains(entry.url.standardizedFileURL.path)
+    }
+
     /// `SessionLogger`'s name: "<session> yyyy-MM-dd HHmmss-XXXX.log".
     /// nil for a name that is not one of ours (it is still listed, by date).
     static func parse(_ fileName: String) -> (session: String, started: Date)? {
+        parse(fileName, calendar: stampCalendar())
+    }
+
+    /// The calendar a stamp is read in: Gregorian, in the zone a new
+    /// DateFormatter takes — `NSTimeZone.default` (the Mac's, unless the
+    /// process set another; `TimeZone.current` would not follow that).
+    static func stampCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = NSTimeZone.default
+        return calendar
+    }
+
+    /// `calendar` from `stampCalendar()`, made once per scan.
+    static func parse(_ fileName: String, calendar: Calendar) -> (session: String, started: Date)? {
         guard fileName.hasSuffix(".log") else { return nil }
         let base = String(fileName.dropLast(4))
         // "-XXXX" (4 hex) then " yyyy-MM-dd HHmmss" before it.
@@ -31,13 +52,60 @@ nonisolated enum LogLibrary {
         let stamp = String(head[stampStart...])
         let before = head[..<stampStart]
         guard before.last == " " else { return nil }
+        guard let date = plainStampDate(stamp, calendar: calendar) ?? formatterStampDate(stamp, timeZone: calendar.timeZone)
+        else { return nil }
+        let session = String(before.dropLast())
+        return session.isEmpty ? nil : (session, date)
+    }
+
+    /// The stamp as `DateFormatter` reads it — the rule, quirks and all:
+    /// lenient (Feb 30 = Mar 2, hour 24 = the next midnight), a repeated hour
+    /// = its later instant, a skipped one moved forward, any script's digits.
+    /// A new formatter a call (1.4 s for 5,000 logs), so only what
+    /// `plainStampDate` leaves comes here.
+    static func formatterStampDate(_ stamp: String, timeZone: TimeZone) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd HHmmss"
-        guard let date = formatter.date(from: stamp) else { return nil }
-        let session = String(before.dropLast())
-        return session.isEmpty ? nil : (session, date)
+        return formatter.date(from: stamp)
+    }
+
+    /// The stamp every log of ours has — ASCII "yyyy-MM-dd HHmmss", a real
+    /// time this century, a day away from any change of the zone's offset —
+    /// read digit by digit. nil = not that case, ask the formatter:
+    /// anything out of range or rolled over, a skipped hour (the round trip
+    /// differs) and a repeated one (Calendar takes the earlier instant, the
+    /// formatter the later) all go there. `Tests/tests/LogLibraryTests.swift`
+    /// holds the two to the same answer in 30 zones with every kind of change
+    /// (checked against all 443 the Mac knows when this was written).
+    static func plainStampDate(_ stamp: String, calendar: Calendar) -> Date? {
+        let bytes = Array(stamp.utf8)
+        guard bytes.count == 17, bytes[4] == UInt8(ascii: "-"), bytes[7] == UInt8(ascii: "-"),
+              bytes[10] == UInt8(ascii: " ") else { return nil }
+        func number(_ start: Int, _ length: Int) -> Int? {
+            var value = 0
+            for byte in bytes[start..<start + length] {
+                guard byte >= UInt8(ascii: "0"), byte <= UInt8(ascii: "9") else { return nil }
+                value = value * 10 + Int(byte - UInt8(ascii: "0"))
+            }
+            return value
+        }
+        guard let year = number(0, 4), let month = number(5, 2), let day = number(8, 2),
+              let hour = number(11, 2), let minute = number(13, 2), let second = number(15, 2),
+              (2000...2099).contains(year), (1...12).contains(month), (1...31).contains(day),
+              (0...23).contains(hour), (0...59).contains(minute), (0...59).contains(second) else { return nil }
+        let parts = DateComponents(year: year, month: month, day: day, hour: hour, minute: minute, second: second)
+        guard let date = calendar.date(from: parts) else { return nil }
+        let back = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        guard back.year == year, back.month == month, back.day == day,
+              back.hour == hour, back.minute == minute, back.second == second else { return nil }
+        let zone = calendar.timeZone
+        let offset = zone.secondsFromGMT(for: date)
+        guard zone.secondsFromGMT(for: date.addingTimeInterval(-86_400)) == offset,
+              zone.secondsFromGMT(for: date.addingTimeInterval(86_400)) == offset else { return nil }
+        return date
     }
 
     /// Every `.log` in `directory`, newest first.
@@ -45,11 +113,12 @@ nonisolated enum LogLibrary {
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
         let urls = (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys,
                                                          options: [.skipsHiddenFiles])) ?? []
+        let calendar = stampCalendar()
         return urls.compactMap { url -> Entry? in
             guard url.pathExtension == "log",
                   let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { return nil }
             let modified = values.contentModificationDate ?? .distantPast
-            let parsed = parse(url.lastPathComponent)
+            let parsed = parse(url.lastPathComponent, calendar: calendar)
             return Entry(url: url, session: parsed?.session ?? url.deletingPathExtension().lastPathComponent,
                          started: parsed?.started ?? modified, modified: modified, size: Int64(values.fileSize ?? 0))
         }
@@ -109,5 +178,44 @@ nonisolated enum LogLibrary {
             previous = byte
         }
         return (out, cut)
+    }
+}
+
+/// The Logs window's reads of the folder (6.1 (62)): off the main thread
+/// (5,000 logs took 1.4 s on it before), applied on main. A request while a
+/// read runs is served by ONE more read after it, so the last answer applied
+/// always comes from a read begun after the last request — never a list from
+/// before a delete or rename — and a burst of folder events costs two reads.
+@MainActor
+final class LogFolderReader {
+    private var reading = false
+    private var again = false
+    private var latest: (directory: URL, apply: ([LogLibrary.Entry]) -> Void)?
+    private let read: @Sendable (URL) -> [LogLibrary.Entry]
+    /// Reads finished (the harness counts them).
+    private(set) var reads = 0
+
+    init(read: @escaping @Sendable (URL) -> [LogLibrary.Entry] = { LogLibrary.scan($0) }) {
+        self.read = read
+    }
+
+    /// `apply` runs on main with the newest answer.
+    func request(_ directory: URL, apply: @escaping ([LogLibrary.Entry]) -> Void) {
+        latest = (directory, apply)
+        guard !reading else { again = true; return }
+        reading = true
+        Task { await run() }
+    }
+
+    private func run() async {
+        repeat {
+            again = false
+            guard let job = latest else { break }
+            let (read, directory) = (read, job.directory)
+            let found = await Task.detached(priority: .userInitiated) { read(directory) }.value
+            reads += 1
+            (latest?.apply ?? job.apply)(found)
+        } while again
+        reading = false
     }
 }

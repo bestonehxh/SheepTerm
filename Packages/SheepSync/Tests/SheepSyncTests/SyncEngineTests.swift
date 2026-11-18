@@ -22,9 +22,21 @@ final class SyncEngineTests: XCTestCase {
         var refuse: Set<String> = []
         var applied: [[String: Data?]] = []
         var joins: [Bool] = []
+        /// Ids this app does not know: a change to one is dropped, not
+        /// failed (an OLD build and a setting it does not list).
+        var unknownIDs: Set<String> = []
+        /// SheepTerm's settings since 6.1 (14): unavailable when missing, a
+        /// deletion from the cloud never carried out, and (the fix) kept in
+        /// step with that deletion.
+        var settingsPrefix: String?
+        var keepsOnRemoteDelete = true
 
         func syncSnapshot() -> SyncSnapshot {
-            SyncSnapshot(records: records, unavailable: unavailable, wantCloudCopy: wantCloud)
+            guard let prefix = settingsPrefix else {
+                return SyncSnapshot(records: records, unavailable: unavailable, wantCloudCopy: wantCloud)
+            }
+            return SyncSnapshot(records: records, unavailable: unavailable, unavailablePrefixes: [prefix],
+                                wantCloudCopy: wantCloud, keepOnRemoteDeletePrefixes: keepsOnRemoteDelete ? [prefix] : [])
         }
 
         /// Refuse a join outright (the app could not set its data aside).
@@ -37,6 +49,8 @@ final class SyncEngineTests: XCTestCase {
             var failed: Set<String> = []
             for (id, value) in changes {
                 if refuse.contains(id) { failed.insert(id); continue }
+                if unknownIDs.contains(id) { continue }
+                if value == nil, let prefix = settingsPrefix, id.hasPrefix(prefix) { continue }
                 records[id] = value
             }
             return SyncApplyResult(failed: failed)
@@ -758,5 +772,200 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertNil(SyncEngine.refreshToken(in: a.secrets))
         XCTAssertNil(SyncEngine.vaultKey(in: a.secrets))
         XCTAssertNotNil(a.engine.lastError)
+    }
+
+    // MARK: A setting an older build deletes
+
+    private func settingsMac(_ name: String) -> Mac {
+        let mac = makeMac(name)
+        mac.app.settingsPrefix = "setting:"
+        return mac
+    }
+
+    /// The B / C / old-Mac replay through whole engines. An old build that
+    /// does not list `setting:plan` joins and uploads its deletion; C syncs
+    /// it — its follow-up pass, the one that used to send the untouched P1
+    /// back up as a new edit, never reaches the cloud (C went offline); B
+    /// edits to P2; C syncs again. C used to upload stale P1 stamped then,
+    /// over B's P2, on every Mac.
+    func testAnOldBuildsSettingDeletionDoesNotPutAStaleValueOverANewerEdit() async throws {
+        let id = "setting:plan"
+        let a = settingsMac("A")
+        a.app[id] = "P1"
+        try await vault(a, create: "p")
+        let b = settingsMac("B")
+        try await join(b, "p")
+        let c = settingsMac("C")
+        try await join(c, "p")
+        XCTAssertEqual(b.app[id], "P1")
+        XCTAssertEqual(c.app[id], "P1")
+
+        let old = makeMac("Old")
+        old.app.unknownIDs = [id]
+        try await join(old, "p")
+        await old.engine.syncNow()
+        XCTAssertNil(old.app[id], "the old build never holds it")
+
+        try await Task.sleep(for: .milliseconds(5))
+        await drive.setFailNextWrite()
+        await c.engine.syncNow()
+        await drive.setFailNextWrite(false)
+        XCTAssertEqual(c.app[id], "P1", "an old build never deletes a setting here")
+        XCTAssertNil(c.engine.lastError, "a kept deletion is no failure to warn about")
+
+        try await Task.sleep(for: .milliseconds(5))
+        b.app[id] = "P2"
+        await b.engine.syncNow()
+        try await Task.sleep(for: .milliseconds(5))
+        await c.engine.syncNow()
+        XCTAssertEqual(c.app[id], "P2", "B's newer edit reaches C")
+        await b.engine.syncNow()
+        XCTAssertEqual(b.app[id], "P2", "and is not overwritten by C's stale copy")
+
+        // A real edit on C after all this still goes everywhere.
+        try await Task.sleep(for: .milliseconds(5))
+        c.app[id] = "P3"
+        await c.engine.syncNow()
+        await b.engine.syncNow()
+        XCTAssertEqual(b.app[id], "P3")
+    }
+
+    /// Quiet twins. With the old build's deletion in the cloud, new Macs
+    /// keep their value and sync round after round without uploading (each
+    /// used to send it back every round). With no old build, idle rounds
+    /// upload nothing and one edit is one upload.
+    func testSettingsStayIdleWithAndWithoutAnOldBuildsDeletion() async throws {
+        let id = "setting:plan"
+        let a = settingsMac("A")
+        a.app[id] = "P1"
+        try await vault(a, create: "p")
+        let b = settingsMac("B")
+        try await join(b, "p")
+        let c = settingsMac("C")
+        try await join(c, "p")
+
+        var before = await drive.writes
+        for mac in [a, b, c, a, b, c] { await mac.engine.syncNow() }
+        var after = await drive.writes
+        XCTAssertEqual(after, before, "two idle rounds, no old build: zero uploads")
+
+        try await Task.sleep(for: .milliseconds(5))
+        b.app[id] = "P2"
+        before = await drive.writes
+        for mac in [b, a, c] { await mac.engine.syncNow() }
+        after = await drive.writes
+        XCTAssertEqual(after - before, 1, "one edit, one upload")
+        XCTAssertEqual(a.app[id], "P2")
+        XCTAssertEqual(c.app[id], "P2")
+
+        let old = makeMac("Old")
+        old.app.unknownIDs = [id]
+        try await join(old, "p")
+        await old.engine.syncNow()
+        before = await drive.writes
+        for mac in [a, b, c, a, b, c] { await mac.engine.syncNow() }
+        after = await drive.writes
+        XCTAssertEqual(after, before, "the old build's deletion makes no Mac upload")
+        for mac in [a, b, c] {
+            XCTAssertEqual(mac.app[id], "P2", "\(mac.config.deviceName) keeps its value")
+            XCTAssertNil(mac.engine.lastError)
+        }
+    }
+
+    // MARK: The unchanged round (6.1 (62))
+
+    private func stateStamp(_ mac: Mac) -> SyncEngine.FileStamp? {
+        SyncEngine.fileStamp(mac.config.stateDirectory.appendingPathComponent("sync-state.json"))
+    }
+    private func note(_ mac: Mac) -> SyncEngine.LastSyncNote? {
+        (try? Data(contentsOf: mac.config.stateDirectory.appendingPathComponent("sync-last.json")))
+            .flatMap { try? SyncEngine.decoder.decode(SyncEngine.LastSyncNote.self, from: $0) }
+    }
+
+    /// A round that changes nothing does not rewrite sync-state.json; the
+    /// time goes to sync-last.json and a relaunch still shows it.
+    func testUnchangedRoundWritesNoState() async throws {
+        let a = makeMac("A")
+        for i in 0..<50 { a.app["host:\(i)"] = "router-\(i)" }
+        try await vault(a, create: "pass")
+        await a.engine.syncNow()                       // settled: the first rounds wrote the state
+        let stateFile = a.config.stateDirectory.appendingPathComponent("sync-state.json")
+        let before = try Data(contentsOf: stateFile)
+        let stamp = stateStamp(a)
+        let firstTime = a.engine.lastSync
+        try await Task.sleep(for: .milliseconds(20))
+        await a.engine.syncNow()
+        XCTAssertNil(a.engine.lastError)
+        XCTAssertEqual(stateStamp(a), stamp, "an unchanged round leaves sync-state.json alone")
+        XCTAssertEqual(try Data(contentsOf: stateFile), before)
+        XCTAssertGreaterThan(a.engine.lastSync!, firstTime!)
+        // The state file holds whole seconds (ISO 8601), and so does the note.
+        func seconds(_ date: Date?) -> Int? { date.map { Int($0.timeIntervalSince1970) } }
+        XCTAssertEqual(seconds(note(a)?.lastSync), seconds(a.engine.lastSync))
+        // Relaunched: the time of the last round, as before this change.
+        let again = makeMac("A", dir: a.config.stateDirectory, secrets: a.secrets)
+        XCTAssertEqual(seconds(again.engine.lastSync), seconds(a.engine.lastSync))
+
+        // An edit: the whole state again, and the note goes with it.
+        a.app["host:7"] = "edited"
+        await a.engine.syncNow()
+        XCTAssertNotEqual(stateStamp(a), stamp, "a changed shadow is written")
+        XCTAssertNil(note(a), "the whole state carries the time; no note may outlive it")
+        let afterEdit = makeMac("A", dir: a.config.stateDirectory, secrets: a.secrets)
+        XCTAssertEqual(seconds(afterEdit.engine.lastSync), seconds(a.engine.lastSync))
+    }
+
+    /// The skip trusts only the file it wrote itself: gone, replaced or
+    /// touched → the next round writes the whole state again.
+    func testStateFileChangedUnderTheEngineIsRewritten() async throws {
+        let a = makeMac("A")
+        a.app["host:1"] = "one"
+        try await vault(a, create: "pass")
+        await a.engine.syncNow()
+        let stateFile = a.config.stateDirectory.appendingPathComponent("sync-state.json")
+        let mine = try Data(contentsOf: stateFile)
+
+        try FileManager.default.removeItem(at: stateFile)
+        await a.engine.syncNow()
+        XCTAssertNotNil(stateStamp(a), "a deleted state file is written again")
+
+        // Another writer put an older copy back.
+        var old = try SyncEngine.decoder.decode(SyncLocalState.self, from: mine)
+        old.shadow = [:]
+        try SyncEngine.encoder.encode(old).write(to: stateFile, options: .atomic)
+        await a.engine.syncNow()
+        let restored = try SyncEngine.decoder.decode(SyncLocalState.self, from: try Data(contentsOf: stateFile))
+        XCTAssertEqual(restored.shadow?.keys.sorted(), ["host:1"], "the engine's own state replaces it, as before")
+
+        // Touched in place (same bytes, new time).
+        let stamp = stateStamp(a)
+        try await Task.sleep(for: .milliseconds(20))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: stateFile.path)
+        await a.engine.syncNow()
+        XCTAssertNotEqual(stateStamp(a), stamp)
+    }
+
+    /// Quiet twin of the above, across a sign-out: the first round after
+    /// signing back in may skip only what this engine wrote — and every
+    /// whole-state write (sign-out writes one) resets what it trusts.
+    func testSignOutAndInStillSyncsAndSaves() async throws {
+        let a = makeMac("A")
+        a.app["host:1"] = "one"
+        try await vault(a, create: "pass")
+        await a.engine.signOut()
+        XCTAssertEqual(a.engine.phase, .signedOut)
+        a.app["host:2"] = "two"
+        SyncEngine.setRefreshToken("refresh", in: a.secrets)
+        let back = makeMac("A", dir: a.config.stateDirectory, secrets: a.secrets)
+        back.app.records = a.app.records
+        if back.engine.phase == .ready {
+            await back.engine.syncNow()
+        } else {
+            try await join(back, "pass")
+        }
+        await back.engine.syncNow()
+        XCTAssertNil(back.engine.lastError)
+        let saved = try SyncEngine.decoder.decode(SyncLocalState.self, from: try Data(contentsOf: a.config.stateDirectory.appendingPathComponent("sync-state.json")))
+        XCTAssertEqual(saved.shadow?.keys.sorted(), ["host:1", "host:2"])
     }
 }

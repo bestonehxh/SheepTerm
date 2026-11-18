@@ -70,7 +70,13 @@ struct ShareLinkSheet: View {
     /// The group WITH its subgroups, flattened the way an export is
     /// (`GroupTree.exportable`): a share carries the whole subtree.
     private var group: HostGroup? { GroupTree.exportable(request.groupID, in: model.store.groups) }
-    private var logins: Int { group.map { links.loginCount(in: $0) } ?? 0 }
+    /// Counted when the sheet opens and when the group's credentials change —
+    /// not on every redraw (each keystroke in the passphrase fields), and
+    /// never with a Keychain prompt (`ShareLinks.loginCount`).
+    @State private var logins = 0
+    private var loginInputs: [UUID] {
+        (group?.hosts.compactMap(\.credentialID) ?? []) + model.credentialStore.credentials.map(\.id)
+    }
 
     private var recipientsValid: Bool { (try? ShareRecipients.parse([recipients], excluding: engine.account)) != nil }
     private var passphraseValid: Bool {
@@ -92,6 +98,8 @@ struct ShareLinkSheet: View {
         .sheepSheetChrome()
         .noAutoFill()
         .onExitCommand { close() }
+        .onAppear { logins = group.map { links.loginCount(in: $0) } ?? 0 }
+        .onChange(of: loginInputs) { logins = group.map { links.loginCount(in: $0) } ?? 0 }
 #if DEBUG
         // SHEEPTERM_DEBUG_SHARE_PREFILL="a@x.test,b@x.test;passphrase;day|week|month|never;creds" (scratch runs only)
         .onAppear {

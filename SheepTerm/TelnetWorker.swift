@@ -16,6 +16,12 @@ nonisolated protocol ConsoleWorker: AnyObject, Sendable {
     @discardableResult func sendBreak() -> Bool
     func stop()
     var isTransferring: Bool { get }
+    /// A ZMODEM transfer has the line (set on main by `ZModemDriver`):
+    /// Break and an XMODEM start are refused, `write` is not.
+    func claimLine(_ claimed: Bool)
+    /// `isTransferring` or a claim: "a transfer owns the line" — the one
+    /// answer every gate reads (6.1 (62)).
+    var lineOwnedByTransfer: Bool { get }
     /// Bytes accepted by `write` and not yet on the line: a transfer is
     /// refused until they are (it would drop them).
     var hasQueuedWrites: Bool { get }
@@ -66,6 +72,9 @@ nonisolated final class TelnetWorker: ConsoleWorker {
         var pendingTransfer: SerialWorker.Transfer?
         var transferActive = false
         var cancelTransfer = false
+        /// `claimLine` (no ZMODEM over telnet today; the protocol's answer).
+        var lineClaimed = false
+        var ownedByTransfer: Bool { transferActive || lineClaimed }
     }
     private let state = Mutex(State())
 
@@ -129,6 +138,10 @@ nonisolated final class TelnetWorker: ConsoleWorker {
     /// asked for both ways first; typing and Break are refused meanwhile.
     var isTransferring: Bool { state.withLock { $0.transferActive } }
 
+    /// `SerialWorker.claimLine` / `lineOwnedByTransfer`, the same rule.
+    func claimLine(_ claimed: Bool) { state.withLock { $0.lineClaimed = claimed } }
+    var lineOwnedByTransfer: Bool { state.withLock { $0.ownedByTransfer } }
+
     var hasQueuedWrites: Bool { state.withLock { !$0.pendingWrites.isEmpty } }
     var hasUnsentWrites: Bool { state.withLock { !$0.pendingWrites.isEmpty || $0.unsentOutbox > 0 } }
 
@@ -137,7 +150,7 @@ nonisolated final class TelnetWorker: ConsoleWorker {
     @discardableResult
     func startTransfer(_ transfer: SerialWorker.Transfer) -> Bool {
         state.withLock { state in
-            guard state.running, !state.transferActive, state.pendingWrites.isEmpty else { return false }
+            guard state.running, !state.ownedByTransfer, state.pendingWrites.isEmpty else { return false }
             state.transferActive = true
             state.cancelTransfer = false
             state.pendingTransfer = transfer
@@ -226,7 +239,7 @@ nonisolated final class TelnetWorker: ConsoleWorker {
     @discardableResult
     func sendBreak() -> Bool {
         state.withLock { state in
-            guard state.running, !state.transferActive else { return false }
+            guard state.running, !state.ownedByTransfer else { return false }
             state.pendingBreak = true
             Self.poke(state.wakeFD)
             return true
@@ -263,6 +276,7 @@ nonisolated final class TelnetWorker: ConsoleWorker {
                 state.runActive = false
                 state.transferActive = false
                 state.cancelTransfer = false
+                state.lineClaimed = false
                 defer { state.pendingTransfer = nil }
                 return state.pendingTransfer
             }
@@ -330,13 +344,13 @@ nonisolated final class TelnetWorker: ConsoleWorker {
             }
         }
         var lastProgress = Self.clock()
-        var lastAddressCheck = Self.clock()
 
         while isRunning {
-            if Self.clock() - lastAddressCheck > 5 {
-                lastAddressCheck = Self.clock()
-                watcher.check()
-            }
+#if SHEEPTERM_TESTING
+            _testLoopPasses.add(1, ordering: .relaxed)
+#endif
+            // The watcher's 5 s look runs on its own app-wide timer
+            // (`SessionPathWatcher.Hub`); a loss pokes the pipe.
             if let lost = watcher.lostConnection() { onClosed?(lost); return }
 
             let (resized, cols, rows, wantsBreak) = state.withLock { state -> (Bool, Int, Int, Bool) in
@@ -406,8 +420,16 @@ nonisolated final class TelnetWorker: ConsoleWorker {
                 pollfd(fd: fd, events: events, revents: 0),
                 pollfd(fd: pipeRead, events: Int16(POLLIN), revents: 0),
             ]
-            // A transfer has deadlines (a start settle, 10 s answers).
-            var timeout: Int32 = 1000
+            // A transfer has deadlines (a start settle, 10 s answers). Bytes
+            // waiting for the socket keep the 1 s tick (the stall clock
+            // above reads it), and so does typing still queued (left there
+            // above while the outbox was full, and announced by a poke this
+            // pass already consumed). With none of these, nothing here runs
+            // on a clock — typing, a resize, a break, a transfer, stop() and
+            // the path watcher all poke the pipe, a hang-up wakes the socket
+            // — so the loop sleeps (6.1 (62); was a wake every second).
+            let idle = transfer == nil && outbox.isEmpty && state.withLock { $0.pendingWrites.isEmpty }
+            var timeout: Int32 = idle ? Self.idlePollCapMS : 1000
             if let deadline = transfer?.nextDeadline {
                 timeout = Int32(max(5, min(1000, (deadline - Self.clock()) * 1000 + 1)))
             }
@@ -473,7 +495,13 @@ nonisolated final class TelnetWorker: ConsoleWorker {
         ProcessInfo.processInfo.systemUptime
     }
 
+    /// An idle loop's poll timeout: a guard, not a deadline.
+    static let idlePollCapMS: Int32 = 60_000
+
 #if SHEEPTERM_TESTING
+    /// Passes of the loop (= its poll returns), for the idle-wake check.
+    let _testLoopPasses = Atomic<Int>(0)
+
     func _testLifecycleSnapshot() -> (running: Bool, runActive: Bool, pendingWriteCount: Int) {
         state.withLock { ($0.running, $0.runActive, $0.pendingWrites.count) }
     }

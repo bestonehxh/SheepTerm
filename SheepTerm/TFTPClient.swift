@@ -212,10 +212,16 @@ nonisolated final class TFTPClient: RemoteFileClient, @unchecked Sendable {
             progress(bytes, total(m) ?? bytes)
             succeeded()
             // Dally: a server that lost our final ACK repeats its last block;
-            // it gets the ACK again instead of reporting a failure.
-            while !m.isClosed {
-                try wait(fd, until: m.nextDeadline)
-                while case .datagram(let bytes, let from) = UDPSocket.receive(fd, into: &buffer) {
+            // it gets the ACK again instead of reporting a failure. Bounded
+            // like the loop above — at most 64 datagrams a wake, and never past
+            // the dally's own end: a server that kept repeating its last block
+            // faster than we drained it held this thread and socket forever,
+            // the machine's tick never reached (6.1 (62) review).
+            let dallyEnd = UDPSocket.now + m.policy.dally
+            while !m.isClosed, UDPSocket.now < dallyEnd {
+                try wait(fd, until: min(m.nextDeadline ?? dallyEnd, dallyEnd))
+                for _ in 0..<64 {
+                    guard case .datagram(let bytes, let from) = UDPSocket.receive(fd, into: &buffer) else { break }
                     guard from.sameHost(server) else { continue }
                     try perform(m.receive(bytes, from: from.port, now: UDPSocket.now, source: source))
                 }

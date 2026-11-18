@@ -62,6 +62,23 @@ nonisolated enum TabOrder {
         index > from ? index + 1 : index
     }
 
+    /// The gap in `current` for a strip drag that began on `startOrder` and
+    /// ended with the dragged tab at `target` in it. By id, not by index: a
+    /// tab opened or closed during the drag (a shell exiting, ⌘T from a
+    /// shortcut) shifted every index after it, and the drop landed one slot
+    /// off (UI review, 6.1 (62)). The tab goes right after the neighbour it
+    /// was dropped after — the nearest one still open — or first. Nil = no
+    /// move: dropped where it started, or it is gone.
+    static func gap(dropping dragged: UUID, atFinalIndex target: Int, startOrder: [UUID], current: [UUID]) -> Int? {
+        guard let source = startOrder.firstIndex(of: dragged), target != source, current.contains(dragged) else { return nil }
+        let intended = moved(startOrder, from: source, toGap: gap(forFinalIndex: target, from: source))
+        guard let at = intended.firstIndex(of: dragged) else { return nil }
+        for before in intended[..<at].reversed() {
+            if let index = current.firstIndex(of: before) { return index + 1 }
+        }
+        return 0
+    }
+
     /// The gap a keyboard "move left/right by one" means: left is the gap
     /// before the left neighbour, right the gap after the right neighbour.
     /// Nil at either end — Move Tab does not wrap around.

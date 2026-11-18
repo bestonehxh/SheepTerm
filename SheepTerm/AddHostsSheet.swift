@@ -318,6 +318,7 @@ struct AddHostsSheet: View {
         }
         .task {
             if let text = request.debugPaste { pasteBlock(text); reviewing = request.debugReview; return }
+            if let url = request.debugImport { importFile(at: url); return }
             // Import ▸ Hosts File… (6.0 (57)): the panel over the sheet, once it is up.
             if request.importFile {
                 try? await Task.sleep(for: .milliseconds(150))

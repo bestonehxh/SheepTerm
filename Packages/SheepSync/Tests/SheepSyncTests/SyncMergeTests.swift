@@ -192,4 +192,90 @@ final class SyncMergeTests: XCTestCase {
         XCTAssertEqual(Set(p.apply.keys), ["snippet:A", "snippet:B", "snippet:C"])
         XCTAssertFalse(p.needsUpload)
     }
+
+    // MARK: A cloud deletion the app never carries out (SheepTerm's settings)
+
+    private func keeping(_ local: [String: String], shadow: [String: ShadowEntry]?, remote: [SyncRecord],
+                         now: Int64, device: String = "C") -> SyncPlan {
+        SyncMerge.plan(snapshot: SyncSnapshot(records: local.mapValues { d($0) }, unavailablePrefixes: ["setting:"],
+                                              keepOnRemoteDeletePrefixes: ["setting:"]),
+                       shadow: shadow, remote: Dictionary(uniqueKeysWithValues: remote.map { ($0.id, $0) }),
+                       now: now, device: device, digest: digest)
+    }
+
+    /// The B / C / old-Mac replay: B and C hold plan P1 (t1); an OLD build,
+    /// which does not list the key, uploads its deletion at t4; C syncs it
+    /// (the app never deletes a setting); B edits to P2 at t5; C syncs at t6.
+    /// C used to remember the tombstone as in step, read its untouched P1 as
+    /// a fresh edit stamped t6 and upload it over B's P2 — and every new Mac
+    /// did the same every round.
+    func testAnOldBuildsSettingDeletionNeverTurnsTheUntouchedValueIntoANewEdit() {
+        let id = "setting:hostWorkspaces"
+        let (_, s1) = synced(id, "P1", 1, "A")
+        let tomb = SyncRecord(id: id, stamp: stamp(4, "Old"), deleted: true, payload: nil)
+
+        // t4: the deletion arrives. Kept here, not applied, nothing uploaded.
+        let atT4 = keeping([id: "P1"], shadow: [id: s1], remote: [tomb], now: 4)
+        XCTAssertNil(atT4.apply[id] ?? nil)
+        XCTAssertTrue(atT4.apply.isEmpty, "a setting is never deleted from the cloud's say-so")
+        XCTAssertFalse(atT4.needsUpload)
+        XCTAssertEqual(atT4.merged[id], tomb, "the cloud keeps what the old build wrote")
+        XCTAssertEqual(atT4.shadow[id], ShadowEntry(stamp: tomb.stamp, deleted: false, digest: digest(id, d("P1"))))
+
+        // t6: B's P2 (t5) is in the cloud; C's P1 is untouched — B's wins.
+        let p2 = SyncRecord(id: id, stamp: stamp(5, "B"), payload: d("P2"))
+        let atT6 = keeping([id: "P1"], shadow: atT4.shadow, remote: [p2], now: 6)
+        XCTAssertEqual(atT6.apply, [id: d("P2")], "B's newer edit comes down")
+        XCTAssertEqual(atT6.merged[id], p2)
+        XCTAssertFalse(atT6.needsUpload, "stale P1 is not uploaded over P2")
+
+        // The bug, for the record: the same pass from a tombstone shadow.
+        let buggy = keeping([id: "P1"], shadow: [id: ShadowEntry(stamp: tomb.stamp, deleted: true, digest: nil)],
+                            remote: [p2], now: 6)
+        XCTAssertEqual(buggy.merged[id]?.payload, d("P1"), "what the old shadow did")
+    }
+
+    /// Its quiet twin: after the kept deletion, round after round is idle —
+    /// nothing uploaded, nothing applied, the same shadow.
+    func testAKeptDeletionStaysQuietRoundAfterRound() {
+        let id = "setting:theme"
+        let (_, s1) = synced(id, "dark", 1, "A")
+        let tomb = SyncRecord(id: id, stamp: stamp(4, "Old"), deleted: true, payload: nil)
+        var shadow: [String: ShadowEntry] = [id: s1]
+        for round in 0..<3 {
+            let p = keeping([id: "dark"], shadow: shadow, remote: [tomb], now: 10 + Int64(round))
+            XCTAssertFalse(p.needsUpload, "round \(round)")
+            XCTAssertTrue(p.apply.isEmpty, "round \(round)")
+            if round > 0 { XCTAssertEqual(p.shadow, shadow, "round \(round)") }
+            shadow = p.shadow
+        }
+        // A REAL edit after it still syncs, stamped after the tombstone.
+        let edited = keeping([id: "light"], shadow: shadow, remote: [tomb], now: 20)
+        XCTAssertTrue(edited.needsUpload)
+        XCTAssertEqual(edited.merged[id]?.payload, d("light"))
+        XCTAssertEqual(edited.merged[id]?.stamp, stamp(20, "C"))
+        // A Mac joining the vault keeps its value too, without uploading it.
+        let joining = keeping([id: "dark"], shadow: nil, remote: [tomb], now: 30)
+        XCTAssertTrue(joining.apply.isEmpty)
+        XCTAssertFalse(joining.needsUpload)
+    }
+
+    /// Only the listed records: a password's deletion still deletes, and a
+    /// setting with no value here still records the tombstone (a value set
+    /// later is a real edit and goes up).
+    func testOnlyListedRecordsWithAValueKeepTheirCopy() {
+        let (_, sp) = synced("pw:1", "x", 1)
+        let gone = SyncRecord(id: "pw:1", stamp: stamp(4), deleted: true, payload: nil)
+        let p = keeping(["pw:1": "x"], shadow: ["pw:1": sp], remote: [gone], now: 5)
+        XCTAssertEqual(p.apply["pw:1"], .some(nil))
+
+        let id = "setting:theme"
+        let (_, s1) = synced(id, "dark", 1)
+        let tomb = SyncRecord(id: id, stamp: stamp(4, "Old"), deleted: true, payload: nil)
+        let absent = keeping([:], shadow: [id: s1], remote: [tomb], now: 5)
+        XCTAssertEqual(absent.shadow[id]?.deleted, true)
+        let setLater = keeping([id: "light"], shadow: absent.shadow, remote: [tomb], now: 9)
+        XCTAssertTrue(setLater.needsUpload)
+        XCTAssertEqual(setLater.merged[id]?.payload, d("light"))
+    }
 }

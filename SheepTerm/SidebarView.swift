@@ -19,9 +19,10 @@ struct SidebarView: View {
     @AppStorage(OptimizationPlan.Feature.environmentTags.key) private var environmentTags = OptimizationPlan.Feature.environmentTags.defaultOn
     @State private var renameTarget: HostGroup?
     @State private var editTarget: Host?
-    /// Mirrors TopBarView's own fullscreen state — same will*-notification
-    /// pattern, so the gap changes DURING the system transition.
-    @State private var isFullScreen = false
+    /// TopBarView's fullscreen state (its own window only, healed from it —
+    /// `MainWindowFullScreen`), so the gap changes DURING the system
+    /// transition and never for another window.
+    @ObservedObject private var mainFullScreen = MainWindowFullScreen.shared
     @State private var collapsedGroups: Set<UUID> = Self.loadCollapsedGroups()
     /// Subgroups that are OPEN (they start shut, each opens on its own).
     @State private var openSubgroups: Set<UUID> = Self.loadOpenSubgroups()
@@ -196,7 +197,7 @@ struct SidebarView: View {
     /// Space above the search field. The sidebar owns the titlebar row, so
     /// windowed mode has to clear the traffic lights; macOS hides those in
     /// fullscreen, where the field sits flush to the top instead.
-    private var topGap: CGFloat { isFullScreen ? 8 : 36 }
+    private var topGap: CGFloat { mainFullScreen.isOn ? 8 : 36 }
 
     /// True only when there is nothing left to fold — every top-level group
     /// folded and no subgroup open. The button reads "Expand all" exactly
@@ -304,13 +305,6 @@ struct SidebarView: View {
             }
 #endif
             pruneCollapsedGroups()
-            isFullScreen = NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
-            isFullScreen = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { _ in
-            isFullScreen = false
         }
         // [] is load-bearing: default backgrounds auto-expand into the
         // titlebar safe area and would paint over the tab bar above.
@@ -386,6 +380,19 @@ struct SidebarView: View {
                 HostEditSheet(host: host)
             }
         }
+        // The model knows which of these sheets are up, so no path hides the
+        // sidebar (and them) meanwhile; gone from the tree = none of them up.
+        .onChange(of: ownSheets, initial: true) { _, up in model.sidebarSheets = up }
+        // Only a sidebar that is really gone clears the set: one sliding out
+        // (⌘0) can be told it disappeared after the sidebar that replaced it
+        // already reported a sheet of its own (New Group right after ⌘0).
+        .onDisappear { if !model.sidebarShown { model.sidebarSheets = [] } }
+    }
+
+    private var ownSheets: Set<SheetGate.SidebarSheet> {
+        SheetGate.sidebarSheets(editHost: editTarget != nil, renameGroup: renameTarget != nil,
+                                newGroup: model.showNewGroup, newSubgroup: model.newSubgroupTarget != nil,
+                                groupIcon: model.groupIconTarget != nil, workspace: workspacePrompt != nil)
     }
 
     /// The bottom bar (5.0 (7)): the Sync account at the left (Sign In, or

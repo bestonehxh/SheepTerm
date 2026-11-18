@@ -134,6 +134,18 @@ nonisolated enum ViewMenuLayout {
         }
     }
 
+    /// What the tab in front can search or clear (6.1 (62), UI review: Find…
+    /// and Clear Scrollback were enabled on a Files or Ping tab and did
+    /// nothing — neither has a terminal or a page to act on).
+    enum SearchTarget: Sendable { case terminal, web, none }
+
+    /// Find…, Find Next / Previous, Use Selection for Find: a terminal's
+    /// scrollback or a web page.
+    static func findEnabled(_ target: SearchTarget) -> Bool { target != .none }
+
+    /// Clear Scrollback: a terminal only (⌘L on a web tab is Open Location).
+    static func clearScrollbackEnabled(_ target: SearchTarget) -> Bool { target == .terminal }
+
     /// Items in menu order, depth first (a submenu named in `submenuItems`
     /// counts as that item, in its place).
     static var flattened: [Item] {

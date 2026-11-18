@@ -84,6 +84,77 @@ final class ForwardingTests: XCTestCase {
         XCTAssertEqual(windowAdjusts(helper.sent(t)), [])
     }
 
+    private func delivered(_ events: [SSHConnection.Event], _ id: UInt32) -> Int {
+        events.reduce(0) { if case .data(id, let b) = $1 { return $0 + b.count }; return $0 }
+    }
+
+    private func closes(_ packets: [[UInt8]], remote: UInt32) -> Int {
+        packets.filter { $0 == [97] + [UInt8(remote >> 24), UInt8(remote >> 16 & 0xFF), UInt8(remote >> 8 & 0xFF), UInt8(remote & 0xFF)] }.count
+    }
+
+    /// A server that ignores the window of a port-forward channel whose
+    /// socket stops reading (review 6.1 (59)): the owner is handed at most
+    /// the window plus one packet, then THAT channel is closed and the rest
+    /// dropped — the shell channel beside it, and the session, carry on.
+    func testManualWindowOverrunClosesOnlyThatChannel() throws {
+        let (c, t) = helper.connection()
+        let id = try c.openDirectTCPIP(host: "x", port: 1, manualWindow: true)
+        try c.handle(helper.confirmation(local: id, remote: 9))
+        let shell = try c.openSession()
+        try c.handle(helper.confirmation(local: shell, remote: 10))
+        _ = helper.sent(t); _ = c.takeEvents()
+        let packet = SSHConnection.maxPacket
+        // The whole window, then one packet more (a server counting wrong):
+        // still delivered, nothing closed.
+        for _ in 0..<(Int(SSHConnection.windowSize) / packet + 1) { try c.handle(data(id, count: packet)) }
+        XCTAssertEqual(delivered(c.takeEvents(), id), Int(SSHConnection.maximumOwed))
+        XCTAssertEqual(closes(helper.sent(t), remote: 9), 0)
+        // One byte past that: CLOSE for this channel, the byte dropped, and
+        // every later packet too.
+        try c.handle(data(id, count: 1))
+        for _ in 0..<100 { try c.handle(data(id, count: packet)) }
+        XCTAssertEqual(delivered(c.takeEvents(), id), 0, "nothing past the bound reaches the owner")
+        XCTAssertEqual(closes(helper.sent(t), remote: 9), 1, "one CLOSE, for that channel only")
+        try c.consumed(id, Int(SSHConnection.maximumOwed))
+        XCTAssertEqual(windowAdjusts(helper.sent(t)), [], "a channel we closed is not reopened")
+        // The shell beside it keeps the old tolerance: a packet bigger than
+        // its whole window is delivered, the session goes on.
+        try c.handle(data(shell, count: Int(SSHConnection.windowSize) + 100_000))
+        try c.handle(data(shell, count: Int(SSHConnection.windowSize) + 100_000))
+        XCTAssertEqual(delivered(c.takeEvents(), shell), 2 * (Int(SSHConnection.windowSize) + 100_000))
+        XCTAssertEqual(closes(helper.sent(t), remote: 10), 0)
+        // The server's CLOSE ends the forward channel as usual.
+        try c.handle([97, 0, 0, 0, UInt8(id)])
+        XCTAssertTrue(c.takeEvents().contains(.closed(id)))
+        XCTAssertTrue(c.isOpen(shell))
+    }
+
+    /// Must stay quiet: an owner that passes the bytes on keeps a channel
+    /// open through 16 MB — including a server that overshoots each window
+    /// by most of a packet, and a lent SFTP channel's stderr.
+    func testManualWindowOwnerThatKeepsUpIsNeverCut() throws {
+        let (c, t) = helper.connection()
+        let id = try c.openSession(manualWindow: true)
+        try c.handle(helper.confirmation(local: id, remote: 9))
+        _ = helper.sent(t); _ = c.takeEvents()
+        var total = 0
+        for _ in 0..<8 {
+            for _ in 0..<(Int(SSHConnection.windowSize) / 65_536) { try c.handle(data(id, count: 65_536)) }
+            try c.handle(data(id, count: SSHConnection.maxPacket - 100))   // overshoot, stderr fills the packet
+            var w = SSHWriter()
+            w.writeByte(95); w.writeUInt32(id); w.writeUInt32(1); w.writeString([UInt8](repeating: 0x65, count: 100))
+            try c.handle(w.bytes)
+            let events = c.takeEvents()
+            let got = delivered(events, id) + events.reduce(0) { if case .extendedData(id, let b) = $1 { return $0 + b.count }; return $0 }
+            XCTAssertEqual(got, Int(SSHConnection.maximumOwed))
+            try c.consumed(id, got)
+            total += got
+        }
+        XCTAssertGreaterThan(total, 16 * 1024 * 1024)
+        XCTAssertEqual(closes(helper.sent(t), remote: 9), 0)
+        XCTAssertTrue(c.isOpen(id))
+    }
+
     // MARK: SOCKS5
 
     func testSOCKSGreetingAndDomainConnect() {
@@ -142,6 +213,183 @@ final class ForwardingTests: XCTestCase {
         XCTAssertEqual(SOCKSHandshake.code(forOpenFailure: 2), 5)
         XCTAssertEqual(SOCKSHandshake.code(forOpenFailure: 4), 1)
         XCTAssertEqual(SOCKSHandshake.failed(5), [5, 5, 0, 1, 0, 0, 0, 0, 0, 0])
+    }
+
+    // MARK: Name lookups (TCPConnector)
+
+    /// A resolver that blocks until released, counting the calls it saw.
+    private final class SlowResolver: @unchecked Sendable {
+        let gate = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var calls = 0
+        var resolve: @Sendable (String, Int) -> Result<[ForwardSocket.Address], ForwardSocket.Failure> {
+            { [self] _, _ in
+                lock.withLock { calls += 1 }
+                gate.wait()
+                return .failure(ForwardSocket.Failure("no such host"))
+            }
+        }
+    }
+
+    private func waitFor(_ seconds: TimeInterval = 5, _ done: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        while !done(), Date() < end { usleep(5_000) }
+        return done()
+    }
+
+    /// Review 6.1 (59): each connect ran getaddrinfo on a detached thread
+    /// that nothing can stop; dropping the connector (a released tunnel —
+    /// a remote SOCKS client can open and close channels as fast as it
+    /// likes) left the thread blocked in a slow lookup and freed the
+    /// tunnel slot. Lookups in flight are now capped over every connector;
+    /// past the cap a connect fails at once, without a thread.
+    func testNameLookupsInFlightAreCapped() throws {
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 })
+        let slow = SlowResolver()
+        let saved = TCPConnector.resolve
+        TCPConnector.resolve = slow.resolve
+        defer { TCPConnector.resolve = saved }
+        var busy = 0
+        for i in 0..<300 {
+            let connector = TCPConnector(host: "slow-\(i).example", port: 80)
+            if connector.step() == .failed(TCPConnector.busyMessage) { busy += 1 }
+            // dropped here, like a released tunnel
+        }
+        XCTAssertTrue(waitFor { slow.lock.withLock { slow.calls } == min(300, TCPConnector.maximumLookups) })
+        XCTAssertEqual(TCPConnector.lookupsRunning, TCPConnector.maximumLookups, "lookups in flight stop at the cap")
+        XCTAssertEqual(busy, 300 - TCPConnector.maximumLookups, "the rest fail at once")
+        for _ in 0..<300 { slow.gate.signal() }
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 }, "every lookup returned")
+        XCTAssertEqual(slow.calls, TCPConnector.maximumLookups, "no thread for a refused connect")
+        // Must stay quiet: with the slots free a connect looks up again.
+        TCPConnector.resolve = saved
+        let again = TCPConnector(host: "127.0.0.1", port: 9)
+        var step = again.step()
+        XCTAssertTrue(waitFor { step = again.step(); return step != .pending })
+        XCTAssertNotEqual(step, .failed(TCPConnector.busyMessage))
+    }
+
+    /// Review 6.1 (62): the app-wide cap alone let ONE session's remote SOCKS
+    /// client hold all 64 slots, and every other tab's forward then failed at
+    /// once. An owner's `LookupBudget` is taken first: one owner stops at its
+    /// share and another owner still gets a lookup.
+    func testOneOwnerCannotTakeEveryLookup() throws {
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 })
+        let slow = SlowResolver()
+        let saved = TCPConnector.resolve
+        TCPConnector.resolve = slow.resolve
+        defer { TCPConnector.resolve = saved }
+        let greedy = TCPConnector.LookupBudget()
+        var busy = 0
+        for i in 0..<200 {
+            let connector = TCPConnector(host: "greedy-\(i).example", port: 80, budget: greedy)
+            if connector.step() == .failed(TCPConnector.busyMessage) { busy += 1 }
+        }
+        XCTAssertLessThan(TCPConnector.LookupBudget.perOwner, TCPConnector.maximumLookups, "one owner's share is less than the whole")
+        XCTAssertEqual(greedy.running, TCPConnector.LookupBudget.perOwner, "one owner stops at its share")
+        XCTAssertEqual(TCPConnector.lookupsRunning, TCPConnector.LookupBudget.perOwner, "…and holds no more of the app-wide slots")
+        XCTAssertEqual(busy, 200 - TCPConnector.LookupBudget.perOwner, "its other connects fail at once")
+        // Another session's forward is looked up as usual.
+        let other = TCPConnector.LookupBudget()
+        let fair = TCPConnector(host: "other.example", port: 80, budget: other)
+        XCTAssertEqual(fair.step(), .pending, "another owner still gets a lookup")
+        XCTAssertEqual(other.running, 1)
+        XCTAssertTrue(waitFor { slow.lock.withLock { slow.calls } == TCPConnector.LookupBudget.perOwner + 1 })
+        // The app-wide cap still holds over many owners.
+        let owners = (0..<8).map { _ in TCPConnector.LookupBudget() }
+        var refused = 0
+        for owner in owners {
+            for i in 0..<TCPConnector.LookupBudget.perOwner {
+                if TCPConnector(host: "many-\(i).example", port: 80, budget: owner).step() == .failed(TCPConnector.busyMessage) { refused += 1 }
+            }
+        }
+        XCTAssertEqual(TCPConnector.lookupsRunning, TCPConnector.maximumLookups, "the app-wide cap still holds")
+        XCTAssertEqual(refused, 8 * TCPConnector.LookupBudget.perOwner - (TCPConnector.maximumLookups - TCPConnector.LookupBudget.perOwner - 1))
+        // A refusal by the app-wide cap gives the owner's slot back.
+        XCTAssertEqual(owners.map(\.running).reduce(0, +), TCPConnector.maximumLookups - TCPConnector.LookupBudget.perOwner - 1,
+                       "owners hold only the slots whose lookups run")
+        for _ in 0..<(TCPConnector.maximumLookups + 8) { slow.gate.signal() }
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 }, "every lookup returned")
+        XCTAssertTrue(waitFor { greedy.running == 0 && other.running == 0 && owners.allSatisfy { $0.running == 0 } },
+                      "each owner's slots come back as its lookups return")
+        // Must stay quiet: once its lookups returned the owner looks up again.
+        TCPConnector.resolve = saved
+        let again = TCPConnector(host: "127.0.0.1", port: 9, budget: greedy)
+        var step = again.step()
+        XCTAssertTrue(waitFor { step = again.step(); return step != .pending })
+        XCTAssertNotEqual(step, .failed(TCPConnector.busyMessage))
+    }
+
+    /// The wiring: each PortForwarder (one per session) has its own share, so
+    /// -R connects on one session past its share do not touch another's.
+    func testEachForwarderHasItsOwnLookupShare() throws {
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 })
+        let slow = SlowResolver()
+        let saved = TCPConnector.resolve
+        TCPConnector.resolve = slow.resolve
+        defer { TCPConnector.resolve = saved }
+        func remoteForwarder() throws -> (PortForwarder, SSHConnection) {
+            let (c, _) = helper.connection()
+            let forwarder = PortForwarder(rules: [.remote(bindAddress: "", bindPort: 9000, host: "slow.target", port: 80)])
+            try forwarder.requestRemote(connection: c)
+            try c.handle([81])
+            for case .remoteForwardReply(let token, let success, let port) in c.takeEvents() {
+                forwarder.remoteForwardReply(token: token, success: success, port: port)
+            }
+            return (forwarder, c)
+        }
+        let (a, ca) = try remoteForwarder()
+        for sender in 0..<UInt32(TCPConnector.LookupBudget.perOwner + 10) {
+            try ca.handle(forwardedOpen(sender: sender, port: 9000))
+            for case .forwardedChannelOpened(let id, _, _, _, _) in ca.takeEvents() { try a.forwardedChannelOpened(id, port: 9000, connection: ca) }
+        }
+        XCTAssertEqual(a.lookups.running, TCPConnector.LookupBudget.perOwner, "one session's -R lookups stop at its share")
+        let (b, cb) = try remoteForwarder()
+        try cb.handle(forwardedOpen(sender: 1, port: 9000))
+        for case .forwardedChannelOpened(let id, _, _, _, _) in cb.takeEvents() { try b.forwardedChannelOpened(id, port: 9000, connection: cb) }
+        XCTAssertEqual(b.lookups.running, 1, "another session's -R connect is still looked up")
+        XCTAssertEqual(TCPConnector.lookupsRunning, TCPConnector.LookupBudget.perOwner + 1)
+        for _ in 0..<(TCPConnector.LookupBudget.perOwner + 1) { slow.gate.signal() }
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 })
+    }
+
+    /// The same cap seen by a remote SOCKS client (`R1080`): its CONNECT
+    /// past the cap gets SOCKS "general failure" and its channel ends; a
+    /// connect once a slot is free is looked up as usual.
+    func testRemoteSOCKSConnectPastTheLookupCapIsAGeneralFailure() throws {
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 })
+        let slow = SlowResolver()
+        let saved = TCPConnector.resolve
+        TCPConnector.resolve = slow.resolve
+        defer { TCPConnector.resolve = saved }
+        let fillers = (0..<TCPConnector.maximumLookups).map { TCPConnector(host: "filler-\($0).example", port: 80) }
+        XCTAssertEqual(TCPConnector.lookupsRunning, TCPConnector.maximumLookups)
+
+        let (c, t) = helper.connection()
+        let forwarder = PortForwarder(rules: [.remoteDynamic(bindAddress: "", bindPort: 1080)])
+        try forwarder.requestRemote(connection: c)
+        try c.handle([81])
+        for case .remoteForwardReply(let token, let success, let port) in c.takeEvents() {
+            forwarder.remoteForwardReply(token: token, success: success, port: port)
+        }
+        try c.handle(forwardedOpen(sender: 6, port: 1080))
+        guard case .forwardedChannelOpened(let id, _, _, _, _)? = c.takeEvents().first else { return XCTFail("not accepted") }
+        try forwarder.forwardedChannelOpened(id, port: 1080, connection: c)
+        _ = helper.sent(t)
+        var w = SSHWriter()
+        w.writeByte(94); w.writeUInt32(id); w.writeString([5, 1, 0] + [5, 1, 0, 3, 11] + Array("slow.target".utf8) + [0, 80])
+        try c.handle(w.bytes)
+        for case .data(id, let bytes) in c.takeEvents() { try forwarder.received(id, bytes, connection: c) }
+        try forwarder.pump(connection: c)
+        let replies = helper.sent(t).compactMap { p -> [UInt8]? in
+            guard p.first == 94 else { return nil }
+            var r = SSHReader(p, from: 1); _ = try? r.readUInt32(); return try? r.readString()
+        }
+        XCTAssertEqual(replies.joined().map { $0 }, [5, 0] + [5, 1, 0, 1, 0, 0, 0, 0, 0, 0], "method reply, then general failure")
+        XCTAssertEqual(forwarder.activeTunnels, 0)
+        XCTAssertEqual(slow.calls <= TCPConnector.maximumLookups, true, "no lookup started for it")
+        for _ in fillers { slow.gate.signal() }
+        XCTAssertTrue(waitFor { TCPConnector.lookupsRunning == 0 })
     }
 
     // MARK: -R (tcpip-forward / forwarded-tcpip)

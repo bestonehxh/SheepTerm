@@ -65,6 +65,8 @@ final class SheepTermSync: SyncDataSource {
     /// top level). A local parent that differs is a move made here since —
     /// uploaded, never swapped for the parent-less cloud bytes.
     private var hostRecordParentAtApply: [String: String] = [:]
+    /// Last round's split of each file, by its exact bytes (`syncSnapshot`).
+    private var decomposed = SyncRecordCodec.DecomposeMemo()
 
     private init() {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -176,7 +178,9 @@ final class SheepTermSync: SyncDataSource {
             // as deletions, which would delete every entry everywhere.
             let url = BackupManager.baseDirectory.appendingPathComponent(family.file)
             let data = try? Data(contentsOf: url)
-            let split = data.flatMap { storeMatchesDisk(family.file, $0) ? try? SyncRecordCodec.decompose($0, as: family) : nil }
+            // The split of the same bytes as last round is last round's
+            // (`DecomposeMemo`); whether it may be used is decided right here.
+            let split = data.flatMap { storeMatchesDisk(family.file, $0) ? decomposed.records($0, as: family) : nil }
             switch SyncPolicy.familyRead(quarantined: quarantined(family.file),
                                          fileExists: FileManager.default.fileExists(atPath: url.path),
                                          storeEmpty: storeIsEmpty(family.file), readableAndSaved: split != nil) {
@@ -215,8 +219,14 @@ final class SheepTermSync: SyncDataSource {
         // a record above, so this prefix covers only the missing ones, which
         // were unavailable already.
         unavailablePrefixes.append("setting:")
+        // …so a setting's deletion in the cloud only ever comes from an older
+        // build (one that does not list the key), and `syncApply` never
+        // carries it out. The engine leaves it in the cloud and keeps the
+        // value here in step with it — without this the untouched value read
+        // as a fresh edit on the next sync and went up over a newer one from
+        // another Mac, every round.
         return SyncSnapshot(records: records, unavailable: unavailable, unavailablePrefixes: unavailablePrefixes,
-                            wantCloudPrefixes: wantCloud)
+                            wantCloudPrefixes: wantCloud, keepOnRemoteDeletePrefixes: ["setting:"])
     }
 
     private func storeIsEmpty(_ name: String) -> Bool {
@@ -291,6 +301,10 @@ final class SheepTermSync: SyncDataSource {
     func syncApply(_ changes: [String: Data?], firstJoin: Bool) -> SyncApplyResult {
         applying = true
         defer { applying = false }
+        // Nothing remembered outlives an apply (a join included) — not needed
+        // for correctness (the memo is keyed on the bytes), but no reason to
+        // keep a copy of files about to be rewritten.
+        decomposed.reset()
         var failed: Set<String> = []
 
         if firstJoin {
@@ -401,6 +415,9 @@ final class SheepTermSync: SyncDataSource {
             } else if change != nil {
                 failed.insert(id)
             }
+            // A deletion (an older build's) is not carried out: no setting is
+            // ever removed from the cloud's say-so. The engine only sends one
+            // for a setting with no value here (`keepOnRemoteDeletePrefixes`).
         }
 
         if !wroteFiles.isEmpty || wroteSettings { AppModel.shared.reloadAfterRestore(files: wroteFiles) }

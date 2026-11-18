@@ -246,16 +246,33 @@ nonisolated enum HostListCodec {
         }
         // ssh's rule: the first value obtained wins, in file order. A `Host *`
         // ABOVE a block beats it; one below only fills what it left unset
-        // (Fable round 10).
-        func defaults(_ range: some Sequence<Block>) -> [String: String] {
-            range.filter { $0.aliases.contains("*") }.reduce(into: [String: String]()) { all, block in
-                for (k, v) in block.options where all[k] == nil { all[k] = v }
+        // (Fable round 10). Both sides are built once, in one pass each way —
+        // asking every block for its own (filtering all the others) was
+        // quadratic: 24,000 hosts held the main thread 4.3 s (review 6.1 (62)).
+        // `before[i]` = the `Host *` values above block i, the earliest
+        // winning; `after[i]` = those below it, the earliest of them winning.
+        var before: [[String: String]] = []
+        before.reserveCapacity(blocks.count)
+        var above: [String: String] = [:]
+        for block in blocks {
+            before.append(above)
+            if block.aliases.contains("*") {
+                for (k, v) in block.options where above[k] == nil { above[k] = v }
+            }
+        }
+        var after = [[String: String]](repeating: [:], count: blocks.count)
+        var below: [String: String] = [:]
+        for index in blocks.indices.reversed() {
+            after[index] = below
+            // Walking up: a block higher in the file beats the ones under it.
+            if blocks[index].aliases.contains("*") {
+                for (k, v) in blocks[index].options { below[k] = v }
             }
         }
         var out: [Entry] = []
         var skipped = 0
         for (index, block) in blocks.enumerated() {
-            let before = defaults(blocks[..<index]), after = defaults(blocks[(index + 1)...])
+            let before = before[index], after = after[index]
             for alias in block.aliases {
                 if alias.contains(where: { "*?!".contains($0) }) {
                     if alias != "*" { skipped += 1 }

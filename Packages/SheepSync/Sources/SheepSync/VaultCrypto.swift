@@ -228,11 +228,77 @@ public struct VaultSealer: Sendable {
     /// Keyed digest of a record, for telling "changed since the last sync"
     /// on this Mac. Keyed so the local state file says nothing about the
     /// content (a bare SHA-256 of a short password is a lookup away).
+    ///
+    /// Remembered per sealer (`DigestMemo`): a sync round asks for every
+    /// record's digest — twice in `SyncMerge.plan` — and between rounds
+    /// almost nothing changes. The answer is a pure function of this
+    /// sealer's key and the exact (id, payload), so a hit is the same bytes
+    /// as a fresh HMAC; another key is another sealer with its own memo.
     public func digest(id: String, payload: Data) -> String {
-        var mac = HMAC<SHA256>(key: digestKey)
+        if let known = memo.digest(id: id, payload: payload) { return known }
+        let fresh = Self.hmac(digestKey, id: id, payload: payload)
+        memo.remember(id: id, payload: payload, digest: fresh)
+        return fresh
+    }
+
+    /// The digest without the memo (tests compare the two).
+    func uncachedDigest(id: String, payload: Data) -> String { Self.hmac(digestKey, id: id, payload: payload) }
+
+    private static func hmac(_ key: SymmetricKey, id: String, payload: Data) -> String {
+        var mac = HMAC<SHA256>(key: key)
         mac.update(data: Data(id.utf8))
         mac.update(data: Data([0]))
         mac.update(data: payload)
         return Data(mac.finalize()).base64EncodedString()
     }
+
+    /// Ends a round of `digest` calls (the engine, once per sync): what was
+    /// not asked for since the last call is forgotten, so the memo holds one
+    /// round's records — not every payload the session ever saw.
+    public func endDigestRound() { memo.endRound() }
+
+    private let memo = DigestMemo()
+}
+
+/// `VaultSealer.digest`'s memory: id → the payload last digested for it and
+/// the answer. A hit needs the SAME payload bytes (compared in full — no
+/// shortcut by size or a cheaper hash), so it can never answer for content
+/// it did not see.
+final class DigestMemo: @unchecked Sendable {
+    private struct Entry {
+        let payload: Data
+        let digest: String
+        var round: UInt
+    }
+    /// Past this many entries without an `endRound` (a caller that never
+    /// ends one), it starts over rather than grow.
+    static let limit = 200_000
+
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+    private var round: UInt = 0
+
+    func digest(id: String, payload: Data) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard var entry = entries[id], entry.payload == payload else { return nil }
+        if entry.round != round {
+            entry.round = round
+            entries[id] = entry
+        }
+        return entry.digest
+    }
+
+    func remember(id: String, payload: Data, digest: String) {
+        lock.lock(); defer { lock.unlock() }
+        if entries.count >= Self.limit, entries[id] == nil { entries.removeAll() }
+        entries[id] = Entry(payload: payload, digest: digest, round: round)
+    }
+
+    func endRound() {
+        lock.lock(); defer { lock.unlock() }
+        entries = entries.filter { $0.value.round == round }
+        round &+= 1
+    }
+
+    var count: Int { lock.lock(); defer { lock.unlock() }; return entries.count }
 }

@@ -131,7 +131,10 @@ enum ShareCodec {
     static func stripForImport(_ group: HostGroup) -> HostGroup {
         var copy = group
         copy.jumpHostID = nil
-        copy.hosts = group.hosts.map { host in
+        // A saved split never travels (`stripForExport`): one in a file was
+        // put there by hand, and its panes are addresses of the author's
+        // choosing that one click on the row would dial.
+        copy.hosts = group.hosts.filter { $0.kind != .split }.map { host in
             var host = host
             host.credentialID = nil
             host.agentForward = false
