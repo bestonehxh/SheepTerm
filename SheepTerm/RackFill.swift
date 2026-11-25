@@ -15,13 +15,22 @@ nonisolated enum RackFill {
     /// it lasts as long as the app (`RackFillSession`).
     static let topKey = "rackFillTop"
 
-    /// A device: its cells as (row, column) offsets from its top-left, and its kind (the colour).
+    /// A device: its cells as (row, column) offsets from its top-left, its kind, and
+    /// the colour index (0–6, random per deal — not the kind, so every piece picks a
+    /// fresh colour from the Block Blast-style palette regardless of its shape).
     struct Piece: Codable, Equatable, Sendable {
         let cells: [Cell]
         let kind: Kind
+        let colorIndex: Int
 
         var width: Int { (cells.map(\.column).max() ?? 0) + 1 }
         var height: Int { (cells.map(\.row).max() ?? 0) + 1 }
+
+        init(cells: [Cell], kind: Kind, colorIndex: Int = 0) {
+            self.cells = cells
+            self.kind = kind
+            self.colorIndex = colorIndex
+        }
     }
 
     struct Cell: Codable, Hashable, Sendable {
@@ -71,8 +80,8 @@ nonisolated enum RackFill {
     }
 
     struct Game: Codable, Equatable, Sendable {
-        /// Row-major, `size × size`; nil = empty, else the kind placed there.
-        var board: [Kind?] = Array(repeating: nil, count: RackFill.size * RackFill.size)
+        /// Row-major, `size × size`; nil = empty, else the colour index (0–6) placed there.
+        var board: [Int?] = Array(repeating: nil, count: RackFill.size * RackFill.size)
         /// The hand; a placed slot is nil until all three are used.
         var hand: [Piece?] = []
         var score = 0
@@ -107,7 +116,7 @@ nonisolated enum RackFill {
         /// The rows and columns that would be full after placing (for the view's preview).
         func wouldClear(_ piece: Piece, row: Int, column: Int) -> (rows: [Int], columns: [Int]) {
             var trial = self
-            for cell in piece.cells { trial.board[(row + cell.row) * RackFill.size + column + cell.column] = piece.kind }
+            for cell in piece.cells { trial.board[(row + cell.row) * RackFill.size + column + cell.column] = piece.colorIndex }
             return trial.fullLines()
         }
 
@@ -123,7 +132,7 @@ nonisolated enum RackFill {
         @discardableResult
         mutating func place(slot: Int, row: Int, column: Int) -> (rows: [Int], columns: [Int])? {
             guard !over, hand.indices.contains(slot), let piece = hand[slot], fits(piece, row: row, column: column) else { return nil }
-            for cell in piece.cells { board[(row + cell.row) * RackFill.size + column + cell.column] = piece.kind }
+            for cell in piece.cells { board[(row + cell.row) * RackFill.size + column + cell.column] = piece.colorIndex }
             hand[slot] = nil
             let lines = fullLines()
             let n = RackFill.size
@@ -143,7 +152,10 @@ nonisolated enum RackFill {
         mutating func deal() {
             var fallback: [Piece?]?
             for _ in 0..<RackFill.dealTries {
-                let drawn: [Piece?] = (0..<RackFill.handSize).map { _ in RackFill.pieces[random.below(RackFill.pieces.count)] }
+                let drawn: [Piece?] = (0..<RackFill.handSize).map { _ in
+                    let base = RackFill.pieces[random.below(RackFill.pieces.count)]
+                    return Piece(cells: base.cells, kind: base.kind, colorIndex: random.below(7))
+                }
                 let fitting = drawn.compactMap { $0 }.filter(fitsAnywhere).count
                 if fallback == nil, fitting > 0 { fallback = drawn }
                 // Nothing fits now = the first piece can never go: skip the search. A piece
@@ -151,7 +163,10 @@ nonisolated enum RackFill {
                 guard fitting > 0 else { continue }
                 if solvable(drawn) { hand = drawn; return }
             }
-            hand = fallback ?? (0..<RackFill.handSize).map { _ in RackFill.pieces[random.below(RackFill.pieces.count)] }
+            hand = fallback ?? (0..<RackFill.handSize).map { _ in
+                let base = RackFill.pieces[random.below(RackFill.pieces.count)]
+                return Piece(cells: base.cells, kind: base.kind, colorIndex: random.below(7))
+            }
         }
 
         /// Whether every piece of `hand` can be placed, one after another, in some order.
@@ -174,7 +189,7 @@ nonisolated enum RackFill {
         /// Puts a piece down and clears full lines — no score, no hand (the solver's step).
         private mutating func lay(_ piece: Piece, row: Int, column: Int) {
             let n = RackFill.size
-            for cell in piece.cells { board[(row + cell.row) * n + column + cell.column] = piece.kind }
+            for cell in piece.cells { board[(row + cell.row) * n + column + cell.column] = piece.colorIndex }
             let lines = fullLines()
             for r in lines.rows { for c in 0..<n { board[r * n + c] = nil } }
             for c in lines.columns { for r in 0..<n { board[r * n + c] = nil } }

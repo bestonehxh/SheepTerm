@@ -132,6 +132,14 @@ struct SyncLocalState: Codable, Equatable {
     /// Until each lands, its local copy still yields to the cloud's — it
     /// must not be uploaded over the vault the moment it becomes readable.
     var joinPending: Set<String>?
+    /// What a restore (or anything else that replaced local data wholesale)
+    /// put back here, as record scopes (`SyncEngine.inJoinScope`): the next
+    /// round JOINS them — the shadow's memory of them is dropped, so a record
+    /// the restored copy lacks is not uploaded as a deletion, and every one
+    /// the cloud holds keeps the cloud's copy (the first join's rule). Kept
+    /// until a round completes, so offline, a failed round or the passphrase
+    /// being asked do not lose it; then its ids are ordinary `joinPending`.
+    var joinScopes: [String]?
     /// Scopes the stored refresh token covers beyond sign-in (share links). nil = never asked.
     var scopes: [String]?
     var lastSync: Date?
@@ -201,6 +209,60 @@ public final class SyncEngine {
     /// may start in that window (the phase still reads .ready until the
     /// teardown's awaits are done).
     @ObservationIgnored private var tearingDown = false
+    /// Bumped by every `markForJoin`: a round clears `joinScopes` at its end
+    /// only when no new mark arrived while it ran (one that started before a
+    /// restore read the files from before it).
+    @ObservationIgnored private var joinMarkGeneration = 0
+
+    /// A scope ending in ":" names every record id that starts with it
+    /// ("host:"); any other names exactly one record ("hosts:order").
+    nonisolated public static func inJoinScope(_ id: String, _ scopes: [String]) -> Bool {
+        scopes.contains { $0.hasSuffix(":") ? id.hasPrefix($0) : id == $0 }
+    }
+
+    /// What `markForJoin` changed, so a restore that failed and was rolled
+    /// back can take the mark back (`withdrawJoinMark`).
+    public struct JoinMark: Sendable {
+        let previous: [String]?
+        let generation: Int
+    }
+
+    /// The local data in `scopes` is about to be replaced wholesale (a
+    /// restore): the next round joins it instead of reading the difference as
+    /// edits and deletions (see `SyncLocalState.joinScopes`). Call BEFORE the
+    /// data is replaced. Saved at once; nil = the state could not be saved —
+    /// the caller must not replace anything then. A Mac that remembers no
+    /// sync (no shadow) needs no mark: its next sync is a whole join already.
+    public func markForJoin(_ scopes: [String]) -> JoinMark? {
+        let previous = state.joinScopes
+        let mark = JoinMark(previous: previous, generation: joinMarkGeneration &+ 1)
+        guard state.keyID != nil, state.shadow != nil, !scopes.isEmpty else {
+            joinMarkGeneration = mark.generation
+            return mark
+        }
+        var merged = previous ?? []
+        for scope in scopes where !merged.contains(scope) { merged.append(scope) }
+        state.joinScopes = merged.sorted()
+        joinMarkGeneration = mark.generation
+        do {
+            try saveStateOrThrow()
+            return mark
+        } catch {
+            state.joinScopes = previous
+            return nil
+        }
+    }
+
+    /// Takes a mark back (the replacement failed and the old data was put
+    /// back): only while no other mark or round has moved since.
+    public func withdrawJoinMark(_ mark: JoinMark) {
+        guard joinMarkGeneration == mark.generation, state.joinScopes != mark.previous else { return }
+        state.joinScopes = mark.previous
+        saveState()
+    }
+
+    /// Tests: the scopes still waiting for a round.
+    var pendingJoinScopes: [String]? { state.joinScopes }
 
     /// The data file starts with this and the vault's key id, OUTSIDE the
     /// ciphertext: a file sealed under another vault's key (a Mac that
@@ -635,6 +697,8 @@ public final class SyncEngine {
             // this Mac's data (shadow [:] = "everything here is current").
             // Unlocking a vault another Mac created meanwhile is a join.
             state.shadow = createdHere && state.shadow == [:] ? [:] : nil
+            // A whole join (or a fresh vault) covers any restore mark.
+            state.joinScopes = nil
         }
         state.keyID = keyID
         saveState()
@@ -652,6 +716,7 @@ public final class SyncEngine {
         state.keyID = nil
         state.shadow = nil
         state.joinPending = nil
+        state.joinScopes = nil
         state.lastSync = nil
         lastSync = nil
         saveState()
@@ -799,9 +864,20 @@ public final class SyncEngine {
                 cache.remote = remote
             }
         }
-        let oldShadow = state.shadow
+        var oldShadow = state.shadow
+        var pending = state.joinPending ?? []
+        // A restore marked these for a join (`joinScopes`): what the shadow
+        // remembers of them is forgotten for this round, and every id the
+        // shadow or the cloud knows in them joins — cloud wins, nothing read
+        // as deleted. Only `state` is left as it was until the round lands.
+        let markGeneration = joinMarkGeneration
+        if let scopes = state.joinScopes, !scopes.isEmpty, var known = oldShadow {
+            let restored = Set(known.keys).union(remote.keys).filter { Self.inJoinScope($0, scopes) }
+            pending.formUnion(restored)
+            for id in restored { known[id] = nil }
+            oldShadow = known
+        }
         let snapshot = dataSource.syncSnapshot()
-        let pending = state.joinPending ?? []
         let plan = SyncMerge.plan(snapshot: snapshot, shadow: oldShadow, remote: remote,
                                   now: Int64(Date().timeIntervalSince1970 * 1000), device: state.device,
                                   joining: pending, digest: sealer.digest)
@@ -886,6 +962,9 @@ public final class SyncEngine {
         stillPending.formUnion(droppedDuringJoin.filter { remote[$0] != nil })
         for id in stillPending { shadow[id] = nil }
         state.joinPending = stillPending.isEmpty ? nil : stillPending
+        // The marked scopes are now ordinary join bookkeeping (above) — unless
+        // a new mark came in while this round ran on the files from before it.
+        if joinMarkGeneration == markGeneration { state.joinScopes = nil }
         state.shadow = shadow
         state.lastSync = Date()
         lastSync = state.lastSync

@@ -969,3 +969,140 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(saved.shadow?.keys.sorted(), ["host:1", "host:2"])
     }
 }
+
+// MARK: Restore = join (6.2 (7), the owner: "This Mac only")
+//
+// A restore on one Mac replaced its files wholesale. Read as edits, the
+// difference from the last sync went up as deletions and rolled every other
+// Mac back — their Keychain passwords included. `markForJoin` makes the next
+// round JOIN what was replaced: the cloud's copy wins where it has one, what
+// only the backup has is added, nothing is read as deleted.
+extension SyncEngineTests {
+    /// Two Macs on one vault, both holding the same four records.
+    private func twoSyncedMacs() async throws -> (Mac, Mac) {
+        let a = makeMac("A")
+        a.app["host:1"] = "sw1"
+        a.app["host:2"] = "sw2"
+        a.app["credential:1"] = "admin"
+        a.app["password:1"] = "secret"
+        try await vault(a, create: "pass")
+        let b = makeMac("B")
+        try await join(b, "pass")
+        XCTAssertEqual(b.app.records, a.app.records)
+        return (a, b)
+    }
+
+    private static let restoreScopes = ["hosts:order", "group:", "host:", "credential:", "password:", "key:"]
+
+    func testRestoreJoinSendsNoDeletionAndKeepsTheCloudsCopy() async throws {
+        let (a, b) = try await twoSyncedMacs()
+        // B edits sw1 after the backup was taken.
+        try await Task.sleep(for: .milliseconds(5))
+        b.app["host:1"] = "sw1 renamed on B"
+        await b.engine.syncNow()
+
+        // A restores an old backup: sw1 in its old shape, sw2 / the credential
+        // / its password missing, and a host only the backup has.
+        XCTAssertNotNil(a.engine.markForJoin(Self.restoreScopes))
+        a.app.records = ["host:1": Data("sw1 from the backup".utf8), "host:9": Data("only in the backup".utf8)]
+        await a.engine.syncNow()
+        XCTAssertNil(a.engine.lastError)
+        XCTAssertNil(a.engine.pendingJoinScopes, "a landed round consumes the mark")
+
+        await b.engine.syncNow()
+        XCTAssertEqual(b.app["host:2"], "sw2", "restore: nothing the backup lacked was deleted on the other Mac")
+        XCTAssertEqual(b.app["credential:1"], "admin")
+        XCTAssertEqual(b.app["password:1"], "secret", "restore: no password deleted on the other Mac")
+        XCTAssertEqual(b.app["host:1"], "sw1 renamed on B", "restore: a record in both keeps the cloud's copy")
+        XCTAssertEqual(b.app["host:9"], "only in the backup", "restore: a record only in the backup is uploaded")
+        XCTAssertFalse(b.app.applied.contains { $0.values.contains { $0 == nil } }, "restore: no deletion reached B at all")
+
+        // A ends with the cloud's copy plus what only the backup had.
+        XCTAssertEqual(a.app.records, b.app.records)
+        XCTAssertEqual(a.app["password:1"], "secret")
+
+        // And afterwards edits and deletions flow as usual again.
+        try await Task.sleep(for: .milliseconds(5))
+        a.app["host:9"] = nil
+        await a.engine.syncNow()
+        await b.engine.syncNow()
+        XCTAssertNil(b.app["host:9"], "after the join, a real deletion still syncs")
+    }
+
+    func testRestoreJoinSurvivesAFailedRoundAndARelaunch() async throws {
+        let (a, b) = try await twoSyncedMacs()
+        XCTAssertNotNil(a.engine.markForJoin(Self.restoreScopes))
+        a.app.records = ["host:9": Data("only in the backup".utf8)]
+        // The upload fails: the round throws, nothing is consumed.
+        await drive.setFailNextWrite()
+        await a.engine.syncNow()
+        XCTAssertNotNil(a.engine.lastError)
+        XCTAssertEqual(a.engine.pendingJoinScopes, Self.restoreScopes.sorted(), "a failed round keeps the mark")
+        // Quit and relaunch before the next round (offline, the passphrase
+        // asked …): the mark is on disk.
+        let relaunched = makeMac("A", dir: a.config.stateDirectory, secrets: a.secrets)
+        relaunched.app.records = a.app.records
+        XCTAssertEqual(relaunched.engine.pendingJoinScopes, Self.restoreScopes.sorted(), "the mark survives a relaunch")
+        XCTAssertEqual(relaunched.engine.phase, .ready)
+        await relaunched.engine.syncNow()
+        XCTAssertNil(relaunched.engine.lastError)
+        XCTAssertNil(relaunched.engine.pendingJoinScopes)
+        await b.engine.syncNow()
+        XCTAssertEqual(b.app["host:1"], "sw1")
+        XCTAssertEqual(b.app["password:1"], "secret")
+        XCTAssertEqual(b.app["host:9"], "only in the backup")
+        XCTAssertEqual(relaunched.app["host:2"], "sw2", "the restored Mac gets back what the cloud has")
+    }
+
+    func testRestoreJoinMarkMadeDuringARoundIsNotClearedByIt() async throws {
+        let (a, b) = try await twoSyncedMacs()
+        try await Task.sleep(for: .milliseconds(5))
+        a.app["host:5"] = "new before the restore"   // makes the round upload
+        await drive.setDelays(read: nil, write: .milliseconds(150))
+        let round = Task { await a.engine.syncNow() }
+        try await Task.sleep(for: .milliseconds(50))
+        // The restore lands while that round is on the network.
+        XCTAssertNotNil(a.engine.markForJoin(Self.restoreScopes))
+        a.app.records = ["host:1": Data("sw1 from the backup".utf8)]
+        await round.value
+        await drive.setDelays(read: nil, write: nil)
+        XCTAssertEqual(a.engine.pendingJoinScopes, Self.restoreScopes.sorted(),
+                       "a round that read the files from before the restore leaves the mark for the next one")
+        await a.engine.syncNow()
+        XCTAssertNil(a.engine.pendingJoinScopes)
+        await b.engine.syncNow()
+        XCTAssertEqual(b.app["host:2"], "sw2")
+        XCTAssertEqual(b.app["password:1"], "secret")
+        XCTAssertEqual(b.app["host:5"], "new before the restore")
+    }
+
+    func testWithdrawnJoinMarkLeavesSyncAsBefore() async throws {
+        let (a, b) = try await twoSyncedMacs()
+        guard let mark = a.engine.markForJoin(Self.restoreScopes) else { return XCTFail("mark not saved") }
+        a.engine.withdrawJoinMark(mark)
+        XCTAssertNil(a.engine.pendingJoinScopes, "a rolled-back restore takes its mark back")
+        // Unmarked (Sync's ordinary rule, unchanged): a deletion here syncs.
+        try await Task.sleep(for: .milliseconds(5))
+        a.app["host:2"] = nil
+        await a.engine.syncNow()
+        await b.engine.syncNow()
+        XCTAssertNil(b.app["host:2"])
+    }
+
+    func testJoinMarkOnAMacThatNeverSyncedStoresNothing() async throws {
+        let a = makeMac("A", signedIn: false)
+        XCTAssertNotNil(a.engine.markForJoin(Self.restoreScopes), "Sync off: the restore goes ahead")
+        XCTAssertNil(a.engine.pendingJoinScopes, "Sync off: nothing remembered, nothing to join")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: a.config.stateDirectory.appendingPathComponent("sync-state.json").path))
+    }
+
+    func testJoinScopeMatching() {
+        let scopes = ["hosts:order", "host:", "setting:terminalFontSize"]
+        XCTAssertTrue(SyncEngine.inJoinScope("host:ABC", scopes))
+        XCTAssertTrue(SyncEngine.inJoinScope("hosts:order", scopes))
+        XCTAssertTrue(SyncEngine.inJoinScope("setting:terminalFontSize", scopes))
+        XCTAssertFalse(SyncEngine.inJoinScope("setting:terminalFontSizeX", scopes), "an exact scope is exact")
+        XCTAssertFalse(SyncEngine.inJoinScope("hosts:order2", scopes))
+        XCTAssertFalse(SyncEngine.inJoinScope("snippet:1", scopes))
+    }
+}

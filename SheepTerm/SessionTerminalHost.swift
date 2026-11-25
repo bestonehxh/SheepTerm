@@ -132,6 +132,9 @@ final class SessionTerminalHost {
     /// The serial / SSH controller calls this with every chunk the device sent, after the terminal has it.
     func noteDeviceBytes(_ bytes: [UInt8]) {
         lastDeviceByteAt = Date()
+        // Keys the device took without a Return (a pager's Space, `y` at
+        // `[confirm]`) no longer spell the line once it answers them.
+        typedLine.device(bytes)
         if let newline = bytes.lastIndex(of: 0x0A) { deviceTail = Array(bytes[(newline + 1)...]) } else { deviceTail += bytes }
         if deviceTail.count > 512 { deviceTail.removeFirst(deviceTail.count - 512) }
     }
@@ -860,9 +863,12 @@ final class SessionTerminalHost {
         // ⌃J (LF) runs the line too on IOS, VRP and a shell.
         guard typed, HeldKeys.isReturn(bytes), commandGuardActive else { return true }
         let row = cursorLine()
-        // A login/password prompt: what was typed is an answer, not a command.
-        if let row, CommandHistoryFilter.looksLikeCredentialPrompt(row) { return true }
         let screen = row.flatMap { CommandHistoryCapture.split(row: $0) }
+        // A login/password question at the END of the line: what was typed
+        // is an answer, not a command (never when it spells a dangerous one).
+        if let row, CommandGuard.answersCredentialPrompt(row: row, typed: typedLine.text, screen: screen, vendor: vendor) {
+            return true
+        }
         let current = historyGate.isCurrent(counter: terminalView.terminal.changeCounter)
         switch CommandGuard.onReturn(typed: typedLine.text, screen: screen, screenIsCurrent: current, vendor: vendor) {
         case .send:

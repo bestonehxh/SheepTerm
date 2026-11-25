@@ -38,3 +38,29 @@ nonisolated enum ChipHover {
     static let headerChipOpacity: Double = closeDiscOpacity
     static let headerRestingOpacity: Double = 0.06
 }
+
+/// A tab chip's width (6.2 (3), the owner: "ความกว้าง Tab ควรมีมาตรฐานไหม"): a two-letter
+/// title made an 80 pt chip beside 250 pt ones. No chip is narrower than `minimum`.
+/// The room goes to the TITLE's column, not around the chip's content: the icon stays
+/// where every chip has it and the × at the chip's right edge.
+nonisolated enum TabChipWidth {
+    static let minimum: CGFloat = 120
+    static let maxTitle: CGFloat = 190
+    static let padding: CGFloat = 10
+    static let spacing: CGFloat = 7
+
+    /// Everything in a chip but its title, for an icon `icon` wide.
+    static func chrome(icon: CGFloat) -> CGFloat {
+        2 * padding + icon + 2 * spacing + ChipHover.closeDiscSize
+    }
+
+    /// The title column's floor that brings such a chip to `minimum`.
+    static func minTitle(icon: CGFloat) -> CGFloat {
+        max(0, minimum - chrome(icon: icon))
+    }
+
+    /// The chip's width for a title that measures `title`.
+    static func width(icon: CGFloat, title: CGFloat) -> CGFloat {
+        chrome(icon: icon) + min(max(title, minTitle(icon: icon)), maxTitle)
+    }
+}

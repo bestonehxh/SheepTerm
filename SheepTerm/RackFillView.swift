@@ -26,8 +26,8 @@ struct RackFillView: View {
     /// Dragging hand slot `slot`, the pointer at `point` (in the board's space).
     @State private var drag: (slot: Int, point: CGPoint)?
     @State private var popped: Set<Int> = []
-    /// Cells clearing: their kind before, for the green run.
-    @State private var clearing: [Int: RackFill.Kind] = [:]
+    /// Cells clearing: their colour index before, for the green run.
+    @State private var clearing: [Int: Int] = [:]
     @State private var combo: Int?
     @State private var shake = 0
     @State private var dealt = 0
@@ -120,7 +120,9 @@ struct RackFillView: View {
             .frame(height: 26 * s)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: game.streak > 1)
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 6 * s).fill(Color.black.opacity(0.25))
+                RoundedRectangle(cornerRadius: 6 * s).fill(LinearGradient(
+                    colors: [Color(red: 0.07, green: 0.07, blue: 0.18), Color(red: 0.03, green: 0.04, blue: 0.11)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
                 ForEach(0..<(RackFill.size * RackFill.size), id: \.self) { index in
                     cellView(index: index, cell: cell, ghost: ghost)
                 }
@@ -135,6 +137,7 @@ struct RackFillView: View {
                 if game.over { gameOver(side: side) }
             }
             .frame(width: side, height: side)
+            .overlay(RoundedRectangle(cornerRadius: 6 * s).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
             .offset(x: shake % 2 == 0 ? 0 : 6 * s)
             hand(cell: cell, side: side, slotHeight: handHeight(size) - 6 * s)
         }
@@ -153,23 +156,40 @@ struct RackFillView: View {
 
     private func cellView(index: Int, cell: CGFloat, ghost: (cells: Set<Int>, fits: Bool, clears: Set<Int>)?) -> some View {
         let row = index / RackFill.size, column = index % RackFill.size
-        let kind = game.board[index] ?? clearing[index]
+        let kind: Int? = game.board[index] ?? clearing[index]
         let isGhost = ghost?.cells.contains(index) == true
         let willClear = ghost?.clears.contains(index) == true
+        let isClearing = clearing[index] != nil
         return ZStack(alignment: .topTrailing) {
-            RoundedRectangle(cornerRadius: 3 * s)
-                .fill(clearing[index] != nil ? Theme.ok
-                      : kind.map(Self.color) ?? (isGhost ? (ghost?.fits == true ? Theme.accent.opacity(0.35) : Theme.destructive.opacity(0.35))
-                                                : Color.white.opacity(0.04)))
-                .overlay(RoundedRectangle(cornerRadius: 3 * s).strokeBorder(willClear ? Theme.ok : Color.white.opacity(kind == nil ? 0.05 : 0.1), lineWidth: 1))
+            if let k = kind {
+                // Filled block: base colour + gloss (top lighter, bottom darker, Block Blast style)
+                RoundedRectangle(cornerRadius: 3 * s)
+                    .fill(isClearing ? Theme.ok : Self.color(k))
+                RoundedRectangle(cornerRadius: 3 * s)
+                    .fill(LinearGradient(
+                        colors: [Color.white.opacity(isClearing ? 0.42 : 0.30), Color.clear],
+                        startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.6)))
+                RoundedRectangle(cornerRadius: 3 * s)
+                    .fill(LinearGradient(
+                        colors: [Color.clear, Color.black.opacity(isClearing ? 0.08 : 0.28)],
+                        startPoint: UnitPoint(x: 0.5, y: 0.4), endPoint: .bottom))
+                RoundedRectangle(cornerRadius: 3 * s)
+                    .strokeBorder(willClear ? Theme.ok : Color.white.opacity(0.22), lineWidth: 1)
+            } else {
+                RoundedRectangle(cornerRadius: 3 * s)
+                    .fill(isGhost ? (ghost?.fits == true ? Theme.accent.opacity(0.35) : Theme.destructive.opacity(0.35))
+                                  : Color.white.opacity(0.07))
+                RoundedRectangle(cornerRadius: 3 * s)
+                    .strokeBorder(willClear ? Theme.ok : Color.white.opacity(0.12), lineWidth: 1)
+            }
             if kind != nil, cell >= 14 * s {
-                Circle().fill(clearing[index] != nil ? Color.white : Theme.ok.opacity(0.9))
+                Circle().fill(isClearing ? Color.white : Color.white.opacity(0.70))
                     .frame(width: 3 * s, height: 3 * s).padding(3 * s)
             }
         }
         .frame(width: cell - 2, height: cell - 2)
         .scaleEffect(popped.contains(index) ? 1.12 : 1)
-        .opacity(clearing[index] != nil ? 0.9 : 1)
+        .opacity(isClearing ? 0.9 : 1)
         .offset(x: CGFloat(column) * cell + 1, y: CGFloat(row) * cell + 1)
     }
 
@@ -211,9 +231,18 @@ struct RackFillView: View {
     private func pieceView(_ piece: RackFill.Piece, cell: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(piece.cells.enumerated()), id: \.offset) { _, c in
-                RoundedRectangle(cornerRadius: 2 * s).fill(Self.color(piece.kind))
-                    .frame(width: max(cell - 2, 0), height: max(cell - 2, 0))
-                    .offset(x: CGFloat(c.column) * cell, y: CGFloat(c.row) * cell)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2 * s).fill(Self.color(piece.colorIndex))
+                    RoundedRectangle(cornerRadius: 2 * s).fill(LinearGradient(
+                        colors: [Color.white.opacity(0.30), Color.clear],
+                        startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.6)))
+                    RoundedRectangle(cornerRadius: 2 * s).fill(LinearGradient(
+                        colors: [Color.clear, Color.black.opacity(0.28)],
+                        startPoint: UnitPoint(x: 0.5, y: 0.4), endPoint: .bottom))
+                    RoundedRectangle(cornerRadius: 2 * s).strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                }
+                .frame(width: max(cell - 2, 0), height: max(cell - 2, 0))
+                .offset(x: CGFloat(c.column) * cell, y: CGFloat(c.row) * cell)
             }
         }
         .frame(width: CGFloat(piece.width) * cell, height: CGFloat(piece.height) * cell, alignment: .topLeading)
@@ -276,11 +305,11 @@ struct RackFillView: View {
         withAnimation(.spring(response: 0.18, dampingFraction: 0.5)) { popped = placedCells }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { withAnimation(.easeOut(duration: 0.12)) { popped = [] } }
         // The green run over what clears, from the board as it was with the piece in.
-        var gone: [Int: RackFill.Kind] = [:]
+        var gone: [Int: Int] = [:]
         var full = before.board
-        for i in placedCells { full[i] = piece.kind }
-        for r in lines.rows { for c in 0..<n { gone[r * n + c] = full[r * n + c] } }
-        for c in lines.columns { for r in 0..<n { gone[r * n + c] = full[r * n + c] } }
+        for i in placedCells { full[i] = piece.colorIndex }
+        for r in lines.rows { for c in 0..<n { gone[r * n + c] = full[r * n + c] ?? 0 } }
+        for c in lines.columns { for r in 0..<n { gone[r * n + c] = full[r * n + c] ?? 0 } }
         if !gone.isEmpty {
             for (i, kind) in gone {
                 let delay = Double(i % n) * 0.025
@@ -343,15 +372,15 @@ struct RackFillView: View {
         .frame(width: 220)
     }
 
-    static func color(_ kind: RackFill.Kind) -> Color {
-        switch kind {
-        case .sfp: return Color(red: 0.62, green: 0.65, blue: 0.72)
-        case .patch: return Color(red: 0.24, green: 0.55, blue: 0.75)
-        case .cable: return Color(red: 0.20, green: 0.48, blue: 0.40)
-        case .switch1U: return Color(red: 0.13, green: 0.37, blue: 0.63)
-        case .server: return Color(red: 0.33, green: 0.29, blue: 0.68)
-        case .ups: return Color(red: 0.55, green: 0.36, blue: 0.10)
-        case .router: return Color(red: 0.12, green: 0.50, blue: 0.48)
+    static func color(_ index: Int) -> Color {
+        switch index % 7 {
+        case 0:  return Color(red: 0.12, green: 0.84, blue: 0.96)  // cyan
+        case 1:  return Color(red: 0.98, green: 0.78, blue: 0.08)  // gold
+        case 2:  return Color(red: 0.14, green: 0.88, blue: 0.44)  // green
+        case 3:  return Color(red: 0.18, green: 0.46, blue: 0.96)  // blue
+        case 4:  return Color(red: 0.68, green: 0.18, blue: 0.96)  // purple
+        case 5:  return Color(red: 0.96, green: 0.44, blue: 0.08)  // orange
+        default: return Color(red: 0.96, green: 0.22, blue: 0.58)  // pink
         }
     }
 }

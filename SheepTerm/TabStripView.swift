@@ -543,8 +543,15 @@ struct TabItemView: View {
         return false
     }
 
+    /// The width of what the chip wears before its title (the frames below).
+    private var iconWidth: CGFloat {
+        if isWeb, tab.favicon != nil { return 12 }
+        if isPing { return PingTabGlyph.width }
+        return isWeb || isFiles ? 9 : 7
+    }
+
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: TabChipWidth.spacing) {
             // A web tab wears its site's icon (else a globe), the others the dot.
             if isWeb, let icon = tab.favicon {
                 Image(nsImage: icon)
@@ -566,7 +573,9 @@ struct TabItemView: View {
             Text(paneCount > 1 ? "\(tab.title) · \(paneCount)" : tab.title)
                 .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
-                .frame(maxWidth: 190)
+                .frame(maxWidth: TabChipWidth.maxTitle)
+                // A frame of its own outside the cap: a long title is laid out exactly as before.
+                .frame(minWidth: TabChipWidth.minTitle(icon: iconWidth), alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
             Button {
                 onClose()
@@ -582,7 +591,7 @@ struct TabItemView: View {
             .buttonStyle(.plain)
             .opacity(hovering ? 1 : 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, TabChipWidth.padding)
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 6)
@@ -762,6 +771,7 @@ struct PingTabGlyph: View {
     static let colors: [Color] = [Theme.ok, Theme.warn, Theme.destructive]
     static let dot: CGFloat = 7
     static let step: CGFloat = 4
+    static let width = dot + CGFloat(colors.count - 1) * step
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -772,7 +782,7 @@ struct PingTabGlyph: View {
                     .offset(x: CGFloat(index) * Self.step)
             }
         }
-        .frame(width: Self.dot + CGFloat(Self.colors.count - 1) * Self.step, height: Self.dot, alignment: .leading)
+        .frame(width: Self.width, height: Self.dot, alignment: .leading)
         .accessibilityHidden(true)
     }
 }

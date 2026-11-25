@@ -1317,14 +1317,22 @@ struct VendorFingerprint {
     /// most specific family has matched, the cost is a single branch.
     mutating func consider(_ bytes: [UInt8]) -> Vendor? {
         guard !spent, scanned < Self.budget, !bytes.isEmpty else { return nil }
-        scanned += bytes.count
+        // Only what is INSIDE the budget is examined, however the stream was
+        // cut into chunks. The whole chunk used to be searched as long as it
+        // STARTED inside: one 500 KB read locked Linux on a `linux version`
+        // 135 KB in, the same bytes arriving in small reads locked nothing
+        // (a real console capture, 2026-11-21) — the family depended on how
+        // the socket happened to deliver, and a `cat bigfile` in one read
+        // was scanned end to end.
+        let take = min(bytes.count, Self.budget - scanned)
+        scanned += take
 
         // Search over (carry + lowercased(chunk)) so a signature that
         // straddled the previous boundary is seen whole. Non-ASCII bytes are
         // left as-is: they simply never match an ASCII signature.
         var hay = carry
-        hay.reserveCapacity(carry.count + bytes.count)
-        for b in bytes {
+        hay.reserveCapacity(carry.count + take)
+        for b in bytes.prefix(take) {
             hay.append((b >= 0x41 && b <= 0x5A) ? b + 0x20 : b)
         }
         // Keep the last bytes as the next carry regardless of outcome.

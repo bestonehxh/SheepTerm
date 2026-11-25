@@ -98,6 +98,20 @@ nonisolated enum SyncPolicy {
     /// The client id Sync may use: none when the build has no secret (a
     /// public clone without Secrets.xcconfig, or the unexpanded build
     /// variable) — a Desktop client cannot finish a sign-in without it.
+    /// File ▸ Restore Configuration… with Sync (6.2 (7), the owner: "This Mac
+    /// only"): what the restore replaced, as `SyncEngine` join scopes — every
+    /// record of the three files (`apply` writes or removes each one), the
+    /// passwords and keys their credentials name, and the settings the backup
+    /// sets or clears (`settingKeys`: its own plus its `absentSettings`; the
+    /// rest are left alone by a restore, so they stay ordinary). Joined, not
+    /// edited: what the cloud has keeps the cloud's copy, what only the backup
+    /// has is added, and nothing the backup lacks goes up as a deletion — no
+    /// other Mac loses a host or a Keychain password to a restore here.
+    static func restoreJoinScopes(settingKeys: Set<String>, synced: [String]) -> [String] {
+        SyncRecordCodec.families.flatMap(\.prefixes) + [passwordPrefix, keyPrefix]
+            + synced.filter(settingKeys.contains).sorted().map { "setting:\($0)" }
+    }
+
     static func usableClientID(id: String, secret: String) -> String {
         let secret = secret.trimmingCharacters(in: .whitespaces)
         return secret.isEmpty || secret.hasPrefix("$(") ? "" : id

@@ -347,6 +347,11 @@ enum BackupManager {
         alert.informativeText = "\(payload.app) · \(payload.device) · \(stamp.string(from: payload.created))\n"
             + String(localized: "\(payload.groupCount) groups, \(payload.hostCount) hosts.") + "\n\n"
             + String(localized: "This replaces every group, host and setting in SheepTerm. Your current hosts, credentials list and settings are copied aside first, so nothing is lost for good. Passwords are not part of a backup — they stay in the Keychain of the Mac they were saved on, so a credential restored from another Mac will ask for its password on every connection until you re-enter it in Settings.")
+            // With Sync (6.2 (7)): the restore is JOINED, not uploaded as edits
+            // (`SheepTermSync.markRestoreForJoin`) — say what that means.
+            + (SheepTermSync.shared.isSignedIn
+               ? " " + String(localized: "With Sync on, anything also in the cloud keeps the cloud's copy, and anything only in this backup is added.")
+               : "")
             + (hygiene.summary.map { "\n\n\($0)" } ?? "")
         alert.alertStyle = .warning
         alert.addButton(withTitle: String(localized: "Restore"))
@@ -364,12 +369,24 @@ enum BackupManager {
                    "\(error.localizedDescription)\n\n" + String(localized: "Nothing was changed."), style: .warning)
             return
         }
+        // Sync (6.2 (7)): marked for a JOIN before a single file is written, so
+        // no round can read the restored files as edits — the difference from
+        // the last sync would otherwise go up as deletions and roll every other
+        // Mac back (their Keychain passwords included). Not saved = not restored.
+        guard let withdrawJoin = SheepTermSync.shared.markRestoreForJoin(
+            settingKeys: Set(payload.settings.keys).union(payload.absentSettings ?? [])) else {
+            report(String(localized: "Could not prepare Sync for the restore"),
+                   String(localized: "Nothing was changed."), style: .warning)
+            return
+        }
         do {
             try apply(payload)
         } catch {
             // Put back what the snapshot holds, so a failed restore leaves the
             // configuration it started from rather than a mixture.
             let rolledBack = safety.map { rollBack(from: $0) } ?? false
+            // Back as it was: nothing for Sync to join.
+            if rolledBack { withdrawJoin() }
             report(String(localized: "The restore failed part-way"),
                    "\(error.localizedDescription)\n\n"
                    + (rolledBack

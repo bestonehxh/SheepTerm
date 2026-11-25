@@ -216,6 +216,40 @@ public nonisolated enum CommandGuard {
         return .ask(screen.command)
     }
 
+    /// The Return answers a login / password QUESTION, so what was typed is
+    /// not a command and the guard lets it go (`SessionTerminalHost.admitOutgoing`).
+    ///
+    /// Anchored to the END of the cursor's line (6.2 (7)): a password is not
+    /// echoed, so its row is the question alone (`Password:`, `Enter
+    /// passphrase for key '…':`); a username is, so the typed keys are taken
+    /// off the end first (`Username: admin`). The old test found the words
+    /// ANYWHERE in the row — prompt and command included — and let
+    /// `PIN-core-sw1#reload`, `user@login:~$ sudo reboot` and
+    /// `reload in 5 reason password-recovery` out unchecked. It is never an
+    /// answer when the keys or the screen's command spell a dangerous one.
+    /// (`CommandHistoryFilter.looksLikeCredentialPrompt` keeps the broad
+    /// test: there, keeping a line OUT of history is the safe side.)
+    static func answersCredentialPrompt(row: String, typed: String?, screen: (prompt: String, command: String)?,
+                                        vendor: Vendor) -> Bool {
+        let keys = typed?.trimmingCharacters(in: .whitespaces)
+        if let keys, isDangerous(keys, prompt: screen?.prompt, vendor: vendor) { return false }
+        if let screen, isDangerous(screen.command, prompt: screen.prompt, vendor: vendor) { return false }
+        var line = row
+        while let last = line.last, last == " " || last == "\t" { line.removeLast() }
+        if let keys, !keys.isEmpty, line.hasSuffix(keys) {
+            line.removeLast(keys.count)
+            while let last = line.last, last == " " || last == "\t" { line.removeLast() }
+        }
+        guard line.utf16.count <= 512 else { return false }
+        return credentialQuestion.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil
+    }
+
+    /// A credential word, then at most a short tail (`for key '…'`, `for
+    /// admin@10.0.0.1`), then the colon that ENDS the line.
+    private static let credentialQuestion = try! NSRegularExpression(
+        pattern: #"(password|passphrase|passcode|secret|\bpin\b|\benter\b.*\bkey\b|\b(user ?name|login))[^\n]{0,200}:$"#,
+        options: [.caseInsensitive])
+
     /// Indices of the lines of a paste/snippet that hit a rule.
     static func dangerousLines(_ lines: [String], vendor: Vendor = .auto) -> [Int] {
         lines.indices.filter { isDangerous(lines[$0], vendor: vendor) }
@@ -338,6 +372,11 @@ extension CommandGuard {
         afterEcho(screen: screen, vendor: Vendor(rawValue: name) ?? .auto)
     }
 
+    public static func answersCredentialPrompt(row: String, typed: String?, screen: (prompt: String, command: String)?,
+                                               vendor name: String) -> Bool {
+        answersCredentialPrompt(row: row, typed: typed, screen: screen, vendor: Vendor(rawValue: name) ?? .auto)
+    }
+
     public static func dangerousLines(_ lines: [String], vendor name: String) -> [Int] {
         dangerousLines(lines, vendor: Vendor(rawValue: name) ?? .auto)
     }
@@ -397,12 +436,16 @@ extension CommandGuard {
 public nonisolated struct TypedLine: Sendable, Equatable {
     public private(set) var text: String? = ""
     public static let maxLength = 300
+    /// The last key was Backspace / Delete: its echo (`BS SP BS`, readline's
+    /// `BS ESC [K`) is the device's answer to it, not a redraw.
+    private var lastKeyErased = false
 
     public init() {}
 
     /// Bytes the user typed (one key's worth, as the view sends them).
     public mutating func typed(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
+        lastKeyErased = bytes == [0x7F] || bytes == [0x08]
         if bytes == [0x0D] || bytes == [0x0D, 0x0A] || bytes == [0x0A] || bytes == [0x03] || bytes == [0x15] {
             // Return (or ⌃J), ⌃C, ⌃U: a new, empty line.
             text = ""
@@ -424,6 +467,21 @@ public nonisolated struct TypedLine: Sendable, Equatable {
             return
         }
         text = current + string
+    }
+
+    /// Bytes the DEVICE sent (6.2 (7)). The echo of typed letters is those
+    /// letters: printable bytes only. Anything else while keys are held here
+    /// — a line break, a backspace that erases a `--More--`, a redraw — means
+    /// the device did something with keys that had no Return of their own
+    /// (Space / `q` at a pager, `y` at `[confirm]`, a log line reprinting the
+    /// command), and the next command would be spelled after them
+    /// (`  qreload` read as safe, sent with the echo behind). The line is
+    /// then unknown, and the screen decides (`CommandGuard.onReturn`).
+    public mutating func device(_ bytes: [UInt8]) {
+        guard let current = text, !current.isEmpty, !bytes.isEmpty else { return }
+        if bytes.allSatisfy({ $0 >= 0x20 && $0 != 0x7F }) { return }
+        if lastKeyErased, bytes.allSatisfy({ ($0 >= 0x20 && $0 != 0x7F) || $0 == 0x08 || $0 == 0x1B }) { return }
+        text = nil
     }
 
     /// Bytes that reached the line some other way (a paste, a snippet, a

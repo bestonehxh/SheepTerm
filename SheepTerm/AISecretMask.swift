@@ -198,6 +198,22 @@ public nonisolated enum AISecretMask {
         var out: [String] = []
         var inPEM = false
         var blockHeader: [String] = []
+        // A public block (certificate, public key) whose BEGIN was seen: its
+        // body is left alone until its END.
+        var inPublicPEM = false
+        // The key-body-looking lines at the end of `out` (`KeyBodyRun`): what a
+        // private key whose BEGIN line was cut off leaves behind.
+        var run = KeyBodyRun()
+        // The run ended on something that is not its END line: a key body with
+        // BOTH ends cut off is masked when its shape is unmistakable.
+        func settleRun() {
+            if !inPublicPEM, run.isBareKeyBody {
+                out.removeLast(run.count)
+                out.append(replacement)
+                removed += 1
+            }
+            run = KeyBodyRun()
+        }
         let lines = text.components(separatedBy: "\n")
         out.reserveCapacity(lines.count)
         for line in lines {
@@ -210,17 +226,50 @@ public nonisolated enum AISecretMask {
                 continue
             }
             if isPEMBegin(line) {
+                settleRun()
                 inPEM = true
                 removed += 1
                 out.append(line)
                 continue
             }
+            if isPEMEnd(line) {
+                // A private key's END with no BEGIN before it (the attached
+                // text starts inside the key: a tail window, a pager stop, a
+                // capped selection): the body above it goes.
+                if run.count > 0 {
+                    out.removeLast(run.count)
+                    out.append(replacement)
+                    removed += 1
+                } else if let last = out.last, KeyBodyRun.isBase64Line(last) {
+                    // Only the key's short last line made it into the text.
+                    out[out.count - 1] = replacement
+                    removed += 1
+                }
+                run = KeyBodyRun()
+                inPublicPEM = false
+                out.append(line)
+                continue
+            }
+            if line.contains("-----BEGIN") || line.contains("-----END") {
+                // Another kind of block (a certificate is public): its body is
+                // never a key, whatever it looks like.
+                run = KeyBodyRun()
+                inPublicPEM = line.contains("-----BEGIN")
+                out.append(line)
+                continue
+            }
+            if run.take(line) {
+                out.append(line)
+                continue
+            }
+            settleRun()
             let indented = line.first == " " || line.first == "\t"
             let (masked, count, tokens) = maskLine(line, blockHeader: indented ? blockHeader : [])
             if !indented, !tokens.isEmpty { blockHeader = tokens }
             removed += count
             out.append(masked)
         }
+        settleRun()
         // A key block the output cut off: nothing after BEGIN is kept.
         if inPEM { out.append(replacement) }
         var result = out.joined(separator: "\n")
@@ -232,6 +281,70 @@ public nonisolated enum AISecretMask {
             }
         }
         return Result(text: result, removed: removed)
+    }
+
+    /// The PEM body lines a key leaves when its BEGIN line is not in the text:
+    /// base64 (`A–Z a–z 0–9 + / =`), the encrypted-key headers `Proc-Type:` /
+    /// `DEK-Info:` and the blank line after them. Anything else — a prompt, a
+    /// word, a config line — ends the run, so masking never reaches past it.
+    struct KeyBodyRun {
+        private(set) var count = 0
+        /// Base64 lines in the run, in order, by length (headers and blanks not counted).
+        private var widths: [Int] = []
+        private var sawHeader = false
+
+        static let base64 = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+
+        /// Line widths PEM writers use: OpenSSL 64, OpenSSH 70, MIME 76.
+        static let pemWidths: Set<Int> = [64, 70, 76]
+        /// A key body with neither end in the text: at least this many full-width lines.
+        static let bareMinimumLines = 3
+
+        /// A non-empty line of base64 alone (surrounding blanks aside).
+        static func isBase64Line(_ line: String) -> Bool {
+            let body = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !body.isEmpty && body.unicodeScalars.allSatisfy(base64.contains)
+        }
+
+        /// Whether `line` continues the run (it is then counted).
+        mutating func take(_ line: String) -> Bool {
+            let body = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if body.hasPrefix("Proc-Type:") || body.hasPrefix("DEK-Info:") {
+                sawHeader = true
+                count += 1
+                return true
+            }
+            if body.isEmpty {
+                // Only the separator after an encrypted key's headers.
+                guard sawHeader, widths.isEmpty else { return false }
+                count += 1
+                return true
+            }
+            guard body.unicodeScalars.allSatisfy(Self.base64.contains) else { return false }
+            // A short line of letters is a word ("exit", "end"), not base64 —
+            // except as the run's first line, the tail of a key cut at its top.
+            if widths.isEmpty && !sawHeader {
+                // Nothing yet: only a line that could be a full key line, or one
+                // with a digit or + / in it, starts a run.
+                guard body.count >= 16, body.contains(where: { $0.isNumber || $0 == "+" || $0 == "/" }) || body.count >= 40 else { return false }
+            }
+            widths.append(body.count)
+            count += 1
+            return true
+        }
+
+        /// A key body with no BEGIN and no END in sight: only when the shape is
+        /// unmistakable — an encrypted key's header, or at least
+        /// `bareMinimumLines` FULL lines of one PEM width (a shorter last line extra).
+        /// A certificate body has the same shape and is masked too; that only
+        /// costs the model a public blob, never leaks a key.
+        var isBareKeyBody: Bool {
+            guard count > 0 else { return false }
+            if sawHeader, !widths.isEmpty { return true }
+            guard let width = widths.first, Self.pemWidths.contains(width),
+                  widths.filter({ $0 == width }).count >= Self.bareMinimumLines else { return false }
+            return widths.dropLast().allSatisfy { $0 == width } && widths.last! <= width
+        }
     }
 
     static func isPEMBegin(_ line: String) -> Bool {

@@ -1,6 +1,110 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "With Sync on, anything also in the cloud keeps the cloud's copy, and anything only in this backup is added." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit Sync behält alles, was auch in der Cloud ist, die Fassung der Cloud, und was nur in diesem Backup ist, wird hinzugefügt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con Sync activado, lo que también está en la nube conserva la copia de la nube, y lo que solo está en esta copia de seguridad se añade."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec Sync activé, ce qui est aussi dans le cloud garde la version du cloud, et ce qui n'est que dans cette sauvegarde est ajouté."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync がオンのため、クラウドにもある項目はクラウドの内容のまま残り、このバックアップにしかない項目が追加されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync가 켜져 있으므로 클라우드에도 있는 항목은 클라우드의 내용을 유지하고, 이 백업에만 있는 항목은 추가됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Com o Sync ativado, o que também está na nuvem mantém a cópia da nuvem, e o que está só neste backup é adicionado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "При включённой синхронизации всё, что есть и в облаке, сохраняет облачную версию, а то, что есть только в этой резервной копии, добавляется."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已开启同步：云端也有的项目保留云端的版本，仅在此备份中的项目会被添加。"
+          }
+        }
+      }
+    },
+    "Could not prepare Sync for the restore" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync konnte nicht auf die Wiederherstellung vorbereitet werden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar Sync para la restauración"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de préparer Sync pour la restauration"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "復元のための Sync の準備ができませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "복원을 위해 Sync를 준비할 수 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível preparar o Sync para a restauração"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подготовить синхронизацию к восстановлению"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法为恢复准备同步"
+          }
+        }
+      }
+    },
     "%@ baud" : {
       "localizations" : {
         "de" : {

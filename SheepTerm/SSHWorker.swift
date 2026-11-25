@@ -2912,6 +2912,16 @@ nonisolated final class SSHWorker: Sendable {
         /// count, or they reset the clock just before it runs out.
         var lastWindowProgress = clock.now
         var lastDataSent = connection.dataSent(channel)
+        /// What the previous pass saw waiting. Both stall clocks run from the
+        /// pass that FIRST sees bytes waiting, never from the last pass that
+        /// saw none: since the idle loop sleeps until its next probe
+        /// (6.1 (62)) that pass can be a whole probe interval back, and the
+        /// keepalive this pass has just sealed — not yet offered to the
+        /// socket — then read as "nothing sent for 60 s". On a link that
+        /// answers a probe within a millisecond or so (loopback, a LAN
+        /// switch) an idle session was dropped at its first 60 s probe.
+        var wasSealedWaiting = false
+        var wasWindowWaiting = false
         /// What the UI was last told about the forwards.
         var lastForwardStatus: [ForwardStatus] = []
         // The UI's list goes when the session does, however it ends.
@@ -2985,7 +2995,8 @@ nonisolated final class SSHWorker: Sendable {
                 // when NOTHING reaches the socket for 60 s while bytes are
                 // sealed for it (or held by a rekey that never finishes).
                 let sealedWaiting = link.unsentBytes > 0
-                if !sealedWaiting || link.socketBytesWritten > lastSocketBytes { lastProgress = clock.now }
+                if !sealedWaiting || !wasSealedWaiting || link.socketBytesWritten > lastSocketBytes { lastProgress = clock.now }
+                wasSealedWaiting = sealedWaiting
                 lastSocketBytes = link.socketBytesWritten
                 // Input waiting only for the device's window is flow control
                 // while keepalive replies prove the device alive (a switch in
@@ -2995,7 +3006,8 @@ nonisolated final class SSHWorker: Sendable {
                 // window would otherwise hang "connected" forever.
                 let windowWaiting = !armed && connection.pendingOutput(channel) > 0
                 let dataSent = connection.dataSent(channel)
-                if !windowWaiting || dataSent != lastDataSent { lastWindowProgress = clock.now }
+                if !windowWaiting || !wasWindowWaiting || dataSent != lastDataSent { lastWindowProgress = clock.now }
+                wasWindowWaiting = windowWaiting
                 lastDataSent = dataSent
                 if (sealedWaiting && lastProgress.duration(to: clock.now) > Self.writeStallLimit)
                     || (windowWaiting && lastWindowProgress.duration(to: clock.now) > Self.writeStallLimit) {

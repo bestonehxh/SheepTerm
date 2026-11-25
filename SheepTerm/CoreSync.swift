@@ -70,6 +70,11 @@ public nonisolated enum CoreSync {
         SyncPolicy.mayApplyWithoutFile(quarantined: quarantined, fileExists: fileExists, storeEmpty: storeEmpty)
     }
     public static func usableClientID(id: String, secret: String) -> String { SyncPolicy.usableClientID(id: id, secret: secret) }
+    /// Restore Configuration with Sync (6.2 (7)): the scopes to hand `SyncEngine.markForJoin` BEFORE a restore
+    /// writes anything — SyncPolicy.swift explains the list. The ports' restore calls this, never its own list.
+    public static func restoreJoinScopes(settingKeys: Set<String>, synced: [String]) -> [String] {
+        SyncPolicy.restoreJoinScopes(settingKeys: settingKeys, synced: synced)
+    }
 
     // Mixed builds (nested groups beside a build with sections) — SyncPolicy.swift explains each.
     public static func fillKnownParents(composed data: Data, parents: [String: String]) -> Data {

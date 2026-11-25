@@ -163,6 +163,25 @@ final class SheepTermSync: SyncDataSource {
         }
     }
 
+    // MARK: Restore
+
+    /// Signed in to Sync (whatever the vault's state): the restore alert says
+    /// what Sync will do with the restored data.
+    var isSignedIn: Bool { engine.phase != .notConfigured && engine.phase != .signedOut }
+
+    /// Called by `BackupManager.restore` BEFORE it writes anything: the next
+    /// round joins what the restore replaces (`SyncPolicy.restoreJoinScopes`)
+    /// instead of uploading it as edits and deletions. Kept on disk until a
+    /// round lands, signed in or not (sign-out keeps the shadow that would
+    /// otherwise read the restore as deletions). nil = the mark could not be
+    /// saved: nothing may be restored. Else a closure that takes the mark
+    /// back, for a restore that failed and was rolled back.
+    func markRestoreForJoin(settingKeys: Set<String>) -> (@MainActor () -> Void)? {
+        let scopes = SyncPolicy.restoreJoinScopes(settingKeys: settingKeys, synced: Self.syncedSettingKeys)
+        guard let mark = engine.markForJoin(scopes) else { return nil }
+        return { [engine] in engine.withdrawJoinMark(mark) }
+    }
+
     // MARK: Records out
 
     func syncSnapshot() -> SyncSnapshot {
