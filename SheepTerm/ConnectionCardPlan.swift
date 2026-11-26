@@ -59,6 +59,24 @@ public nonisolated enum ConnectionCardPlan {
     /// nothing ever takes down (review 5.0 (20)). The same rule on Windows.
     public static func acceptsQuestion(stopped: Bool, cancelledByUser: Bool) -> Bool { !stopped && !cancelledByUser }
 
+    /// What becomes of bytes headed for a session while its connection card is up (6.2 (8), Mac bug hunt SSH #1 / #6).
+    /// The SSH worker accepts writes from the moment it starts and types them into the shell the moment it opens, so a
+    /// password pasted a second time (⌘V on the host-key / Connecting… / Authenticating… page: the card has no paste,
+    /// the menu action walks on to the terminal view under it) or keys typed while the card sat in its own panel landed
+    /// on the device's command line, in its history and in the session log. Nothing passes while the card is up — any
+    /// page, in the pane or in its panel: a typed key beeps; anything else (a paste that got this far, the terminal's
+    /// own replies, a focus report as the card takes the keyboard) is dropped without a sound — before the shell opens
+    /// nothing needs an answer. The card's own fields are not behind this: their field editor takes paste and typing
+    /// itself. The same rule on Windows (58e0ee5) and Linux (b2c426a).
+    public enum CardInput: Equatable, Sendable { case pass, refuse, refuseWithBeep }
+    public static func outgoing(cardUp: Bool, typed: Bool) -> CardInput {
+        guard cardUp else { return .pass }
+        return typed ? .refuseWithBeep : .refuse
+    }
+    /// A paste (⌘V, Edit ▸ Paste, the terminal's menu) reaching the terminal view while the card is up: refused with a
+    /// beep, before the planted-clipboard question or Safe Paste could put anything up over the card.
+    public static func pasteAllowed(cardUp: Bool) -> Bool { !cardUp }
+
     /// A button of the card's row, left to right as drawn.
     public enum Button: Equatable, Sendable {
         case cancel

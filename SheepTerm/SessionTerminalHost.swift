@@ -593,6 +593,12 @@ final class SessionTerminalHost {
             NSSound.beep()
             return false
         }
+        // A connection card is up: the paste would be queued and typed into the
+        // shell once the login opens it (`ConnectionCardPlan.pasteAllowed`).
+        guard ConnectionCardPlan.pasteAllowed(cardUp: hasConnectionCard) else {
+            NSSound.beep()
+            return false
+        }
         // The planted-clipboard question is about the CLIPBOARD: text the
         // app composed itself (a snippet, a broadcast line) never came from
         // it, so it is not asked — Safe Paste below still applies to it.
@@ -823,9 +829,10 @@ final class SessionTerminalHost {
 
     /// Pastes, snippets and the AI's paste are refused: a Return is held, a
     /// dangerous-command question is open, a transfer owns the line, or a
-    /// paced Safe Paste is still sending (`PacedRunGate`).
+    /// paced Safe Paste is still sending (`PacedRunGate`) — or the connection
+    /// card is up (6.2 (8): Snippets, History, Broadcast, the AI's paste).
     var inputBlocked: Bool {
-        isHoldingReturn || guardCard != nil || guardSheet != nil || (lineBusy?() ?? false)
+        isHoldingReturn || guardCard != nil || guardSheet != nil || (lineBusy?() ?? false) || hasConnectionCard
             || PacedRunGate.verdict(.paste, runActive: pastePacer.isActive) == .refuse
     }
 
@@ -844,6 +851,17 @@ final class SessionTerminalHost {
     func admitOutgoing(_ bytes: [UInt8]) -> Bool {
         if releasingHeld { return true }
         let typed = keystrokePending
+        // The connection card is up (any page, in the pane or in its panel —
+        // where the terminal keeps the keyboard): nothing reaches the worker,
+        // which would type it into the shell after login (6.2 (8)).
+        switch ConnectionCardPlan.outgoing(cardUp: hasConnectionCard, typed: typed) {
+        case .pass: break
+        case .refuse: return false
+        case .refuseWithBeep:
+            keystrokePending = false
+            NSSound.beep()
+            return false
+        }
         if isHoldingReturn {
             // Keys typed while a Return waits wait behind it — never ahead.
             guard typed else { return true }
