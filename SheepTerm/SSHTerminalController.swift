@@ -944,7 +944,8 @@ final class SSHTerminalController: NSObject {
         // makes ends it immediately via `suppressVendorDetection`.
         if vendorDetectionActive, let detected = fingerprint.consider(pending) {
             autoDetected = true
-            printNotice("auto-detected \(detected.label) — highlighting set")
+            // No line in the terminal: it landed mid-output and cut the device's
+            // text apart (the owner, 6.2 (9)). The status bar shows the family.
             onVendorDetected?(detected)
         }
     }
